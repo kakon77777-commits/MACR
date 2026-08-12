@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "policy_tags": [
+    "C_DRIVE_PERSISTENCE_FORBIDDEN",
+    "MIGRATION_REQUIRED",
+    "SECRETS_EXTERNAL"
+  ],
+  "source_root": "D:\\Ai\\work together\\MACR",
+  "state_root": "R:\\AI_Runtime\\macr-state",
+  "codex_home_target": "R:\\AI_Runtime\\codex-home",
+  "allowed_persistent_drives": ["D:", "R:"],
+  "current_volume_notes": {
+    "D:": "shared source and collaboration workspace",
+    "R:": "AI_RESIDENCE; runtime state and large artifacts"
+  },
+  "codex_home_migration_status": "not_started"
+}

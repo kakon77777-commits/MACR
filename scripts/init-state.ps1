@@ -1,0 +1,19 @@
+[CmdletBinding()]
+param(
+    [string]$StateRoot = $(if ($env:MACR_STATE_ROOT) { $env:MACR_STATE_ROOT } else { 'R:\AI_Runtime\macr-state' })
+)
+
+$resolvedDrive = [System.IO.Path]::GetPathRoot($StateRoot)
+if ($resolvedDrive -notin @('D:\', 'R:\')) {
+    throw "Persistent MACR state is allowed only on D: or R:. Refusing: $StateRoot"
+}
+
+$paths = @('ledger', 'artifacts', 'cache', 'test-tmp') | ForEach-Object {
+    Join-Path -Path $StateRoot -ChildPath $_
+}
+
+foreach ($path in $paths) {
+    New-Item -ItemType Directory -Force -Path $path | Out-Null
+}
+
+$paths

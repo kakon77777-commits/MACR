@@ -1,0 +1,31 @@
+{
+  "task_id": "minimax-conformance-001",
+  "goal": "Return exactly: MACR MiniMax conformance candidate",
+  "task_type": "provider_conformance",
+  "workspace": {
+    "repo": "current",
+    "write_scope": []
+  },
+  "inputs": [],
+  "constraints": {
+    "max_cost_usd": 0.01,
+    "max_latency_s": 30,
+    "internet": true,
+    "privacy": "public"
+  },
+  "required_capabilities": [
+    "text_generation"
+  ],
+  "verification": {
+    "required": true,
+    "methods": [
+      "exact_text_comparison",
+      "operator_review"
+    ]
+  },
+  "return_contract": {
+    "summary": true,
+    "patch": false,
+    "evidence": true
+  }
+}
