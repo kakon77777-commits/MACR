@@ -27,6 +27,9 @@ class RegistryPolicyTests(unittest.TestCase):
             self.registry.get("grok_standard").config.model,
             "grok-4.3",
         )
+        ollama_health = self.registry.get("ollama_qwythos").health()
+        self.assertTrue(ollama_health.ready)
+        self.assertEqual(ollama_health.status, "configured_offline")
 
     def test_claude_api_route_is_not_available(self) -> None:
         provider = self.registry.get("claude_subscription")

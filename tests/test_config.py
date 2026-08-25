@@ -18,9 +18,15 @@ class ProviderConfigTests(unittest.TestCase):
         configs = load_provider_configs(ROOT / "config" / "providers.json")
         self.assertEqual(
             [item.id for item in configs],
-            ["minimax", "grok", "grok_standard", "claude_subscription"],
+            [
+                "minimax",
+                "grok",
+                "grok_standard",
+                "ollama_qwythos",
+                "claude_subscription",
+            ],
         )
-        claude = configs[3]
+        claude = configs[4]
         self.assertFalse(claude.api_usage_allowed)
         self.assertEqual(claude.auth_mode, AuthMode.SUBSCRIPTION_CLIENT)
 
@@ -33,6 +39,14 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertTrue(by_id["grok_standard"].enabled)
         self.assertEqual(by_id["grok_standard"].model, "grok-4.3")
         self.assertIsNone(by_id["grok_standard"].reasoning_effort)
+        self.assertEqual(
+            by_id["ollama_qwythos"].base_url,
+            "http://127.0.0.1:11434",
+        )
+        self.assertEqual(
+            by_id["ollama_qwythos"].connection_scope,
+            ConnectionScope.LOOPBACK_HTTP,
+        )
 
     def test_enabled_api_provider_requires_environment_names(self) -> None:
         with self.assertRaisesRegex(ConfigurationError, "lacks"):

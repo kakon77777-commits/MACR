@@ -55,6 +55,21 @@
       "notes": "Manual ordinary or special-purpose profile; never selected implicitly."
     },
     {
+      "id": "ollama_qwythos",
+      "kind": "ollama_local_chat",
+      "enabled": true,
+      "auth_mode": "none",
+      "api_usage_allowed": true,
+      "connection_scope": "loopback_http",
+      "base_url": "http://127.0.0.1:11434",
+      "model": "hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M",
+      "endpoint_path": "/api/chat",
+      "allowed_hosts": ["127.0.0.1"],
+      "capabilities": ["text_generation"],
+      "approved_privacy": ["local_only"],
+      "notes": "Private local candidate worker; no Ollama Cloud or tools."
+    },
+    {
       "id": "claude_subscription",
       "kind": "external_subscription_client",
       "enabled": false,
