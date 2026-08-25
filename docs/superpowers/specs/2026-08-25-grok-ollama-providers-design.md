@@ -1,6 +1,6 @@
 # Grok and Ollama Provider Integration Design
 
-Status: approved in chat on 2026-08-25; written specification awaiting operator review
+Status: approved in chat on 2026-08-25; D: storage review change applied; written specification awaiting final operator review
 
 ## Purpose
 
@@ -18,7 +18,7 @@ All provider output remains a candidate. Generation does not imply verification 
 - Grok 4.3 is available only through an explicit provider selection.
 - MACR must never silently downgrade or fall back from Grok 4.6 to Grok 4.3.
 - Qwythos runs through the local Ollama service and is reserved for private local work.
-- Persistent source, runtime state, and model data stay on D: or R:. No new operational state is written to C:.
+- Persistent source, runtime state, and model data stay on D:. No new operational state is written to C:.
 - Grok credentials remain external to the repository. The existing plaintext source is not a supported runtime dependency and its path must not appear in committed configuration.
 - Claude API billing remains forbidden. The existing Claude subscription-client route stays disabled.
 
@@ -269,20 +269,42 @@ Absent metrics remain null rather than invented. The ledger never stores:
 - Ollama thinking content;
 - remote error bodies.
 
-Runtime state remains under `R:\AI_Runtime\macr-state`. Model files remain under the already configured D: Ollama store.
+Runtime state uses `D:\AI_RESIDENCE\AI_Runtime\macr-state`. Model files remain under the already configured D: Ollama store.
 
-### Current storage precondition
+### Storage placement and migration boundary
 
-At design verification time on 2026-08-25, drive R: was not mounted and was absent from PowerShell drives, Windows volumes, and logical disks. Drives E: and M: were visible, but no evidence authorized either as a replacement for R:.
+The current Residence authority documents that the former R: 500GB NVMe was cloned into the system role and became C: on 2026-08-16. Former Residence content was moved to `D:\AI_RESIDENCE` before that conversion, and old R: paths are historical evidence rather than valid current entry points.
 
-The unchanged v0.1 suite passed 32/32 when `MACR_STATE_ROOT` and `CODEX_HOME_TARGET` were temporarily redirected to an isolated D: test root, proving the code baseline independently of the missing drive. This does not change the canonical runtime root.
+Current MACR placement is:
 
-Before implementation acceptance or any live ledger write, the operator must do one of the following:
+```text
+source:             D:\Ai\work together\MACR
+runtime state:      D:\AI_RESIDENCE\AI_Runtime\macr-state
+future Codex target: D:\AI_RESIDENCE\AI_Runtime\codex-home
+Ollama models:      D:\Ai\work together\LocalModels\models
+```
 
-1. restore R: and retain `R:\AI_Runtime\macr-state`; or
-2. explicitly approve a new canonical D: or other non-C: root and its migration/rollback treatment.
+The runtime-state root already exists with empty `artifacts`, `cache`, `ledger`, and `test-tmp` directories. It is a shared MACR service location, not a private `00_RESIDENCE/agents/<resident>` namespace. MACR must not load or write any named resident's private residence unless a future task-local HOST-OBSERVED identity binding authorizes that resident.
 
-MACR must not infer a replacement drive letter from free space, volume order, or a newly visible disk.
+`CODEX_HOME_TARGET` records only a future D: destination. It does not change the official active `CODEX_HOME`, move credentials, copy sessions, or alter the running Codex application. Current Codex native state remains in its native C: location under the Residence governance policy; any later migration requires a separate design, consistent snapshot, manifest, hashes, restart validation, and rollback copy.
+
+The active workspace, Residence, runtime state, and local model store currently share physical D: storage. Their separation is logical, not a second-medium backup. Future internal AI-management changes may migrate these roots only through explicit manifests, hash verification, rollback copies, and operator approval.
+
+The unchanged v0.1 suite passed 32/32 with an isolated D: test root, proving the code baseline after the storage decision. Current manifests, defaults, examples, and scripts must stop using operational R: paths during v0.2 implementation; historical evidence remains unchanged.
+
+## Speaker identity boundary
+
+Provider and model selection do not establish resident or speaker identity:
+
+```text
+MODEL != RESIDENT
+provider profile != speaker label
+runtime role != authorship identity
+```
+
+`grok`, `grok_standard`, and `ollama_qwythos` are service profiles only. They do not name the current Codex speaker, Grok, Qwythos, or a future resident. Until a task-local identity envelope binds the current HOST-OBSERVED native task/session identifier and declares its `identifier_kind`, the readable speaker identity remains `unresolved`.
+
+Model-emitted self-labels are claims, not identity evidence. Future naming and private-residence access require an independently approved identity design and explicit rebinding; neither this provider integration nor familiar conversational continuity grants access to `00_RESIDENCE/agents/<resident>` private data.
 
 ## Error handling
 
