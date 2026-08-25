@@ -75,6 +75,24 @@ class TaskContractTests(unittest.TestCase):
                 }
             )
 
+    def test_max_output_tokens_round_trip(self) -> None:
+        task = TaskContract.from_dict(
+            {
+                "task_id": "output-bound-001",
+                "goal": "bound output",
+                "task_type": "testing",
+                "constraints": {"max_output_tokens": 64},
+            }
+        )
+        self.assertEqual(task.constraints.max_output_tokens, 64)
+        self.assertEqual(task.to_dict()["constraints"]["max_output_tokens"], 64)
+
+    def test_rejects_invalid_output_token_bounds(self) -> None:
+        for value in (True, "64", 0, 16385):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "max_output_tokens"):
+                    TaskConstraints(max_output_tokens=value)
+
 
 if __name__ == "__main__":
     unittest.main()

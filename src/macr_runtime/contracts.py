@@ -94,6 +94,7 @@ class WorkspaceSpec:
 class TaskConstraints:
     max_cost_usd: float = 0.0
     max_latency_s: float = 300.0
+    max_output_tokens: int = 1024
     internet: bool = False
     privacy: PrivacyLevel = PrivacyLevel.LOCAL_ONLY
 
@@ -108,6 +109,14 @@ class TaskConstraints:
             "max_latency_s",
             _non_negative("constraints.max_latency_s", self.max_latency_s),
         )
+        if isinstance(self.max_output_tokens, bool) or not isinstance(
+            self.max_output_tokens, int
+        ):
+            raise ValueError("constraints.max_output_tokens must be an integer")
+        if not 1 <= self.max_output_tokens <= 16384:
+            raise ValueError(
+                "constraints.max_output_tokens must be between 1 and 16384"
+            )
         _boolean("constraints.internet", self.internet)
         if not isinstance(self.privacy, PrivacyLevel):
             raise ValueError("constraints.privacy must be a PrivacyLevel")
@@ -118,6 +127,7 @@ class TaskConstraints:
         return cls(
             max_cost_usd=data.get("max_cost_usd", 0.0),
             max_latency_s=data.get("max_latency_s", 300.0),
+            max_output_tokens=data.get("max_output_tokens", 1024),
             internet=data.get("internet", False),
             privacy=PrivacyLevel(str(data.get("privacy", PrivacyLevel.LOCAL_ONLY.value))),
         )
@@ -126,6 +136,7 @@ class TaskConstraints:
         return {
             "max_cost_usd": self.max_cost_usd,
             "max_latency_s": self.max_latency_s,
+            "max_output_tokens": self.max_output_tokens,
             "internet": self.internet,
             "privacy": self.privacy.value,
         }

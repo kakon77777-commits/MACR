@@ -3,10 +3,11 @@ from __future__ import annotations
 import unittest
 from typing import Any, Mapping
 
-from macr_runtime.config import AuthMode, ProviderConfig
+from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import PrivacyLevel, TaskConstraints, TaskContract
 from macr_runtime.errors import ProviderPolicyError, ProviderProtocolError
 from macr_runtime.providers.minimax import MiniMaxProvider
+from macr_runtime.providers.common import BOUNDED_WORKER_INSTRUCTION
 from macr_runtime.providers.openai_compatible import UrllibJsonTransport
 
 
@@ -34,6 +35,7 @@ def provider_config() -> ProviderConfig:
         enabled=True,
         auth_mode=AuthMode.API_KEY,
         api_usage_allowed=True,
+        connection_scope=ConnectionScope.EXTERNAL_HTTPS,
         api_key_env="MACR_TEST_PROVIDER_KEY",
         base_url_env="MACR_TEST_PROVIDER_BASE_URL",
         model_env="MACR_TEST_PROVIDER_MODEL",
@@ -83,6 +85,18 @@ class MiniMaxProviderTests(unittest.TestCase):
         self.assertEqual(call["payload"]["model"], "test-model")
         self.assertEqual(call["headers"]["Authorization"], "Bearer test-key")
         self.assertNotIn("test-key", str(result.to_dict()))
+
+    def test_worker_instruction_is_shared_constant(self) -> None:
+        transport = FakeTransport(
+            {"choices": [{"message": {"content": "candidate"}}]}
+        )
+        MiniMaxProvider(provider_config(), transport=transport, environ=self.env).invoke(
+            cloud_task()
+        )
+        self.assertEqual(
+            transport.calls[0]["payload"]["messages"][0]["content"],
+            BOUNDED_WORKER_INSTRUCTION,
+        )
 
     def test_missing_environment_fails_health_without_network(self) -> None:
         transport = FakeTransport({})

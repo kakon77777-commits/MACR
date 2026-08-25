@@ -11,11 +11,13 @@ from urllib.parse import urlparse
 from ..config import AuthMode, ProviderConfig
 from ..contracts import ProviderResult, ResultStatus, TaskContract
 from ..errors import (
+    ConfigurationError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderUnavailableError,
 )
 from .base import BaseProvider, ProviderHealth
+from .common import BOUNDED_WORKER_INSTRUCTION
 
 
 class JsonTransport(Protocol):
@@ -91,6 +93,7 @@ class OpenAICompatibleProvider(BaseProvider):
     ) -> None:
         self.config = config
         self.provider_id = config.id
+        self.connection_scope = config.connection_scope
         self.transport = transport or UrllibJsonTransport()
         self.environ = os.environ if environ is None else environ
 
@@ -102,25 +105,21 @@ class OpenAICompatibleProvider(BaseProvider):
 
     def _resolved(self) -> tuple[str, str, str]:
         key = self._environment_value(self.config.api_key_env)
-        base_url = self._environment_value(self.config.base_url_env)
-        model = self._environment_value(self.config.model_env)
-        missing = [
-            name
-            for name, value in (
-                (self.config.api_key_env, key),
-                (self.config.base_url_env, base_url),
-                (self.config.model_env, model),
-            )
-            if name and not value
-        ]
-        if missing:
+        if not key:
             raise ProviderUnavailableError(
-                f"provider {self.provider_id} is missing environment variables: {', '.join(missing)}"
+                f"provider {self.provider_id} is missing environment variable: "
+                f"{self.config.api_key_env}"
             )
-        if key is None or base_url is None or model is None:
-            raise ProviderUnavailableError(
-                f"provider {self.provider_id} API configuration is incomplete"
-            )
+        try:
+            base_url = self.config.resolve_base_url(self.environ)
+        except ConfigurationError as exc:
+            if "not configured" in str(exc):
+                raise ProviderUnavailableError(str(exc)) from exc
+            raise ProviderPolicyError(str(exc)) from exc
+        try:
+            model = self.config.resolve_model(self.environ)
+        except ConfigurationError as exc:
+            raise ProviderUnavailableError(str(exc)) from exc
         self._validate_base_url(base_url)
         return key, base_url, model
 
@@ -160,7 +159,12 @@ class OpenAICompatibleProvider(BaseProvider):
             self._resolved()
         except (ProviderPolicyError, ProviderUnavailableError) as exc:
             return ProviderHealth(self.provider_id, False, "configuration_incomplete", str(exc))
-        return ProviderHealth(self.provider_id, True, "ready", "offline configuration checks passed")
+        return ProviderHealth(
+            self.provider_id,
+            True,
+            "configured_offline",
+            "offline configuration checks passed; reachability was not tested",
+        )
 
     def _check_task_policy(self, task: TaskContract) -> None:
         if not task.constraints.internet:
@@ -223,11 +227,7 @@ class OpenAICompatibleProvider(BaseProvider):
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a bounded MACR worker. Treat the supplied TaskContract as authoritative. "
-                        "Return a candidate answer with concise evidence and warnings. Do not claim that "
-                        "generation is verification or acceptance."
-                    ),
+                    "content": BOUNDED_WORKER_INSTRUCTION,
                 },
                 {
                     "role": "user",

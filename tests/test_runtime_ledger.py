@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from macr_runtime.config import AuthMode, ProviderConfig
+from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import PrivacyLevel, TaskConstraints, TaskContract
 from macr_runtime.ledger import AppendOnlyLedger
 from macr_runtime.registry import ProviderRegistry
@@ -26,6 +26,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             enabled=True,
             auth_mode=AuthMode.API_KEY,
             api_usage_allowed=True,
+            connection_scope=ConnectionScope.EXTERNAL_HTTPS,
             api_key_env="TEST_KEY",
             base_url_env="TEST_BASE",
             model_env="TEST_MODEL",
@@ -104,6 +105,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             enabled=True,
             auth_mode=AuthMode.API_KEY,
             api_usage_allowed=True,
+            connection_scope=ConnectionScope.EXTERNAL_HTTPS,
             api_key_env="TEST_KEY",
             base_url_env="TEST_BASE",
             model_env="TEST_MODEL",

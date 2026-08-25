@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "providers": [
     {
       "id": "minimax",
@@ -7,6 +7,7 @@
       "enabled": true,
       "auth_mode": "api_key",
       "api_usage_allowed": true,
+      "connection_scope": "external_https",
       "api_key_env": "MINIMAX_API_KEY",
       "base_url_env": "MINIMAX_BASE_URL",
       "model_env": "MINIMAX_MODEL",
@@ -26,6 +27,7 @@
       "enabled": false,
       "auth_mode": "pending",
       "api_usage_allowed": true,
+      "connection_scope": "disabled",
       "api_key_env": "XAI_API_KEY",
       "capabilities": ["text_generation"],
       "approved_privacy": ["public", "internal_approved"],
@@ -38,6 +40,7 @@
       "enabled": false,
       "auth_mode": "subscription_client",
       "api_usage_allowed": false,
+      "connection_scope": "disabled",
       "capabilities": ["text_generation"],
       "approved_privacy": [],
       "disabled_reason": "No approved subscription-client adapter has been selected or verified.",

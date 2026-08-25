@@ -10,6 +10,7 @@ class DisabledProvider(BaseProvider):
     def __init__(self, config: ProviderConfig) -> None:
         self.config = config
         self.provider_id = config.id
+        self.connection_scope = config.connection_scope
 
     def health(self) -> ProviderHealth:
         return ProviderHealth(

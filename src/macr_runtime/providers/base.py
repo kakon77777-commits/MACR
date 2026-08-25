@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from ..config import ConnectionScope
 from ..contracts import ProviderResult, TaskContract
 
 
@@ -24,6 +25,7 @@ class ProviderHealth:
 
 class BaseProvider(ABC):
     provider_id: str
+    connection_scope: ConnectionScope
 
     @abstractmethod
     def health(self) -> ProviderHealth:

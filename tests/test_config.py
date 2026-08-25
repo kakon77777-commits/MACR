@@ -1,7 +1,12 @@
 import unittest
 from pathlib import Path
 
-from macr_runtime.config import AuthMode, ProviderConfig, load_provider_configs
+from macr_runtime.config import (
+    AuthMode,
+    ConnectionScope,
+    ProviderConfig,
+    load_provider_configs,
+)
 from macr_runtime.errors import ConfigurationError
 
 
@@ -24,6 +29,8 @@ class ProviderConfigTests(unittest.TestCase):
                 enabled=True,
                 auth_mode=AuthMode.API_KEY,
                 api_usage_allowed=True,
+                connection_scope=ConnectionScope.EXTERNAL_HTTPS,
+                allowed_hosts=("example.invalid",),
             )
 
     def test_public_summary_never_contains_secret_value(self) -> None:
@@ -54,6 +61,70 @@ class ProviderConfigTests(unittest.TestCase):
                 api_usage_allowed=False,
                 approved_privacy=("secret_magic",),
             )
+
+    def test_schema_v1_is_rejected_with_migration_message(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "schema_version 1.*migrate.*2"):
+            load_provider_configs(ROOT / "tests" / "fixtures" / "providers-v1.json")
+
+    def test_static_and_environment_values_are_mutually_exclusive(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "base_url.*base_url_env"):
+            ProviderConfig.from_dict(
+                {
+                    "id": "ambiguous",
+                    "kind": "grok_responses",
+                    "enabled": True,
+                    "auth_mode": "api_key",
+                    "api_usage_allowed": True,
+                    "connection_scope": "external_https",
+                    "api_key_env": "TEST_KEY",
+                    "base_url": "https://api.x.ai/v1",
+                    "base_url_env": "TEST_BASE",
+                    "model": "grok-4.6",
+                    "allowed_hosts": ["api.x.ai"],
+                }
+            )
+
+    def test_external_base_url_requires_https_and_allowlisted_host(self) -> None:
+        for base_url in ("http://api.x.ai/v1", "https://not-xai.invalid/v1"):
+            with self.subTest(base_url=base_url):
+                config = ProviderConfig.from_dict(
+                    {
+                        "id": "external",
+                        "kind": "grok_responses",
+                        "enabled": True,
+                        "auth_mode": "api_key",
+                        "api_usage_allowed": True,
+                        "connection_scope": "external_https",
+                        "api_key_env": "TEST_KEY",
+                        "base_url": base_url,
+                        "model": "grok-4.6",
+                        "allowed_hosts": ["api.x.ai"],
+                    }
+                )
+                with self.assertRaises(ConfigurationError):
+                    config.resolve_base_url({})
+
+    def test_loopback_scope_rejects_localhost_and_credentials(self) -> None:
+        for base_url in (
+            "http://localhost:11434",
+            "http://user:password@127.0.0.1:11434",
+        ):
+            with self.subTest(base_url=base_url):
+                config = ProviderConfig.from_dict(
+                    {
+                        "id": "local",
+                        "kind": "ollama_local_chat",
+                        "enabled": True,
+                        "auth_mode": "none",
+                        "api_usage_allowed": True,
+                        "connection_scope": "loopback_http",
+                        "base_url": base_url,
+                        "model": "local-model",
+                        "allowed_hosts": ["127.0.0.1"],
+                    }
+                )
+                with self.assertRaises(ConfigurationError):
+                    config.resolve_base_url({})
 
 
 if __name__ == "__main__":
