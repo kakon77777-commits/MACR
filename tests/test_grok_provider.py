@@ -123,6 +123,26 @@ class GrokProviderTests(unittest.TestCase):
         self.assertEqual(result.provider_meta["metrics"]["cached_tokens"], 5)
         self.assertNotIn("test-key", str(result.to_dict()))
 
+    def test_exact_goal_adds_no_extra_output_instruction(self):
+        transport = FakeTransport(success_document("grok-4.6"))
+        base = cloud_task()
+        exact_task = TaskContract(
+            task_id=base.task_id,
+            goal="Return exactly: MACR_GROK_46_OK",
+            task_type=base.task_type,
+            constraints=base.constraints,
+            required_capabilities=base.required_capabilities,
+        )
+        GrokResponsesProvider(
+            grok_config("grok", "grok-4.6", "high"),
+            transport=transport,
+            environ={"XAI_API_KEY": "test-key"},
+        ).invoke(exact_task)
+        self.assertIn(
+            "Return only the exact requested text",
+            transport.posts[0]["payload"]["input"][0]["content"],
+        )
+
     def test_standard_profile_uses_4_3_without_reasoning_override(self):
         transport = FakeTransport(success_document(model="grok-4.3"))
         GrokResponsesProvider(

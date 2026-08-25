@@ -13,7 +13,7 @@ from ..errors import (
     ProviderUnavailableError,
 )
 from .base import BaseProvider, ProviderHealth
-from .common import BOUNDED_WORKER_INSTRUCTION
+from .common import bounded_worker_instruction
 from .http_json import JsonTransport, UrllibJsonTransport
 
 
@@ -188,7 +188,10 @@ class GrokResponsesProvider(BaseProvider):
         payload: dict[str, Any] = {
             "model": model,
             "input": [
-                {"role": "system", "content": BOUNDED_WORKER_INSTRUCTION},
+                {
+                    "role": "system",
+                    "content": bounded_worker_instruction(task.goal),
+                },
                 {
                     "role": "user",
                     "content": json.dumps(

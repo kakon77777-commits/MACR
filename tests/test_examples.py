@@ -21,6 +21,8 @@ class ExampleContractTests(unittest.TestCase):
         self.assertEqual(task.constraints.privacy, PrivacyLevel.PUBLIC)
         self.assertEqual(task.constraints.max_cost_usd, 0.01)
         self.assertEqual(task.constraints.max_output_tokens, 64)
+        self.assertFalse(task.return_contract.summary)
+        self.assertFalse(task.return_contract.evidence)
 
     def test_ollama_example_is_zero_cost_local_only_task(self) -> None:
         task = load_example("ollama-task.example.json")
@@ -29,6 +31,8 @@ class ExampleContractTests(unittest.TestCase):
         self.assertEqual(task.constraints.privacy, PrivacyLevel.LOCAL_ONLY)
         self.assertEqual(task.constraints.max_cost_usd, 0)
         self.assertEqual(task.constraints.max_output_tokens, 64)
+        self.assertFalse(task.return_contract.summary)
+        self.assertFalse(task.return_contract.evidence)
 
 
 if __name__ == "__main__":

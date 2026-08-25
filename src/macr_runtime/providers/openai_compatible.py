@@ -14,7 +14,7 @@ from ..errors import (
     ProviderUnavailableError,
 )
 from .base import BaseProvider, ProviderHealth
-from .common import BOUNDED_WORKER_INSTRUCTION
+from .common import bounded_worker_instruction
 from .http_json import JsonTransport, UrllibJsonTransport
 
 
@@ -162,7 +162,7 @@ class OpenAICompatibleProvider(BaseProvider):
             "messages": [
                 {
                     "role": "system",
-                    "content": BOUNDED_WORKER_INSTRUCTION,
+                    "content": bounded_worker_instruction(task.goal),
                 },
                 {
                     "role": "user",
