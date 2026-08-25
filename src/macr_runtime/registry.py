@@ -7,6 +7,7 @@ from .config import ProviderConfig
 from .errors import ConfigurationError, ProviderUnavailableError
 from .providers.base import BaseProvider
 from .providers.disabled import DisabledProvider
+from .providers.grok import GrokResponsesProvider
 from .providers.minimax import MiniMaxProvider
 from .providers.http_json import JsonTransport
 
@@ -31,6 +32,14 @@ class ProviderRegistry:
             if config.kind == "minimax_openai_compatible":
                 providers.append(
                     MiniMaxProvider(
+                        config,
+                        environ=environ,
+                        transport=transport_map.get(config.id),
+                    )
+                )
+            elif config.kind == "grok_responses":
+                providers.append(
+                    GrokResponsesProvider(
                         config,
                         environ=environ,
                         transport=transport_map.get(config.id),

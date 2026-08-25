@@ -19,11 +19,14 @@ class DoctorTests(unittest.TestCase):
             "MINIMAX_API_KEY": "test-key",
             "MINIMAX_BASE_URL": "https://api.minimax.io/v1",
             "MINIMAX_MODEL": "test-model",
+            "XAI_API_KEY": "test-key",
         }
+        output = io.StringIO()
         with patch.dict(os.environ, environment, clear=False):
-            with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stdout(output):
                 status = _doctor(str(ROOT / "config" / "providers.json"), strict=True)
         self.assertEqual(status, 0)
+        self.assertNotIn("test-key", output.getvalue())
 
     def test_strict_fails_when_enabled_provider_is_not_ready(self) -> None:
         without_minimax = {

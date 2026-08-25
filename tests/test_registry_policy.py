@@ -13,12 +13,20 @@ ROOT = Path(__file__).resolve().parents[1]
 class RegistryPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")
-        self.registry = ProviderRegistry.from_configs(configs, environ={})
+        self.registry = ProviderRegistry.from_configs(
+            configs,
+            environ={"XAI_API_KEY": "test-key"},
+        )
 
-    def test_grok_is_disabled(self) -> None:
+    def test_grok_profiles_are_configured_offline(self) -> None:
         health = self.registry.get("grok").health()
-        self.assertEqual(health.status, "disabled")
-        self.assertIn("not been applied", health.detail)
+        self.assertTrue(health.ready)
+        self.assertEqual(health.status, "configured_offline")
+        self.assertEqual(self.registry.get("grok").config.model, "grok-4.6")
+        self.assertEqual(
+            self.registry.get("grok_standard").config.model,
+            "grok-4.3",
+        )
 
     def test_claude_api_route_is_not_available(self) -> None:
         provider = self.registry.get("claude_subscription")

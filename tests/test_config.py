@@ -16,10 +16,23 @@ ROOT = Path(__file__).resolve().parents[1]
 class ProviderConfigTests(unittest.TestCase):
     def test_repository_config_loads(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")
-        self.assertEqual([item.id for item in configs], ["minimax", "grok", "claude_subscription"])
-        claude = configs[2]
+        self.assertEqual(
+            [item.id for item in configs],
+            ["minimax", "grok", "grok_standard", "claude_subscription"],
+        )
+        claude = configs[3]
         self.assertFalse(claude.api_usage_allowed)
         self.assertEqual(claude.auth_mode, AuthMode.SUBSCRIPTION_CLIENT)
+
+    def test_grok_profiles_are_enabled_and_fixed(self) -> None:
+        configs = load_provider_configs(ROOT / "config" / "providers.json")
+        by_id = {item.id: item for item in configs}
+        self.assertTrue(by_id["grok"].enabled)
+        self.assertEqual(by_id["grok"].model, "grok-4.6")
+        self.assertEqual(by_id["grok"].reasoning_effort, "high")
+        self.assertTrue(by_id["grok_standard"].enabled)
+        self.assertEqual(by_id["grok_standard"].model, "grok-4.3")
+        self.assertIsNone(by_id["grok_standard"].reasoning_effort)
 
     def test_enabled_api_provider_requires_environment_names(self) -> None:
         with self.assertRaisesRegex(ConfigurationError, "lacks"):
