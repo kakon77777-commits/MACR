@@ -9,9 +9,9 @@ from .errors import StoragePolicyError
 
 
 DEFAULT_SOURCE_ROOT = r"D:\Ai\work together\MACR"
-DEFAULT_STATE_ROOT = r"R:\AI_Runtime\macr-state"
-DEFAULT_CODEX_HOME_TARGET = r"R:\AI_Runtime\codex-home"
-ALLOWED_PERSISTENT_DRIVES = frozenset({"D:", "R:"})
+DEFAULT_STATE_ROOT = r"D:\AI_RESIDENCE\AI_Runtime\macr-state"
+DEFAULT_CODEX_HOME_TARGET = r"D:\AI_RESIDENCE\AI_Runtime\codex-home"
+ALLOWED_PERSISTENT_DRIVES = frozenset({"D:"})
 
 
 def _validate_persistent_path(name: str, value: str) -> str:
@@ -21,7 +21,7 @@ def _validate_persistent_path(name: str, value: str) -> str:
     drive = path.drive.upper()
     if drive not in ALLOWED_PERSISTENT_DRIVES:
         raise StoragePolicyError(
-            f"{name} must be on D: or R:; persistent writes to {drive or 'an unknown drive'} are denied"
+            f"{name} must be on D:; persistent writes to {drive or 'an unknown drive'} are denied"
         )
     return str(path)
 

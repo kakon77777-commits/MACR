@@ -8,7 +8,7 @@ from macr_runtime.ledger import AppendOnlyLedger
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime
 
-from tests.support import r_drive_tempdir
+from tests.support import d_drive_tempdir
 from tests.test_minimax_provider import FakeTransport
 
 
@@ -44,7 +44,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             },
             transports={"minimax": transport},
         )
-        with r_drive_tempdir() as temp:
+        with d_drive_tempdir() as temp:
             ledger = AppendOnlyLedger(temp / "events.jsonl")
             runtime = MacrRuntime(registry, ledger)
             result = runtime.invoke(
@@ -83,7 +83,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             disabled_reason="pending credentials",
         )
         registry = ProviderRegistry.from_configs((config,), environ={})
-        with r_drive_tempdir() as temp:
+        with d_drive_tempdir() as temp:
             ledger = AppendOnlyLedger(temp / "events.jsonl")
             result = MacrRuntime(registry, ledger).invoke(
                 "grok",
@@ -120,7 +120,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             },
             transports={"minimax": ExplodingTransport()},
         )
-        with r_drive_tempdir() as temp:
+        with d_drive_tempdir() as temp:
             ledger = AppendOnlyLedger(temp / "events.jsonl")
             result = MacrRuntime(registry, ledger).invoke(
                 "minimax",

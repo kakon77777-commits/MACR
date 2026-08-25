@@ -6,10 +6,10 @@ if (-not $env:MACR_ROOT) {
     $env:MACR_ROOT = $repoRoot
 }
 if (-not $env:MACR_STATE_ROOT) {
-    $env:MACR_STATE_ROOT = 'R:\AI_Runtime\macr-state'
+    $env:MACR_STATE_ROOT = 'D:\AI_RESIDENCE\AI_Runtime\macr-state'
 }
 if (-not $env:CODEX_HOME_TARGET) {
-    $env:CODEX_HOME_TARGET = 'R:\AI_Runtime\codex-home'
+    $env:CODEX_HOME_TARGET = 'D:\AI_RESIDENCE\AI_Runtime\codex-home'
 }
 $env:MACR_TEST_TMP = Join-Path $env:MACR_STATE_ROOT 'test-tmp'
 $env:PYTHONPATH = Join-Path $repoRoot 'src'

@@ -3,8 +3,8 @@
 These rules apply to this repository and all descendants.
 
 - Treat `D:\Ai\work together\MACR` as the canonical source and documentation root.
-- Treat `R:\AI_Runtime\macr-state` as the default runtime-state root.
-- Do not create persistent project, provider, cache, log, session, virtual-environment, or test-state files on drive C.
+- Treat `D:\AI_RESIDENCE\AI_Runtime\macr-state` as the default runtime-state root.
+- Do not create persistent project, provider, cache, log, session, virtual-environment, or test-state files outside drive D.
 - Do not move or delete the existing Codex state on drive C without a separate, explicit migration request and a verified rollback copy.
 - Never commit provider credentials. Read them only from named environment variables.
 - Anthropic API use is forbidden by current operator policy. A future Claude integration must use an explicitly approved subscription-client route and must not silently fall back to API billing.
