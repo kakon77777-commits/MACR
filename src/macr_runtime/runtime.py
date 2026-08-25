@@ -6,6 +6,17 @@ from .ledger import AppendOnlyLedger
 from .registry import ProviderRegistry
 
 
+_LEDGER_METRIC_KEYS = (
+    "model",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "cached_tokens",
+    "currency_cost_usd",
+    "duration_ms",
+)
+
+
 class MacrRuntime:
     def __init__(self, registry: ProviderRegistry, ledger: AppendOnlyLedger) -> None:
         self.registry = registry
@@ -48,14 +59,22 @@ class MacrRuntime:
                     "failure_type": type(exc).__name__,
                 },
             )
-        self.ledger.append(
-            "provider.candidate_completed",
-            {
-                "provider_id": provider_id,
-                "task_id": task.task_id,
-                "dispatch_event_id": dispatch["event_id"],
-                "status": result.status.value,
-                "response_id": result.provider_meta.get("response_id"),
-            },
-        )
+        raw_metrics = result.provider_meta.get("metrics")
+        metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        completion_payload = {
+            "provider_id": provider_id,
+            "task_id": task.task_id,
+            "dispatch_event_id": dispatch["event_id"],
+            "status": result.status.value,
+            "response_id": result.provider_meta.get("response_id"),
+            "model": result.provider_meta.get("model"),
+            "input_tokens": metrics.get("input_tokens"),
+            "output_tokens": metrics.get("output_tokens"),
+            "reasoning_tokens": metrics.get("reasoning_tokens"),
+            "cached_tokens": metrics.get("cached_tokens"),
+            "currency_cost_usd": result.cost.get("currency_cost_usd"),
+            "duration_ms": metrics.get("duration_ms"),
+        }
+        assert all(key in completion_payload for key in _LEDGER_METRIC_KEYS)
+        self.ledger.append("provider.candidate_completed", completion_payload)
         return result

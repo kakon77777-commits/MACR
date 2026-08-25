@@ -45,11 +45,54 @@ class DoctorTests(unittest.TestCase):
             status = _invoke(
                 "minimax",
                 "this-file-must-not-be-read.json",
-                None,
+                str(ROOT / "config" / "providers.json"),
                 allow_network=False,
+                allow_local=False,
             )
         self.assertEqual(status, 3)
         self.assertIn("network_opt_in_required", output.getvalue())
+
+    def test_local_provider_requires_local_opt_in_before_reading_task(self) -> None:
+        output = io.StringIO()
+        state_root = ROOT / "state-must-not-be-created"
+        environment = {
+            "MACR_ROOT": str(ROOT),
+            "MACR_STATE_ROOT": str(state_root),
+            "CODEX_HOME_TARGET": r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            with contextlib.redirect_stdout(output):
+                status = _invoke(
+                    "ollama_qwythos",
+                    "this-file-must-not-be-read.json",
+                    str(ROOT / "config" / "providers.json"),
+                    allow_network=True,
+                    allow_local=False,
+                )
+        self.assertEqual(status, 3)
+        self.assertIn("local_opt_in_required", output.getvalue())
+        self.assertFalse(state_root.exists())
+
+    def test_external_provider_rejects_local_only_opt_in_before_reading_task(self) -> None:
+        output = io.StringIO()
+        state_root = ROOT / "state-must-not-be-created"
+        environment = {
+            "MACR_ROOT": str(ROOT),
+            "MACR_STATE_ROOT": str(state_root),
+            "CODEX_HOME_TARGET": r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            with contextlib.redirect_stdout(output):
+                status = _invoke(
+                    "grok",
+                    "this-file-must-not-be-read.json",
+                    str(ROOT / "config" / "providers.json"),
+                    allow_network=False,
+                    allow_local=True,
+                )
+        self.assertEqual(status, 3)
+        self.assertIn("network_opt_in_required", output.getvalue())
+        self.assertFalse(state_root.exists())
 
 
 if __name__ == "__main__":

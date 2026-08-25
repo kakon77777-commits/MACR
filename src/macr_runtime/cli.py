@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Sequence
 
-from .config import load_provider_configs
+from .config import ConnectionScope, load_provider_configs
 from .contracts import ResultStatus, TaskContract
 from .ledger import AppendOnlyLedger
 from .registry import ProviderRegistry
@@ -55,30 +55,51 @@ def _validate_task(path: str) -> int:
     return 0
 
 
+def _print_opt_in_error(status: str, flag: str) -> int:
+    print(
+        json.dumps(
+            {
+                "status": status,
+                "detail": (
+                    f"Re-run with {flag} only after reviewing provider policy."
+                ),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 3
+
+
 def _invoke(
     provider_id: str,
     task_path: str,
     config_path: str | None,
     allow_network: bool,
+    allow_local: bool,
 ) -> int:
-    if not allow_network:
-        print(
-            json.dumps(
-                {
-                    "status": "network_opt_in_required",
-                    "detail": "Re-run with --allow-network only after reviewing the task, privacy, and cost budget.",
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return 3
-
     layout = StorageLayout.from_environment()
-    layout.ensure_state_tree()
     path = Path(config_path) if config_path else _default_config(layout)
     configs = load_provider_configs(path)
     registry = ProviderRegistry.from_configs(configs)
+    provider = registry.get(provider_id)
+    if (
+        provider.connection_scope is ConnectionScope.EXTERNAL_HTTPS
+        and not allow_network
+    ):
+        return _print_opt_in_error(
+            "network_opt_in_required",
+            "--allow-network",
+        )
+    if (
+        provider.connection_scope is ConnectionScope.LOOPBACK_HTTP
+        and not allow_local
+    ):
+        return _print_opt_in_error(
+            "local_opt_in_required",
+            "--allow-local",
+        )
+    layout.ensure_state_tree()
     task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
     task = TaskContract.from_dict(task_document)
     result = MacrRuntime(registry, AppendOnlyLedger(layout.ledger_path)).invoke(
@@ -114,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="explicitly authorize this command to perform a provider network request",
     )
+    invoke.add_argument(
+        "--allow-local",
+        action="store_true",
+        help="explicitly authorize this command to load and call a loopback provider",
+    )
     return parser
 
 
@@ -131,5 +157,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.task_path,
             args.config,
             args.allow_network,
+            args.allow_local,
         )
     raise AssertionError(f"unhandled command: {args.command}")

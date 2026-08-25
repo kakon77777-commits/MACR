@@ -3,10 +3,17 @@ from __future__ import annotations
 import unittest
 
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
-from macr_runtime.contracts import PrivacyLevel, TaskConstraints, TaskContract
+from macr_runtime.contracts import (
+    PrivacyLevel,
+    ProviderResult,
+    ResultStatus,
+    TaskConstraints,
+    TaskContract,
+)
 from macr_runtime.ledger import AppendOnlyLedger
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime
+from macr_runtime.providers.base import ProviderHealth
 
 from tests.support import d_drive_tempdir
 from tests.test_minimax_provider import FakeTransport
@@ -18,7 +25,58 @@ class ExplodingTransport:
         raise RuntimeError("simulated transport implementation crash")
 
 
+class FixedResultProvider:
+    provider_id = "grok"
+    connection_scope = ConnectionScope.EXTERNAL_HTTPS
+
+    def health(self):
+        return ProviderHealth("grok", True, "configured_offline")
+
+    def invoke(self, task):
+        return ProviderResult(
+            task_id=task.task_id,
+            status=ResultStatus.CANDIDATE_SUCCESS,
+            answer="PRIVATE ANSWER",
+            cost={"currency_cost_usd": 0.00025},
+            provider_meta={
+                "provider": "grok",
+                "model": "grok-4.6",
+                "response_id": "resp-private-1",
+                "metrics": {
+                    "input_tokens": 20,
+                    "output_tokens": 10,
+                    "reasoning_tokens": 6,
+                    "cached_tokens": 0,
+                    "duration_ms": None,
+                },
+            },
+        )
+
+
 class RuntimeLedgerTests(unittest.TestCase):
+    def test_ledger_records_metrics_but_not_candidate_content(self) -> None:
+        registry = ProviderRegistry((FixedResultProvider(),))
+        with d_drive_tempdir() as temp:
+            ledger = AppendOnlyLedger(temp / "events.jsonl")
+            runtime = MacrRuntime(registry, ledger)
+            runtime.invoke(
+                "grok",
+                TaskContract(
+                    task_id="ledger-private-001",
+                    goal="keep content out of ledger",
+                    task_type="testing",
+                ),
+            )
+            events = ledger.read_all()
+            serialized = ledger.path.read_text(encoding="utf-8")
+        self.assertNotIn("PRIVATE ANSWER", serialized)
+        self.assertNotIn("test-key", serialized)
+        self.assertEqual(events[-1]["payload"]["model"], "grok-4.6")
+        self.assertEqual(events[-1]["payload"]["input_tokens"], 20)
+        self.assertEqual(
+            events[-1]["payload"]["currency_cost_usd"],
+            0.00025,
+        )
     def test_dispatch_and_candidate_are_append_only_events(self) -> None:
         config = ProviderConfig(
             id="minimax",
