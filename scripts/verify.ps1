@@ -23,6 +23,21 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 python -m compileall -q (Join-Path $repoRoot 'src') (Join-Path $repoRoot 'tests')
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+$operationalTargets = @(
+    (Join-Path $repoRoot 'src'),
+    (Join-Path $repoRoot 'config'),
+    (Join-Path $repoRoot 'examples'),
+    (Join-Path $repoRoot '.env.example'),
+    (Join-Path $repoRoot 'scripts\macr.ps1'),
+    (Join-Path $repoRoot 'scripts\init-state.ps1')
+)
+$operationalPathMatches = rg -n -S -e '[CR]:[\\/]' -- $operationalTargets
+if ($LASTEXITCODE -eq 0 -and $operationalPathMatches) {
+    $operationalPathMatches
+    throw 'Operational C: or historical R: path detected.'
+}
+if ($LASTEXITCODE -notin @(0, 1)) { exit $LASTEXITCODE }
+
 $secretMatches = rg -n --hidden `
     -g '!**/.git/**' `
     -e '(?:^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}' `

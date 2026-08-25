@@ -25,7 +25,7 @@ def _doctor(config_path: str | None, strict: bool) -> int:
     registry = ProviderRegistry.from_configs(configs)
     report = {
         "runtime": "macr-runtime",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "network_activity": False,
         "storage": layout.describe(),
         "providers": list(registry.health()),
@@ -111,21 +111,21 @@ def _invoke(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="macr", description="MACR v0.1 control utility")
+    parser = argparse.ArgumentParser(prog="macr", description="MACR v0.2 control utility")
     sub = parser.add_subparsers(dest="command", required=True)
 
     doctor = sub.add_parser("doctor", help="run offline storage and provider configuration checks")
     doctor.add_argument("--config", help="provider configuration JSON path")
     doctor.add_argument("--strict", action="store_true", help="fail if any provider is not ready")
 
-    sub.add_parser("init-state", help="create the configured D/R runtime-state directories")
+    sub.add_parser("init-state", help="create the configured D runtime-state directories")
 
     validate = sub.add_parser("validate-task", help="validate and normalize a TaskContract JSON file")
     validate.add_argument("path")
 
     invoke = sub.add_parser(
         "invoke",
-        help="invoke one configured provider and append candidate metadata to the R-drive ledger",
+        help="invoke one configured provider and append candidate metadata to the D-drive ledger",
     )
     invoke.add_argument("provider_id")
     invoke.add_argument("task_path")

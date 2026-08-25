@@ -1,59 +1,85 @@
-# MACR v0.1 architecture
+# MACR v0.2 architecture
 
 ```text
 Codex or another primary host
         |
         v
-TaskContract
+TaskContract + explicit connection opt-in
         |
         v
-ProviderRegistry -- policy/auth/privacy gate
+ProviderRegistry -- auth / privacy / budget / capability gate
         |
-        +--> MiniMax OpenAI-compatible adapter
-        +--> Grok pending adapter (disabled)
-        +--> Claude subscription adapter (disabled)
+        +--> MiniMax OpenAI-compatible chat adapter
+        +--> Grok Responses adapter: grok-4.6 frontier
+        +--> Grok Responses adapter: grok-4.3 manual standard
+        +--> Ollama local chat adapter: Qwythos-9B-v2
+        +--> Claude subscription route: disabled
         |
         v
 ProviderResult(status=candidate_*)
         |
         v
-Verifier / operator acceptance (future v0.2)
+Append-only content-free ledger on D:
         |
         v
-Append-only ledger on R:
+Verifier / operator acceptance (not implemented)
 ```
 
-## Native Codex boundary
+## Connection scopes
 
-Official Codex custom providers are configured at user level and currently use the Responses wire API. Project-local `.codex/config.toml` cannot override `model_provider` or `model_providers`.
+`external_https` requires both `--allow-network` and `TaskContract.constraints.internet=true`. Hostname allowlisting, HTTPS, credential presence, privacy, positive budget, latency, capability, request size, redirect, response size, and response shape all fail closed.
 
-MACR therefore does not pretend every vendor is a native Codex provider. It supports two distinct routes:
+`loopback_http` requires both `--allow-local` and `internet=false`. The v0.2 Ollama adapter accepts exactly `http://127.0.0.1:11434`, `local_only`, zero cost, and an installed exact model. It does not treat loopback authorization as external-network authorization.
 
-1. A provider that passes Codex Responses compatibility may be configured as a Codex backend in the future.
-2. Any approved provider may be called through a MACR adapter and returned as a normalized candidate.
+The CLI resolves provider scope without creating state or reading a task file. State creation and task parsing happen only after the matching opt-in passes.
 
-This repository implements route 2 for MiniMax first. It does not edit user-level Codex configuration.
+## Offline doctor
+
+`doctor` always reports `network_activity: false`. It validates schema, scope, allowlists, model selection, and credential presence without contacting xAI, MiniMax, or Ollama. A healthy provider is `configured_offline`, not live. Actual reachability is established only by an explicitly authorized invocation.
+
+## Grok boundary
+
+- `grok` is fixed to `grok-4.6` with `reasoning.effort=high`.
+- `grok_standard` is fixed to `grok-4.3` and must be named explicitly.
+- Every request sets `store=false`, uses a per-task output bound, and enables no tools.
+- Returned model identity must exactly match the requested profile.
+- xAI `cost_in_usd_ticks` is normalized to USD. Cost above `max_cost_usd` is retained as a failed candidate because the completed charge cannot be undone.
+- A failure never triggers another Grok profile or provider.
+
+## Ollama boundary
+
+The adapter performs an exact `/api/tags` model check before `/api/chat`. It sends `stream=false`, `think=false`, an 8,192-token context, bounded generation, and a validated `keep_alive` from `0` or `1m..60m`. Thinking and tool calls are not accepted into the result.
+
+## Ledger boundary
+
+Dispatch and completion events contain task/provider/event identity plus an allowlist of:
+
+```text
+model
+input_tokens
+output_tokens
+reasoning_tokens
+cached_tokens
+currency_cost_usd
+duration_ms
+```
+
+Missing metrics remain null. Task inputs, prompts, answers, warnings, thinking, credentials, and error bodies are excluded.
+
+## Speaker identity boundary
+
+```text
+MODEL != RESIDENT
+provider profile != speaker label
+runtime role != authorship identity
+```
+
+`grok`, `grok_standard`, and `ollama_qwythos` are service profiles only. A model-emitted self-label is a claim, not identity evidence. Until a task-local identity envelope binds the current HOST-OBSERVED native task/session identifier and declares `identifier_kind`, the readable speaker identity is `unresolved`. This runtime does not authorize access to any named resident's private data.
 
 ## Commit boundary
-
-Provider completion is not task completion:
 
 ```text
 generation != verification != acceptance
 ```
 
-The runtime records dispatch and candidate completion. v0.2 will add verifier decisions and accepted-result events. Until then, all successful provider output remains `candidate_success`.
-
-## Failure behavior
-
-- Missing credentials: fail closed before network activity.
-- Missing CLI network opt-in or a zero cost budget: fail closed before network activity.
-- Disabled provider: fail closed with the recorded policy reason.
-- Privacy mismatch: fail closed before network activity.
-- Missing declared capability: fail closed before network activity.
-- Invalid or oversized response: candidate failure with no acceptance.
-- Oversized request or any HTTP redirect: fail closed; bearer credentials are never forwarded by redirect handling.
-- Remote HTTP error bodies: omitted from normalized errors to avoid reflecting provider-side sensitive content.
-- Stale or duplicate external result: future orchestration must compare task/event identity before committing.
-
-`max_cost_usd > 0` is a required authorization gate in v0.1, not proof of the final billed amount. Live activation remains blocked operationally until current pricing and response usage are checked.
+Every provider completion is a candidate. MACR v0.2 records evidence but does not add verifier decisions or accepted-result transitions.

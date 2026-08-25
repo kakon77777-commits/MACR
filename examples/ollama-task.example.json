@@ -1,0 +1,32 @@
+{
+  "task_id": "ollama-qwythos-conformance-001",
+  "goal": "Return exactly: MACR_OLLAMA_OK",
+  "task_type": "provider_conformance",
+  "workspace": {
+    "repo": "current",
+    "write_scope": []
+  },
+  "inputs": [],
+  "constraints": {
+    "max_cost_usd": 0,
+    "max_latency_s": 240,
+    "max_output_tokens": 64,
+    "internet": false,
+    "privacy": "local_only"
+  },
+  "required_capabilities": [
+    "text_generation"
+  ],
+  "verification": {
+    "required": true,
+    "methods": [
+      "exact_text_comparison",
+      "operator_review"
+    ]
+  },
+  "return_contract": {
+    "summary": true,
+    "patch": false,
+    "evidence": true
+  }
+}

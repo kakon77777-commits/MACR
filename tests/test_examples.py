@@ -1,0 +1,35 @@
+import json
+import unittest
+from pathlib import Path
+
+from macr_runtime.contracts import PrivacyLevel, TaskContract
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_example(name: str) -> TaskContract:
+    document = json.loads((ROOT / "examples" / name).read_text(encoding="utf-8"))
+    return TaskContract.from_dict(document)
+
+
+class ExampleContractTests(unittest.TestCase):
+    def test_grok_example_is_public_bounded_cloud_task(self) -> None:
+        task = load_example("grok-task.example.json")
+        self.assertEqual(task.goal, "Return exactly: MACR_GROK_46_OK")
+        self.assertTrue(task.constraints.internet)
+        self.assertEqual(task.constraints.privacy, PrivacyLevel.PUBLIC)
+        self.assertEqual(task.constraints.max_cost_usd, 0.01)
+        self.assertEqual(task.constraints.max_output_tokens, 64)
+
+    def test_ollama_example_is_zero_cost_local_only_task(self) -> None:
+        task = load_example("ollama-task.example.json")
+        self.assertEqual(task.goal, "Return exactly: MACR_OLLAMA_OK")
+        self.assertFalse(task.constraints.internet)
+        self.assertEqual(task.constraints.privacy, PrivacyLevel.LOCAL_ONLY)
+        self.assertEqual(task.constraints.max_cost_usd, 0)
+        self.assertEqual(task.constraints.max_output_tokens, 64)
+
+
+if __name__ == "__main__":
+    unittest.main()

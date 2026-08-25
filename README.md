@@ -1,86 +1,74 @@
-# MACR Runtime v0.1
+# MACR Runtime v0.2
 
-MACR is a migration-first provider runtime for heterogeneous AI workers. Codex can act as the primary host, while provider-specific adapters return normalized **candidate** results. Candidates are not accepted work until a verifier or operator commits them.
+MACR is a migration-aware runtime for heterogeneous AI workers. Codex can act as the primary host while provider-specific adapters return normalized **candidate** results. Provider generation never becomes verified or accepted work automatically.
 
-This repository starts from two local evidence sources:
-
-- `R:\AI_gamedesign\workspace\technical-docs\01_GPT_Local_Multi_AI_Collaboration_Runtime_v0.1.md`
-- `D:\Ai\work together\cross-task-multi-ai-execution-study\paper.md`
-
-The implementation is intentionally independent from APR v0.10, while retaining compatible ideas: bounded contracts, explicit budgets, append-only receipts, and generation/verification/acceptance separation.
-
-## Storage contract
-
-Persistent writes are split by purpose:
+## Canonical D: placement
 
 ```text
-MACR_ROOT        = D:\Ai\work together\MACR
-MACR_STATE_ROOT  = R:\AI_Runtime\macr-state
-CODEX_HOME_TARGET= R:\AI_Runtime\codex-home
+MACR_ROOT         = D:\Ai\work together\MACR
+MACR_STATE_ROOT   = D:\AI_RESIDENCE\AI_Runtime\macr-state
+CODEX_HOME_TARGET = D:\AI_RESIDENCE\AI_Runtime\codex-home
+OLLAMA_MODELS     = D:\Ai\work together\LocalModels\models
 ```
 
-`CODEX_HOME_TARGET` is documentation for a later controlled migration. This repository does **not** change the active `CODEX_HOME` or current Codex login state.
+`CODEX_HOME_TARGET` is inactive metadata for a separately governed future migration. This runtime does not move the active Codex installation, login, sessions, or credentials.
 
-See [`docs/STORAGE_AND_MIGRATION.md`](docs/STORAGE_AND_MIGRATION.md).
+## Provider profiles
 
-## Provider baseline
+| Provider ID | Model/route | Scope | Selection rule |
+|---|---|---|---|
+| `minimax` | configured MiniMax OpenAI-compatible chat model | external HTTPS | explicit |
+| `grok` | `grok-4.6`, reasoning high | external HTTPS | default Grok/frontier profile |
+| `grok_standard` | `grok-4.3` | external HTTPS | explicit manual selection only |
+| `ollama_qwythos` | Qwythos-9B-v2 Q4_K_M | loopback HTTP | explicit private local selection |
+| `claude_subscription` | no adapter selected | disabled | Anthropic API use forbidden |
 
-| Provider | v0.1 state | Authentication policy |
-|---|---|---|
-| MiniMax | adapter implemented; live call blocked until environment configuration exists | API key environment variable |
-| Grok | reserved and disabled | pending API application |
-| Claude | API disabled | future approved subscription client only |
+There is no automatic provider routing and no automatic Grok fallback. A failed `grok` request never invokes `grok_standard` or Ollama.
 
-No API call occurs during import, `doctor`, configuration validation, or tests.
-
-## Quick verification
+## Offline verification
 
 ```powershell
 cd 'D:\Ai\work together\MACR'
 .\scripts\verify.ps1
 ```
 
-Or directly:
+The default suite is offline. It compiles source/tests, scans credential-shaped material and operational C/R paths, validates configuration, and runs `doctor` without contacting a provider or loading a model.
+
+## Invocation
+
+Grok 4.6 frontier profile:
 
 ```powershell
-$env:PYTHONPATH = 'D:\Ai\work together\MACR\src'
-python -m unittest discover -s tests -v
-python -m macr_runtime doctor --config config\providers.json
+$env:XAI_API_KEY = '<set outside the repository>'
+.\scripts\macr.ps1 invoke grok .\examples\grok-task.example.json --allow-network
 ```
 
-The doctor reports whether environment variables are present, but never prints secret values.
-
-Validate an example contract without network access:
+Manual Grok 4.3 profile:
 
 ```powershell
-.\scripts\macr.ps1 validate-task examples\minimax-task.example.json
+.\scripts\macr.ps1 invoke grok_standard .\examples\grok-task.example.json --allow-network
 ```
 
-## Enabling MiniMax later
-
-Set these environment variables only after checking the then-current MiniMax documentation:
-
-```text
-MINIMAX_API_KEY
-MINIMAX_BASE_URL
-MINIMAX_MODEL
-```
-
-The adapter defaults to the OpenAI-compatible `/chat/completions` path. Override it in configuration if the approved endpoint differs. Live conformance testing is a separate opt-in step.
-
-After the activation gate in `docs/PROVIDER_STATUS.md` is satisfied, an invocation still requires an explicit network switch:
+Private local Qwythos profile:
 
 ```powershell
-.\scripts\macr.ps1 invoke minimax examples\minimax-task.example.json --allow-network
+$env:MACR_OLLAMA_KEEP_ALIVE = '5m'
+.\scripts\macr.ps1 invoke ollama_qwythos .\examples\ollama-task.example.json --allow-local
 ```
 
-Without `--allow-network`, the command exits before reading the task or resolving credentials. The positive `max_cost_usd` field authorizes a billable dispatch, but v0.1 does not independently prove the final currency charge; confirm current pricing before any live test.
+`--allow-network` cannot authorize loopback work, and `--allow-local` cannot authorize an external request. Missing opt-in is rejected before task-file access or runtime-state creation.
+
+## Privacy and identity
+
+- Grok requests send `store: false`, no tools, and no previous response ID. This is not proof of account-level Zero Data Retention.
+- Ollama is restricted to `http://127.0.0.1:11434`; Ollama Cloud URLs and API keys are rejected.
+- The ledger records bounded model/usage/cost/duration metadata, never task prompts, candidate answers, thinking, authorization headers, or remote error bodies.
+- `MODEL != RESIDENT`. Provider profile names are service identifiers, not speaker names or resident identities. Without a task-local HOST-OBSERVED binding, speaker identity remains `unresolved`.
 
 ## Current limits
 
-- No automatic router yet.
-- No provider-price engine or hard provider-side USD cap yet.
-- No cross-process file lock yet; the JSONL ledger is process-safe only within one runtime instance.
-- No live provider has been called.
-- No Claude subscription-client adapter has been selected or verified.
-- No active Codex state has been migrated from C.
+- No automatic router, fan-out, verifier decision, or acceptance event.
+- No provider-side hard USD cap; actual Grok cost is checked after completion and an overrun becomes `candidate_failure`.
+- No Grok search, code execution, files, images, or server-side tools.
+- No Ollama tools, vision, embeddings, model pulling, or service startup.
+- The append-only JSONL ledger is serialized within one runtime process only; cross-process locking remains future work.

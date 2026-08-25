@@ -1,54 +1,53 @@
 # Storage and migration contract
 
-Status: active from MACR v0.1
-Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `MIGRATION_REQUIRED`, `SECRETS_EXTERNAL`
+Status: active from MACR v0.2
+
+Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `D_RESIDENCE_CANONICAL`, `SECRETS_EXTERNAL`
 
 ## Canonical roots
 
-| Purpose | Current root | Persistence class |
+| Purpose | Current root | Boundary |
 |---|---|---|
-| Source, docs, tests, non-secret configuration | `D:\Ai\work together\MACR` | canonical and backed up |
-| Runtime ledger, cache, artifacts, test temporary data | `R:\AI_Runtime\macr-state` | canonical runtime state |
-| Future Codex state target | `R:\AI_Runtime\codex-home` | pending controlled migration |
-| Existing Codex installation and state on C | unchanged | reinstallable or pending migration review |
+| Source, docs, tests, non-secret configuration | `D:\Ai\work together\MACR` | active Git project |
+| Runtime ledger, cache, artifacts, test state | `D:\AI_RESIDENCE\AI_Runtime\macr-state` | shared service state |
+| Future Codex target | `D:\AI_RESIDENCE\AI_Runtime\codex-home` | inactive; no migration authorized |
+| Ollama model store | `D:\Ai\work together\LocalModels\models` | rebuildable local weights |
+| Active Codex application state | native C: locations | unchanged by MACR |
 
-Application binaries may currently execute from C. That does not authorize persistent MACR output on C.
+Application binaries may execute from C. That does not authorize new persistent MACR output on C.
 
-## Environment-root indirection
+## R-to-D migration history
 
-Runtime code resolves roots from environment variables and uses D/R defaults only when they are absent:
+The former R: 500GB NVMe was cloned into the system role and became C: on 2026-08-16. Residence content was moved to `D:\AI_RESIDENCE` before that conversion. Historical reports and source provenance may retain old R: paths because they were correct observations at the time; current defaults and entry points must resolve to D:.
+
+The active workspace, Residence, runtime state, and model store currently share physical D: media. Directory separation protects policy and lifecycle boundaries but is not a second-medium backup.
+
+## Root indirection
 
 ```text
 MACR_ROOT
 MACR_STATE_ROOT
 CODEX_HOME_TARGET
+OLLAMA_MODELS
 ```
 
-`CODEX_HOME_TARGET` is not the official active variable. It records the intended destination without changing the running Codex instance. During an approved migration it will become the value of official `CODEX_HOME` only after copy and validation.
-
-Official OpenAI documentation states that `CODEX_HOME` controls Codex config, auth, logs, sessions, skills, and standalone package metadata for the CLI, IDE extension, app-server, and installers. The destination must already exist:
-
-- https://learn.chatgpt.com/docs/config-file/environment-variables
-- https://learn.chatgpt.com/docs/config-file/config-advanced
-
-## Later SSD migration procedure
-
-Do not delete or overwrite the source disk during these steps.
-
-1. Freeze writes and record the current source/state paths and volume labels.
-2. Create the new destination directories.
-3. Copy source and state while preserving timestamps.
-4. Produce and compare SHA-256 manifests at source and destination.
-5. Point `MACR_ROOT` and `MACR_STATE_ROOT` to the new SSD.
-6. Run the complete offline suite and a ledger append/readback smoke test.
-7. Separately copy `CODEX_HOME`, set the official variable, restart Codex, and verify login, config, skills, sessions, and provider profiles.
-8. Retain the old data as a rollback copy until the operator explicitly accepts the migration.
-
-Changing drive letters must require environment changes only. A source scan must show no operational hard-coded C path.
+`CODEX_HOME_TARGET` is not the official active `CODEX_HOME`. This release does not copy authentication, logs, sessions, skills, packages, or application databases. Any later move requires a separate design, consistent snapshot, manifest, hashes, restart validation, and rollback copy.
 
 ## Secrets
 
 - Commit environment-variable names only.
-- Do not commit `.env`, API keys, bearer tokens, copied credential files, or provider response dumps that may contain secrets.
-- Claude API use is forbidden under the current policy.
-- A subscription-client credential is still a credential and must remain outside the repository.
+- Never commit `.env`, API keys, bearer tokens, provider response dumps, or copied credential files.
+- The operator's existing Grok credential source is not a runtime dependency and its path is not committed into provider configuration.
+- Claude API use remains forbidden.
+- Named resident private data is outside shared MACR runtime scope.
+
+## Future migration procedure
+
+1. Freeze writes and record source/destination volume identity.
+2. Copy without deleting the source.
+3. Produce SHA-256 manifests for both sides.
+4. Compare manifests and run the complete offline suite.
+5. Perform bounded live provider checks.
+6. Retain the old root as rollback until explicit operator acceptance.
+
+Never infer a destination from free space, drive order, model identity, or a familiar resident name.
