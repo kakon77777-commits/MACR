@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping
 from urllib.parse import urlparse
 
 from ..config import AuthMode, ProviderConfig
@@ -18,69 +15,7 @@ from ..errors import (
 )
 from .base import BaseProvider, ProviderHealth
 from .common import BOUNDED_WORKER_INSTRUCTION
-
-
-class JsonTransport(Protocol):
-    def post_json(
-        self,
-        url: str,
-        *,
-        headers: Mapping[str, str],
-        payload: Mapping[str, Any],
-        timeout_s: float,
-    ) -> Mapping[str, Any]: ...
-
-
-class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Prevent bearer credentials from being forwarded by urllib redirects."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        del req, fp, code, msg, headers, newurl
-        return None
-
-
-@dataclass
-class UrllibJsonTransport:
-    max_request_bytes: int = 2 * 1024 * 1024
-    max_response_bytes: int = 8 * 1024 * 1024
-
-    def post_json(
-        self,
-        url: str,
-        *,
-        headers: Mapping[str, str],
-        payload: Mapping[str, Any],
-        timeout_s: float,
-    ) -> Mapping[str, Any]:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        if len(body) > self.max_request_bytes:
-            raise ProviderProtocolError("provider request exceeded the configured size limit")
-        request = urllib.request.Request(
-            url,
-            data=body,
-            headers={**headers, "Content-Type": "application/json"},
-            method="POST",
-        )
-        opener = urllib.request.build_opener(_RejectRedirectHandler())
-        try:
-            with opener.open(request, timeout=timeout_s) as response:
-                raw = response.read(self.max_response_bytes + 1)
-        except urllib.error.HTTPError as exc:
-            raise ProviderProtocolError(
-                f"provider HTTP {exc.code}; remote response body omitted"
-            ) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            reason = getattr(exc, "reason", str(exc))
-            raise ProviderUnavailableError(f"provider connection failed: {reason}") from exc
-        if len(raw) > self.max_response_bytes:
-            raise ProviderProtocolError("provider response exceeded the configured size limit")
-        try:
-            document = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ProviderProtocolError("provider response was not valid UTF-8 JSON") from exc
-        if not isinstance(document, dict):
-            raise ProviderProtocolError("provider response root must be a JSON object")
-        return document
+from .http_json import JsonTransport, UrllibJsonTransport
 
 
 class OpenAICompatibleProvider(BaseProvider):

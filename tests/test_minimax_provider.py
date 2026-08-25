@@ -8,7 +8,7 @@ from macr_runtime.contracts import PrivacyLevel, TaskConstraints, TaskContract
 from macr_runtime.errors import ProviderPolicyError, ProviderProtocolError
 from macr_runtime.providers.minimax import MiniMaxProvider
 from macr_runtime.providers.common import BOUNDED_WORKER_INSTRUCTION
-from macr_runtime.providers.openai_compatible import UrllibJsonTransport
+from macr_runtime.providers.http_json import UrllibJsonTransport
 
 
 class FakeTransport:

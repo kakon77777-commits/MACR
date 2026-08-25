@@ -8,7 +8,7 @@ from .errors import ConfigurationError, ProviderUnavailableError
 from .providers.base import BaseProvider
 from .providers.disabled import DisabledProvider
 from .providers.minimax import MiniMaxProvider
-from .providers.openai_compatible import JsonTransport
+from .providers.http_json import JsonTransport
 
 
 class ProviderRegistry:
