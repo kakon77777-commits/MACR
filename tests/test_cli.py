@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from macr_runtime.cli import _doctor, _invoke
+from tests.support import d_drive_tempdir, write_fake_google_credential
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,16 +16,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class DoctorTests(unittest.TestCase):
     def test_strict_ignores_intentionally_disabled_providers(self) -> None:
-        environment = {
-            "MINIMAX_API_KEY": "test-key",
-            "MINIMAX_BASE_URL": "https://api.minimax.io/v1",
-            "MINIMAX_MODEL": "test-model",
-            "XAI_API_KEY": "test-key",
-        }
-        output = io.StringIO()
-        with patch.dict(os.environ, environment, clear=False):
-            with contextlib.redirect_stdout(output):
-                status = _doctor(str(ROOT / "config" / "providers.json"), strict=True)
+        with d_drive_tempdir() as temp:
+            credential = write_fake_google_credential(temp / "credential.json")
+            environment = {
+                "MINIMAX_API_KEY": "test-key",
+                "MINIMAX_BASE_URL": "https://api.minimax.io/v1",
+                "MINIMAX_MODEL": "test-model",
+                "XAI_API_KEY": "test-key",
+                "GOOGLE_APPLICATION_CREDENTIALS": str(credential),
+                "GOOGLE_CLOUD_PROJECT": "test-project",
+            }
+            output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=False):
+                with contextlib.redirect_stdout(output):
+                    status = _doctor(
+                        str(ROOT / "config" / "providers.json"),
+                        strict=True,
+                    )
         self.assertEqual(status, 0)
         self.assertNotIn("test-key", output.getvalue())
 

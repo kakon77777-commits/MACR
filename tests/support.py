@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -9,6 +10,23 @@ from typing import Iterator
 
 
 DEFAULT_TEST_ROOT = Path(r"D:\AI_RESIDENCE\AI_Runtime\macr-state\test-tmp")
+
+
+def write_fake_google_credential(path: Path) -> Path:
+    document = {
+        "type": "service_account",
+        "project_id": "test-project",
+        "private_key_id": "test-key-id",
+        "private_key": (
+            "-----BEGIN "
+            + "PRIVATE KEY-----\nTEST\n-----END "
+            + "PRIVATE KEY-----\n"
+        ),
+        "client_email": "test@example.invalid",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
 
 
 @contextmanager

@@ -23,10 +23,11 @@ class ProviderConfigTests(unittest.TestCase):
                 "grok",
                 "grok_standard",
                 "ollama_qwythos",
+                "google_gemini",
                 "claude_subscription",
             ],
         )
-        claude = configs[4]
+        claude = configs[5]
         self.assertFalse(claude.api_usage_allowed)
         self.assertEqual(claude.auth_mode, AuthMode.SUBSCRIPTION_CLIENT)
 
@@ -46,6 +47,13 @@ class ProviderConfigTests(unittest.TestCase):
         self.assertEqual(
             by_id["ollama_qwythos"].connection_scope,
             ConnectionScope.LOOPBACK_HTTP,
+        )
+        self.assertTrue(by_id["google_gemini"].enabled)
+        self.assertEqual(by_id["google_gemini"].model, "gemini-3.7-flash")
+        self.assertEqual(by_id["google_gemini"].location, "global")
+        self.assertEqual(
+            by_id["google_gemini"].auth_mode,
+            AuthMode.SERVICE_ACCOUNT,
         )
 
     def test_enabled_api_provider_requires_environment_names(self) -> None:

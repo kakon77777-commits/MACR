@@ -8,6 +8,7 @@ from .errors import ConfigurationError, ProviderUnavailableError
 from .providers.base import BaseProvider
 from .providers.disabled import DisabledProvider
 from .providers.grok import GrokResponsesProvider
+from .providers.google_gemini import GoogleGeminiProvider
 from .providers.minimax import MiniMaxProvider
 from .providers.ollama import OllamaChatProvider
 from .providers.http_json import JsonTransport
@@ -52,6 +53,13 @@ class ProviderRegistry:
                         config,
                         environ=environ,
                         transport=transport_map.get(config.id),
+                    )
+                )
+            elif config.kind == "google_vertex_gemini":
+                providers.append(
+                    GoogleGeminiProvider(
+                        config,
+                        environ=environ,
                     )
                 )
             elif not config.enabled:

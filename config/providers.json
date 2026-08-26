@@ -70,6 +70,27 @@
       "notes": "Private local candidate worker; no Ollama Cloud or tools."
     },
     {
+      "id": "google_gemini",
+      "kind": "google_vertex_gemini",
+      "enabled": true,
+      "auth_mode": "service_account",
+      "api_usage_allowed": true,
+      "connection_scope": "external_https",
+      "credential_path_env": "GOOGLE_APPLICATION_CREDENTIALS",
+      "project_env": "GOOGLE_CLOUD_PROJECT",
+      "base_url": "https://aiplatform.googleapis.com",
+      "model": "gemini-3.7-flash",
+      "location": "global",
+      "endpoint_path": "/v1",
+      "allowed_hosts": [
+        "aiplatform.googleapis.com",
+        "oauth2.googleapis.com"
+      ],
+      "capabilities": ["text_generation", "multimodal_understanding"],
+      "approved_privacy": ["public", "internal_approved"],
+      "notes": "Google Vertex AI multimodal text provider; no tools, grounding, retries, or fallback."
+    },
+    {
       "id": "claude_subscription",
       "kind": "external_subscription_client",
       "enabled": false,
