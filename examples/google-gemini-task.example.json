@@ -1,0 +1,32 @@
+{
+  "task_id": "google-gemini-conformance-001",
+  "goal": "Return exactly: MACR_GOOGLE_GEMINI_OK",
+  "task_type": "provider_conformance",
+  "workspace": {
+    "repo": "current",
+    "write_scope": []
+  },
+  "inputs": [],
+  "constraints": {
+    "max_cost_usd": 1.0,
+    "max_latency_s": 180,
+    "max_output_tokens": 64,
+    "internet": true,
+    "privacy": "public"
+  },
+  "required_capabilities": [
+    "text_generation"
+  ],
+  "verification": {
+    "required": true,
+    "methods": [
+      "exact_text_comparison",
+      "operator_review"
+    ]
+  },
+  "return_contract": {
+    "summary": false,
+    "patch": false,
+    "evidence": false
+  }
+}

@@ -53,6 +53,51 @@ class FixedResultProvider:
         )
 
 
+class GoogleFixedResultProvider:
+    provider_id = "google_image"
+    connection_scope = ConnectionScope.EXTERNAL_HTTPS
+
+    def health(self):
+        return ProviderHealth("google_image", True, "configured_offline")
+
+    def invoke(self, task):
+        return ProviderResult(
+            task_id=task.task_id,
+            status=ResultStatus.CANDIDATE_SUCCESS,
+            answer="PRIVATE GOOGLE ANSWER",
+            artifacts=(
+                {
+                    "relative_path": "artifacts/google/private-file.jpg",
+                    "mime_type": "image/jpeg",
+                    "sha256": "abc",
+                },
+            ),
+            cost={
+                "currency_cost_usd": 0.067,
+                "cost_kind": "estimated",
+                "pricing_basis_version": "2026-08-26",
+            },
+            provider_meta={
+                "provider": "google_image",
+                "model": "gemini-3.1-flash-image",
+                "response_id": "google-private-response",
+                "metrics": {
+                    "input_tokens": 20,
+                    "output_tokens": 1120,
+                    "reasoning_tokens": 0,
+                    "cached_tokens": 0,
+                    "duration_ms": None,
+                    "input_media_count": 1,
+                    "input_media_bytes": 1024,
+                    "output_artifact_count": 1,
+                    "output_artifact_bytes": 2048,
+                    "cost_kind": "estimated",
+                    "pricing_basis_version": "2026-08-26",
+                },
+            },
+        )
+
+
 class RuntimeLedgerTests(unittest.TestCase):
     def test_ledger_records_metrics_but_not_candidate_content(self) -> None:
         registry = ProviderRegistry((FixedResultProvider(),))
@@ -77,6 +122,45 @@ class RuntimeLedgerTests(unittest.TestCase):
             events[-1]["payload"]["currency_cost_usd"],
             0.00025,
         )
+
+    def test_google_ledger_records_allowlisted_metrics_without_content(self) -> None:
+        registry = ProviderRegistry((GoogleFixedResultProvider(),))
+        with d_drive_tempdir() as temp:
+            ledger = AppendOnlyLedger(temp / "events.jsonl")
+            MacrRuntime(registry, ledger).invoke(
+                "google_image",
+                TaskContract(
+                    task_id="google-ledger-private",
+                    goal="PRIVATE GOOGLE PROMPT",
+                    task_type="image_generation",
+                    inputs=(
+                        {
+                            "type": "file",
+                            "path": "private-input.png",
+                            "mime_type": "image/png",
+                            "sha256": "0" * 64,
+                        },
+                    ),
+                ),
+            )
+            events = ledger.read_all()
+            serialized = ledger.path.read_text(encoding="utf-8")
+        for forbidden in (
+            "PRIVATE GOOGLE PROMPT",
+            "PRIVATE GOOGLE ANSWER",
+            "private-input.png",
+            "private-file.jpg",
+            "private_key",
+        ):
+            self.assertNotIn(forbidden, serialized)
+        payload = events[-1]["payload"]
+        self.assertEqual(payload["input_media_count"], 1)
+        self.assertEqual(payload["input_media_bytes"], 1024)
+        self.assertEqual(payload["output_artifact_count"], 1)
+        self.assertEqual(payload["output_artifact_bytes"], 2048)
+        self.assertEqual(payload["cost_kind"], "estimated")
+        self.assertEqual(payload["pricing_basis_version"], "2026-08-26")
+
     def test_dispatch_and_candidate_are_append_only_events(self) -> None:
         config = ProviderConfig(
             id="minimax",

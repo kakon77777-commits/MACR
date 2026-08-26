@@ -8,6 +8,11 @@ Updated: 2026-08-26
 | `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | adapter implemented; live v0.2 acceptance pending |
 | `grok_standard` | `grok-4.3` | `XAI_API_KEY` | allowed | adapter implemented; manual profile only |
 | `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | adapter implemented; live MACR acceptance pending |
+| `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 acceptance pending |
+| `google_image` | `gemini-3.1-flash-image`, one 1K output | D: service-account file + project environment | allowed | adapter implemented; live v0.3 acceptance pending |
+| `google_veo_fast` | `veo-3.1-fast-generate-001` | not loaded | unavailable | disabled; no long-running-operation adapter |
+| `google_tts` | `gemini-3.1-flash-tts-preview` | not loaded | unavailable | disabled; no audio adapter |
+| `google_lyria` | `lyria-3-clip-preview` | not loaded | unavailable | disabled; no music adapter |
 | `claude_subscription` | approved subscription client not selected | subscription login | API forbidden | disabled |
 
 ## Grok policy
@@ -37,6 +42,16 @@ size   = 6,657,768,737 bytes
 The direct local smoke test used an 8,192-token context, observed 86% GPU / 14% CPU allocation, completed at 34.36 generated tokens per second, and unloaded successfully with `keep_alive=0`.
 
 MACR still treats Qwythos output as unverified. Low refusal does not imply accuracy, and this release grants it no filesystem, network, tool, or private-resident access.
+
+## Google policy
+
+The active v0.3 profiles are exact `gemini-3.7-flash` for text/multimodal understanding and exact `gemini-3.1-flash-image` for one 1K image. Every invocation requires explicit `--allow-network`, a public or approved internal task, positive task-level budget, named Google environment values, and a structurally valid service-account file on D:.
+
+MACR uses `google-genai>=2.17,<3`, passes credentials explicitly, fixes total SDK attempts to one, and enables no grounding or tools. Generated image bytes are decoded, MIME-checked, hashed, and atomically persisted without overwrite or recompression.
+
+Currency cost is estimated from a dated public pricing basis when the API does not return invoice-grade cost. Cloud Billing is authoritative; current credits and expiration dates do not change provider behavior or guarantee free use.
+
+Veo, TTS, and Lyria remain disabled until separate artifact, duration, long-running-operation, pricing, and live-verification designs are approved.
 
 ## Claude boundary
 

@@ -34,6 +34,24 @@ class ExampleContractTests(unittest.TestCase):
         self.assertFalse(task.return_contract.summary)
         self.assertFalse(task.return_contract.evidence)
 
+    def test_google_gemini_example_is_public_bounded_cloud_task(self) -> None:
+        task = load_example("google-gemini-task.example.json")
+        self.assertEqual(task.goal, "Return exactly: MACR_GOOGLE_GEMINI_OK")
+        self.assertTrue(task.constraints.internet)
+        self.assertEqual(task.constraints.privacy, PrivacyLevel.PUBLIC)
+        self.assertGreater(task.constraints.max_cost_usd, 0)
+        self.assertEqual(task.constraints.max_output_tokens, 64)
+        self.assertEqual(task.required_capabilities, ("text_generation",))
+        self.assertFalse(task.return_contract.summary)
+        self.assertFalse(task.return_contract.evidence)
+
+    def test_google_image_example_requests_one_public_image(self) -> None:
+        task = load_example("google-image-task.example.json")
+        self.assertTrue(task.constraints.internet)
+        self.assertEqual(task.constraints.privacy, PrivacyLevel.PUBLIC)
+        self.assertEqual(task.constraints.max_cost_usd, 1.0)
+        self.assertEqual(task.required_capabilities, ("image_generation",))
+
 
 if __name__ == "__main__":
     unittest.main()

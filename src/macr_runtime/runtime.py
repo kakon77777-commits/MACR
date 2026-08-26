@@ -14,6 +14,12 @@ _LEDGER_METRIC_KEYS = (
     "cached_tokens",
     "currency_cost_usd",
     "duration_ms",
+    "input_media_count",
+    "input_media_bytes",
+    "output_artifact_count",
+    "output_artifact_bytes",
+    "cost_kind",
+    "pricing_basis_version",
 )
 
 
@@ -74,6 +80,12 @@ class MacrRuntime:
             "cached_tokens": metrics.get("cached_tokens"),
             "currency_cost_usd": result.cost.get("currency_cost_usd"),
             "duration_ms": metrics.get("duration_ms"),
+            "input_media_count": metrics.get("input_media_count"),
+            "input_media_bytes": metrics.get("input_media_bytes"),
+            "output_artifact_count": metrics.get("output_artifact_count"),
+            "output_artifact_bytes": metrics.get("output_artifact_bytes"),
+            "cost_kind": metrics.get("cost_kind"),
+            "pricing_basis_version": metrics.get("pricing_basis_version"),
         }
         assert all(key in completion_payload for key in _LEDGER_METRIC_KEYS)
         self.ledger.append("provider.candidate_completed", completion_payload)

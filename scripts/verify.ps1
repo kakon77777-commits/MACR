@@ -38,11 +38,17 @@ if ($LASTEXITCODE -eq 0 -and $operationalPathMatches) {
 }
 if ($LASTEXITCODE -notin @(0, 1)) { exit $LASTEXITCODE }
 
-$secretMatches = rg -n --hidden `
+$secretMatches = rg -n --hidden --no-ignore `
     -g '!**/.git/**' `
+    -g '!**/.worktrees/**' `
+    -g '!**/.venv/**' `
+    -g '!**/__pycache__/**' `
+    -g '!**/*.pyc' `
     -e '(?:^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}' `
     -e '(?:^|[^A-Za-z0-9])xai-[A-Za-z0-9_-]{20,}' `
     -e 'Bearer [A-Za-z0-9_-]{20,}' `
+    -e '-----BEGIN (?:RSA )?PRIVATE KEY-----' `
+    -e '(?i)\x22private_key\x22\s*:\s*\x22[^\x22]{16,}' `
     -e '(?i)(?:api[_-]?key|access[_-]?token|secret)\s*[=:]\s*[\x22\x27]?[A-Za-z0-9_./+=-]{16,}' `
     -- $repoRoot
 if ($LASTEXITCODE -eq 0 -and $secretMatches) {

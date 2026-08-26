@@ -11,6 +11,8 @@ build/
 .env
 .env.*
 !.env.example
+gcp-key.json
+*service-account*.json
 *.log
 *.sqlite
 *.sqlite3

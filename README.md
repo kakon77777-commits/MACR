@@ -1,4 +1,4 @@
-# MACR Runtime v0.2
+# MACR Runtime v0.3
 
 MACR is a migration-aware runtime for heterogeneous AI workers. Codex can act as the primary host while provider-specific adapters return normalized **candidate** results. Provider generation never becomes verified or accepted work automatically.
 
@@ -21,9 +21,14 @@ OLLAMA_MODELS     = D:\Ai\work together\LocalModels\models
 | `grok` | `grok-4.6`, reasoning high | external HTTPS | default Grok/frontier profile |
 | `grok_standard` | `grok-4.3` | external HTTPS | explicit manual selection only |
 | `ollama_qwythos` | Qwythos-9B-v2 Q4_K_M | loopback HTTP | explicit private local selection |
+| `google_gemini` | `gemini-3.7-flash` | external HTTPS | explicit text/multimodal candidate |
+| `google_image` | `gemini-3.1-flash-image`, one 1K output | external HTTPS | explicit image candidate |
+| `google_veo_fast` | `veo-3.1-fast-generate-001` | disabled | implementation and live verification deferred |
+| `google_tts` | `gemini-3.1-flash-tts-preview` | disabled | implementation and live verification deferred |
+| `google_lyria` | `lyria-3-clip-preview` | disabled | implementation and live verification deferred |
 | `claude_subscription` | no adapter selected | disabled | Anthropic API use forbidden |
 
-There is no automatic provider routing and no automatic Grok fallback. A failed `grok` request never invokes `grok_standard` or Ollama.
+There is no automatic provider routing or fallback. A failed provider never invokes another model, Google media profile, Grok profile, or Ollama.
 
 ## Offline verification
 
@@ -56,13 +61,37 @@ $env:MACR_OLLAMA_KEEP_ALIVE = '5m'
 .\scripts\macr.ps1 invoke ollama_qwythos .\examples\ollama-task.example.json --allow-local
 ```
 
+Google Gemini 3.7 Flash:
+
+```powershell
+$env:GOOGLE_APPLICATION_CREDENTIALS = 'D:\KEY\GOOGLE_VERTEX.json'
+$env:GOOGLE_CLOUD_PROJECT = '<set outside the repository>'
+.\scripts\macr.ps1 invoke google_gemini .\examples\google-gemini-task.example.json --allow-network
+```
+
+Google Gemini 3.1 Flash Image:
+
+```powershell
+.\scripts\macr.ps1 invoke google_image .\examples\google-image-task.example.json --allow-network
+```
+
+Generated images are preserved at:
+
+```text
+D:\AI_RESIDENCE\AI_Runtime\macr-state\artifacts\google\<task_id>\
+```
+
+Only validated JPEG/PNG bytes become artifacts. Paths, prompts, answers, source filenames, credentials, and image bytes are excluded from the ledger.
+
 `--allow-network` cannot authorize loopback work, and `--allow-local` cannot authorize an external request. Missing opt-in is rejected before task-file access or runtime-state creation.
 
 ## Privacy and identity
 
 - Grok requests send `store: false`, no tools, and no previous response ID. This is not proof of account-level Zero Data Retention.
 - Ollama is restricted to `http://127.0.0.1:11434`; Ollama Cloud URLs and API keys are rejected.
-- The ledger records bounded model/usage/cost/duration metadata, never task prompts, candidate answers, thinking, authorization headers, or remote error bodies.
+- Google credentials are loaded from a named D: file through `GOOGLE_APPLICATION_CREDENTIALS`; the project is read from `GOOGLE_CLOUD_PROJECT`. Google SDK retries are fixed to one total attempt, and tools/grounding are disabled.
+- The ledger records bounded model/usage/cost/duration/media-count metadata, never task prompts, candidate answers, thinking, authorization headers, source paths, artifact content, or remote error bodies.
+- Google currency values are estimates derived from a dated pricing basis. Cloud Billing is authoritative. Promotional credits do not guarantee free model use and are not embedded into provider policy.
 - `MODEL != RESIDENT`. Provider profile names are service identifiers, not speaker names or resident identities. Without a task-local HOST-OBSERVED binding, speaker identity remains `unresolved`.
 
 ## Current limits
@@ -71,4 +100,5 @@ $env:MACR_OLLAMA_KEEP_ALIVE = '5m'
 - No provider-side hard USD cap; actual Grok cost is checked after completion and an overrun becomes `candidate_failure`.
 - No Grok search, code execution, files, images, or server-side tools.
 - No Ollama tools, vision, embeddings, model pulling, or service startup.
+- Google accepts only bounded workspace-relative local media; URLs, `gs://`, automatic uploads, multi-image output, Veo, TTS, and Lyria invocation are unavailable.
 - The append-only JSONL ledger is serialized within one runtime process only; cross-process locking remains future work.

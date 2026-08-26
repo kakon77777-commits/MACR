@@ -23,3 +23,14 @@ The R: path above is historical evidence. Current Residence authority records th
 | xAI access smoke test | authenticated model listing plus one fixed-string `grok-4.3` response; actual cost USD 0.0002734; no key value retained |
 
 These observations do not establish v0.2 live acceptance. Grok 4.6 and MACR-routed Qwythos conformance are recorded separately only after Task 8 succeeds.
+
+## v0.3 Google GenAI design baseline
+
+| Evidence | Identity |
+|---|---|
+| Google balanced-provider design | Git commit `9a33b28`, 2026-08-26 |
+| Google implementation plan | Git commit `48774d0`, 2026-08-26 |
+| Google research directory | preserved external prototype; not imported into MACR runtime |
+| Vertex model discovery | 2026-08-25 cached catalog evidence; visibility is not inference entitlement |
+
+The approved credential operation is copy-only to `D:\KEY\GOOGLE_VERTEX.json` with byte-length and SHA-256 equality checks. Neither credential bytes nor account/project identifiers belong in Git or this provenance file. Live text, multimodal, and image conformance is recorded separately only after the complete offline v0.3 gate succeeds.
