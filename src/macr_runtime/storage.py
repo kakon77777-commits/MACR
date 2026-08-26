@@ -58,6 +58,10 @@ class StorageLayout:
     def test_tmp_root(self) -> Path:
         return Path(self.state_root) / "test-tmp"
 
+    @property
+    def google_artifact_root(self) -> Path:
+        return Path(self.state_root) / "artifacts" / "google"
+
     def ensure_state_tree(self) -> tuple[Path, ...]:
         roots = tuple(
             Path(self.state_root) / name
