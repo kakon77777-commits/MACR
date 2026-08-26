@@ -9,6 +9,7 @@ from .providers.base import BaseProvider
 from .providers.disabled import DisabledProvider
 from .providers.grok import GrokResponsesProvider
 from .providers.google_gemini import GoogleGeminiProvider
+from .providers.google_image import GoogleImageProvider
 from .providers.minimax import MiniMaxProvider
 from .providers.ollama import OllamaChatProvider
 from .providers.http_json import JsonTransport
@@ -58,6 +59,13 @@ class ProviderRegistry:
             elif config.kind == "google_vertex_gemini":
                 providers.append(
                     GoogleGeminiProvider(
+                        config,
+                        environ=environ,
+                    )
+                )
+            elif config.kind == "google_vertex_image":
+                providers.append(
+                    GoogleImageProvider(
                         config,
                         environ=environ,
                     )

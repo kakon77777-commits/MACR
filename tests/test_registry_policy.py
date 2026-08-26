@@ -63,6 +63,38 @@ class RegistryPolicyTests(unittest.TestCase):
             "gemini-3.7-flash",
         )
 
+    def test_google_image_is_offline_and_future_profiles_are_disabled(self) -> None:
+        configs = load_provider_configs(ROOT / "config" / "providers.json")
+        with d_drive_tempdir() as root:
+            credential = write_fake_google_credential(root / "credential.json")
+            registry = ProviderRegistry.from_configs(
+                configs,
+                environ={
+                    "XAI_API_KEY": "test-key",
+                    "GOOGLE_APPLICATION_CREDENTIALS": str(credential),
+                    "GOOGLE_CLOUD_PROJECT": "test-project",
+                    "MACR_STATE_ROOT": str(root),
+                },
+            )
+            health = registry.get("google_image").health()
+            self.assertTrue(health.ready)
+            self.assertEqual(health.status, "configured_offline")
+            for provider_id in (
+                "google_veo_fast",
+                "google_tts",
+                "google_lyria",
+            ):
+                provider = registry.get(provider_id)
+                self.assertEqual(provider.health().status, "disabled")
+                with self.assertRaises(ProviderPolicyError):
+                    provider.invoke(
+                        TaskContract(
+                            task_id=f"{provider_id}-disabled",
+                            goal="remain disabled",
+                            task_type="policy_test",
+                        )
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

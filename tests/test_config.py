@@ -24,10 +24,14 @@ class ProviderConfigTests(unittest.TestCase):
                 "grok_standard",
                 "ollama_qwythos",
                 "google_gemini",
+                "google_image",
+                "google_veo_fast",
+                "google_tts",
+                "google_lyria",
                 "claude_subscription",
             ],
         )
-        claude = configs[5]
+        claude = configs[9]
         self.assertFalse(claude.api_usage_allowed)
         self.assertEqual(claude.auth_mode, AuthMode.SUBSCRIPTION_CLIENT)
 
@@ -55,6 +59,34 @@ class ProviderConfigTests(unittest.TestCase):
             by_id["google_gemini"].auth_mode,
             AuthMode.SERVICE_ACCOUNT,
         )
+
+    def test_google_image_and_future_profiles_are_exact(self) -> None:
+        by_id = {
+            item.id: item
+            for item in load_provider_configs(ROOT / "config" / "providers.json")
+        }
+        self.assertEqual(
+            by_id["google_image"].model,
+            "gemini-3.1-flash-image",
+        )
+        self.assertTrue(by_id["google_image"].enabled)
+        self.assertEqual(
+            by_id["google_veo_fast"].model,
+            "veo-3.1-fast-generate-001",
+        )
+        self.assertEqual(
+            by_id["google_tts"].model,
+            "gemini-3.1-flash-tts-preview",
+        )
+        self.assertEqual(by_id["google_lyria"].model, "lyria-3-clip-preview")
+        for provider_id in (
+            "google_veo_fast",
+            "google_tts",
+            "google_lyria",
+        ):
+            self.assertFalse(by_id[provider_id].enabled)
+            self.assertFalse(by_id[provider_id].api_usage_allowed)
+            self.assertIsNotNone(by_id[provider_id].disabled_reason)
 
     def test_enabled_api_provider_requires_environment_names(self) -> None:
         with self.assertRaisesRegex(ConfigurationError, "lacks"):
