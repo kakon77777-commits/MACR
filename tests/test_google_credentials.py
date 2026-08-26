@@ -4,10 +4,14 @@ import json
 import contextlib
 import io
 import unittest
+from pathlib import Path
 
 from macr_runtime.errors import StoragePolicyError
 from macr_runtime.google_credentials import main, stage_service_account
 from tests.support import d_drive_tempdir
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def fake_service_account() -> bytes:
@@ -95,6 +99,16 @@ class GoogleCredentialTests(unittest.TestCase):
             self.assertNotIn(str(target), output.getvalue())
             self.assertNotIn("test-project", output.getvalue())
             self.assertNotIn("test@example.invalid", output.getvalue())
+
+    def test_powershell_wrapper_avoids_runpy_double_import(self) -> None:
+        text = (ROOT / "scripts" / "stage-google-credential.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("-m macr_runtime.google_credentials", text)
+        self.assertIn(
+            "from macr_runtime.google_credentials import main",
+            text,
+        )
 
 
 if __name__ == "__main__":
