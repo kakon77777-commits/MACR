@@ -153,6 +153,58 @@ class ProviderConfigTests(unittest.TestCase):
                 with self.assertRaises(ConfigurationError):
                     config.resolve_base_url({})
 
+    def test_service_account_provider_requires_named_environment(self) -> None:
+        with self.assertRaisesRegex(
+            ConfigurationError,
+            "credential_path_env, project_env",
+        ):
+            ProviderConfig(
+                id="google",
+                kind="google_vertex_gemini",
+                enabled=True,
+                auth_mode=AuthMode.SERVICE_ACCOUNT,
+                api_usage_allowed=True,
+                connection_scope=ConnectionScope.EXTERNAL_HTTPS,
+                base_url="https://aiplatform.googleapis.com",
+                model="gemini-3.7-flash",
+                location="global",
+                allowed_hosts=(
+                    "aiplatform.googleapis.com",
+                    "oauth2.googleapis.com",
+                ),
+            )
+
+    def test_service_account_environment_is_public_metadata_only(self) -> None:
+        config = ProviderConfig(
+            id="google",
+            kind="google_vertex_gemini",
+            enabled=True,
+            auth_mode=AuthMode.SERVICE_ACCOUNT,
+            api_usage_allowed=True,
+            connection_scope=ConnectionScope.EXTERNAL_HTTPS,
+            credential_path_env="GOOGLE_APPLICATION_CREDENTIALS",
+            project_env="GOOGLE_CLOUD_PROJECT",
+            base_url="https://aiplatform.googleapis.com",
+            model="gemini-3.7-flash",
+            location="global",
+            allowed_hosts=(
+                "aiplatform.googleapis.com",
+                "oauth2.googleapis.com",
+            ),
+        )
+        summary = config.public_summary(
+            {
+                "GOOGLE_APPLICATION_CREDENTIALS": r"D:\KEY\GOOGLE_VERTEX.json",
+                "GOOGLE_CLOUD_PROJECT": "private-project",
+            }
+        )
+        self.assertEqual(
+            summary["required_environment"],
+            ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"],
+        )
+        self.assertNotIn("private-project", str(summary))
+        self.assertNotIn("GOOGLE_VERTEX.json", str(summary))
+
 
 if __name__ == "__main__":
     unittest.main()

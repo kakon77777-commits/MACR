@@ -54,6 +54,7 @@ def _string_array(data: Mapping[str, Any], key: str) -> tuple[str, ...]:
 
 class AuthMode(str, Enum):
     API_KEY = "api_key"
+    SERVICE_ACCOUNT = "service_account"
     SUBSCRIPTION_CLIENT = "subscription_client"
     PENDING = "pending"
     NONE = "none"
@@ -74,10 +75,13 @@ class ProviderConfig:
     api_usage_allowed: bool
     connection_scope: ConnectionScope = ConnectionScope.DISABLED
     api_key_env: str | None = None
+    credential_path_env: str | None = None
+    project_env: str | None = None
     base_url: str | None = None
     base_url_env: str | None = None
     model: str | None = None
     model_env: str | None = None
+    location: str | None = None
     endpoint_path: str = "/chat/completions"
     allowed_hosts: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
@@ -112,7 +116,13 @@ class ProviderConfig:
                 f"provider {self.id} enabled provider cannot use disabled scope"
             )
 
-        for env_name in (self.api_key_env, self.base_url_env, self.model_env):
+        for env_name in (
+            self.api_key_env,
+            self.credential_path_env,
+            self.project_env,
+            self.base_url_env,
+            self.model_env,
+        ):
             if env_name and not _ENV_NAME.fullmatch(env_name):
                 raise ConfigurationError(
                     f"provider {self.id} environment variable name is invalid: {env_name}"
@@ -169,6 +179,15 @@ class ProviderConfig:
             missing: list[str] = []
             if self.auth_mode is AuthMode.API_KEY and not self.api_key_env:
                 missing.append("api_key_env")
+            if self.auth_mode is AuthMode.SERVICE_ACCOUNT:
+                if not self.credential_path_env:
+                    missing.append("credential_path_env")
+                if not self.project_env:
+                    missing.append("project_env")
+                if self.api_key_env:
+                    raise ConfigurationError(
+                        f"provider {self.id} service-account auth may not use api_key_env"
+                    )
             if not self.base_url and not self.base_url_env:
                 missing.append("base_url or base_url_env")
             if not self.model and not self.model_env:
@@ -191,10 +210,13 @@ class ProviderConfig:
                     str(data.get("connection_scope", ConnectionScope.DISABLED.value))
                 ),
                 api_key_env=_optional_string(data, "api_key_env"),
+                credential_path_env=_optional_string(data, "credential_path_env"),
+                project_env=_optional_string(data, "project_env"),
                 base_url=_optional_string(data, "base_url"),
                 base_url_env=_optional_string(data, "base_url_env"),
                 model=_optional_string(data, "model"),
                 model_env=_optional_string(data, "model_env"),
+                location=_optional_string(data, "location"),
                 endpoint_path=str(data.get("endpoint_path", "/chat/completions")),
                 allowed_hosts=_string_array(data, "allowed_hosts"),
                 capabilities=_string_array(data, "capabilities"),
@@ -211,7 +233,13 @@ class ProviderConfig:
     def required_environment(self) -> tuple[str, ...]:
         return tuple(
             value
-            for value in (self.api_key_env, self.base_url_env, self.model_env)
+            for value in (
+                self.api_key_env,
+                self.credential_path_env,
+                self.project_env,
+                self.base_url_env,
+                self.model_env,
+            )
             if value
         )
 
@@ -263,6 +291,7 @@ class ProviderConfig:
             "connection_scope": self.connection_scope.value,
             "base_url": self.base_url,
             "model": self.model,
+            "location": self.location,
             "reasoning_effort": self.reasoning_effort,
             "allowed_hosts": list(self.allowed_hosts),
             "capabilities": list(self.capabilities),
