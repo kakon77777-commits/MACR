@@ -1765,9 +1765,9 @@ Expected: missing examples/docs/metrics and old 0.2.0 version failures.
 
 Extend `_LEDGER_METRIC_KEYS` and completion payload with the six Google metric keys, sourcing values only from `provider_meta.metrics`. Do not add artifact paths or content.
 
-Create `examples/google-gemini-task.example.json` with exact goal `Return exactly: MACR_GOOGLE_GEMINI_OK`, `internet=true`, public privacy, positive task budget, output 64, and capability `text_generation`.
+Create `examples/google-gemini-task.example.json` with exact goal `Return exactly: MACR_GOOGLE_GEMINI_OK`, `internet=true`, public privacy, positive task budget, output 256, and capability `text_generation`.
 
-Create `examples/google-image-task.example.json` with a neutral public 1K image goal, `internet=true`, public privacy, task budget `1.0`, output 64, and capability `image_generation`.
+Create `examples/google-image-task.example.json` with a neutral public 1K image goal, `internet=true`, public privacy, task budget `1.0`, output 2048, and capability `image_generation`.
 
 Add only names to `.env.example`:
 
@@ -1945,7 +1945,7 @@ task = {
     "constraints": {
         "max_cost_usd": 1.0,
         "max_latency_s": 180,
-        "max_output_tokens": 64,
+        "max_output_tokens": 256,
         "internet": True,
         "privacy": "public",
     },

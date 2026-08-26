@@ -280,10 +280,16 @@ class GoogleSdkTransport:
                 "Google response must contain exactly one candidate"
             )
         candidate = candidates[0]
+        finish = getattr(candidate, "finish_reason", None)
+        if finish is not None:
+            finish = getattr(finish, "name", str(finish))
         content = getattr(candidate, "content", None)
         parts = getattr(content, "parts", None)
         if not isinstance(parts, list) or not parts:
-            raise ProviderProtocolError("Google response candidate has no parts")
+            raise ProviderProtocolError(
+                "Google response candidate has no parts; "
+                f"finish_reason={finish or 'unknown'}"
+            )
         text_parts: list[str] = []
         images: list[GoogleImagePayload] = []
         for part in parts:
@@ -325,9 +331,6 @@ class GoogleSdkTransport:
             raise ProviderProtocolError("Google text response contained no text")
         if not text_parts and not images:
             raise ProviderProtocolError("Google response contained no output")
-        finish = getattr(candidate, "finish_reason", None)
-        if finish is not None:
-            finish = getattr(finish, "name", str(finish))
         return GoogleNormalizedResponse(
             model=model,
             response_id=response_id,

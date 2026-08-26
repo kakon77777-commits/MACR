@@ -64,10 +64,11 @@ def sdk_response(
     parts=None,
     candidates_count=1,
     prompt_tokens=10,
+    finish_reason="STOP",
 ):
     candidate = SimpleNamespace(
         content=SimpleNamespace(parts=list(parts or ())),
-        finish_reason="STOP",
+        finish_reason=finish_reason,
     )
     return SimpleNamespace(
         model_version=model,
@@ -192,6 +193,13 @@ class GoogleCoreTests(unittest.TestCase):
         document = sdk_response(parts=[sdk_part(text="candidate")], prompt_tokens=True)
         transport, _ = transport_for(document)
         with self.assertRaisesRegex(ProviderProtocolError, "prompt_token_count"):
+            transport.generate(text_request(), timeout_s=30)
+
+    def test_empty_max_tokens_response_reports_safe_finish_reason(self):
+        transport, _ = transport_for(
+            sdk_response(parts=[], finish_reason="MAX_TOKENS")
+        )
+        with self.assertRaisesRegex(ProviderProtocolError, "MAX_TOKENS"):
             transport.generate(text_request(), timeout_s=30)
 
     def test_sdk_exception_text_is_sanitized(self):

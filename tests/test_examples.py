@@ -40,7 +40,7 @@ class ExampleContractTests(unittest.TestCase):
         self.assertTrue(task.constraints.internet)
         self.assertEqual(task.constraints.privacy, PrivacyLevel.PUBLIC)
         self.assertGreater(task.constraints.max_cost_usd, 0)
-        self.assertEqual(task.constraints.max_output_tokens, 64)
+        self.assertEqual(task.constraints.max_output_tokens, 256)
         self.assertEqual(task.required_capabilities, ("text_generation",))
         self.assertFalse(task.return_contract.summary)
         self.assertFalse(task.return_contract.evidence)
@@ -50,6 +50,7 @@ class ExampleContractTests(unittest.TestCase):
         self.assertTrue(task.constraints.internet)
         self.assertEqual(task.constraints.privacy, PrivacyLevel.PUBLIC)
         self.assertEqual(task.constraints.max_cost_usd, 1.0)
+        self.assertEqual(task.constraints.max_output_tokens, 2048)
         self.assertEqual(task.required_capabilities, ("image_generation",))
 
 
