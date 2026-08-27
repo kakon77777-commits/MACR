@@ -1,6 +1,7 @@
 """Migration-first Multi-AI Collaboration Runtime."""
 
 from .contracts import (
+    DelegationClass,
     PrivacyLevel,
     ProviderResult,
     ResultStatus,
@@ -13,6 +14,7 @@ from .runtime import MacrRuntime
 from .storage import StorageLayout
 
 __all__ = [
+    "DelegationClass",
     "MacrRuntime",
     "PrivacyLevel",
     "ProviderResult",

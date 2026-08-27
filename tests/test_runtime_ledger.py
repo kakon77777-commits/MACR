@@ -4,6 +4,7 @@ import unittest
 
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import (
+    DelegationClass,
     PrivacyLevel,
     ProviderResult,
     ResultStatus,
@@ -197,6 +198,8 @@ class RuntimeLedgerTests(unittest.TestCase):
                     goal="produce one candidate",
                     task_type="testing",
                     delegable=True,
+                    delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                    delegation_approval_sha256="b" * 64,
                     constraints=TaskConstraints(
                         max_cost_usd=0.01,
                         max_latency_s=5,
@@ -216,6 +219,14 @@ class RuntimeLedgerTests(unittest.TestCase):
             events[0]["event_id"],
         )
         self.assertTrue(events[0]["payload"]["delegable"])
+        self.assertEqual(
+            events[0]["payload"]["delegation_class"],
+            "non_sensitive_routine",
+        )
+        self.assertEqual(
+            events[0]["payload"]["delegation_approval_sha256"],
+            "b" * 64,
+        )
         self.assertNotEqual(events[0]["event_id"], events[1]["event_id"])
 
     def test_policy_failure_is_recorded_as_candidate_failure(self) -> None:

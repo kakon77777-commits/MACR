@@ -45,3 +45,5 @@ The approved credential operation is copy-only to `D:\KEY\GOOGLE_VERTEX.json` wi
 | Pricing basis | 2026-08-27 official Z.ai page; list price is enforcement basis and promotional price is informational |
 
 The pre-integration smoke test established account access only. It did not grant runtime authority or acceptance. No prompt body, response body, credential value, account identifier, or credential digest belongs in Git. MACR-routed live acceptance is recorded separately only after the complete offline v0.4 gate succeeds.
+
+The final delegated-worker gate requires `non_sensitive_routine` plus a SHA-256 approval manifest over the canonical outbound envelope, exact provider/endpoint/model, task type, privacy, maximum output, conservative USD ceiling, and pricing basis. The content-free preflight validates that digest before the supported wrapper resolves or reads a D: credential. This digest proves exact-byte approval integrity; semantic classification remains a trusted operator decision and is not inferred from model content.

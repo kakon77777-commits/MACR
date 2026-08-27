@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from macr_runtime.cli import _doctor, _invoke
+from macr_runtime.cli import _doctor, _glm_preflight, _invoke
+from macr_runtime.contracts import (
+    DelegationClass,
+    PrivacyLevel,
+    TaskConstraints,
+    TaskContract,
+)
+from macr_runtime.config import load_provider_configs
+from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from tests.support import d_drive_tempdir, write_fake_google_credential
 
 
@@ -102,6 +111,131 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(status, 3)
         self.assertIn("network_opt_in_required", output.getvalue())
         self.assertFalse(state_root.exists())
+
+    def test_glm_preflight_emits_digest_without_key_or_task_content(self) -> None:
+        with d_drive_tempdir() as temp:
+            task = TaskContract(
+                task_id="glm-preflight-digest",
+                goal="PUBLIC PREFLIGHT BODY",
+                task_type="delegated_routine",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.01,
+                    max_latency_s=30,
+                    max_output_tokens=256,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(
+                json.dumps(task.to_dict()),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            without_key = {
+                key: value for key, value in os.environ.items() if key != "ZAI_API_KEY"
+            }
+            with patch.dict(os.environ, without_key, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_preflight(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        show_required_digest=True,
+                    )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(document["status"], "approval_required")
+        self.assertEqual(len(document["required_approval_sha256"]), 64)
+        self.assertNotIn("PUBLIC PREFLIGHT BODY", output.getvalue())
+
+    def test_glm_preflight_rejects_stale_digest_without_key(self) -> None:
+        with d_drive_tempdir() as temp:
+            task = TaskContract(
+                task_id="glm-preflight-stale",
+                goal="PUBLIC STALE BODY",
+                task_type="delegated_routine",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                delegation_approval_sha256="0" * 64,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.01,
+                    max_latency_s=30,
+                    max_output_tokens=256,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(
+                json.dumps(task.to_dict()),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = _glm_preflight(
+                    str(task_path),
+                    str(ROOT / "config" / "providers.json"),
+                    show_required_digest=False,
+                )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 4)
+        self.assertEqual(document["status"], "approval_invalid")
+        self.assertNotIn("PUBLIC STALE BODY", output.getvalue())
+
+    def test_glm_approved_preflight_output_remains_content_free(self) -> None:
+        with d_drive_tempdir() as temp:
+            task = TaskContract(
+                task_id="glm-preflight-approved",
+                goal="PUBLIC APPROVED BODY",
+                task_type="delegated_routine",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.01,
+                    max_latency_s=30,
+                    max_output_tokens=256,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            config = next(
+                item
+                for item in load_provider_configs(ROOT / "config" / "providers.json")
+                if item.id == "glm_flash_worker"
+            )
+            digest = GlmFlashWorkerProvider(config, environ={}).approval_metadata(task)[
+                "required_approval_sha256"
+            ]
+            task = TaskContract.from_dict(
+                {
+                    **task.to_dict(),
+                    "delegation_approval_sha256": digest,
+                }
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                status = _glm_preflight(
+                    str(task_path),
+                    str(ROOT / "config" / "providers.json"),
+                    show_required_digest=False,
+                )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(document["status"], "approved")
+        self.assertEqual(document["required_approval_sha256"], digest)
+        self.assertNotIn("system_text", document)
+        self.assertNotIn("user_text", document)
+        self.assertNotIn("PUBLIC APPROVED BODY", output.getvalue())
 
 
 if __name__ == "__main__":

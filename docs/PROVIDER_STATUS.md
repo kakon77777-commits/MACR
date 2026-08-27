@@ -61,12 +61,13 @@ Veo, TTS, and Lyria remain disabled until separate artifact, duration, long-runn
 Dispatch requires all of:
 
 - `delegable=true` on the task contract;
+- exact `non_sensitive_routine` classification plus a current SHA-256 approval manifest over outbound bytes, route/model, privacy, limits, and budget;
 - `public` or explicitly `internal_approved` privacy;
 - `internet=true`, positive latency and cost budgets, and `text_generation` capability only;
 - empty `workspace.write_scope`, no requested patch authority, and independent verification;
 - empty inputs or bounded text-only inputs with non-path labels.
 
-The outbound envelope excludes the local workspace path and currency budget. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower promotional estimate is informational only.
+The outbound envelope excludes local task/workspace identity and currency budget. Credential-free preflight validates policy and approval before the wrapper resolves the D: key. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only.
 
 ## Claude boundary
 

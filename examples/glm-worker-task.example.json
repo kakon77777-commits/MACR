@@ -3,6 +3,8 @@
   "goal": "Return exactly: MACR_GLM_OK",
   "task_type": "provider_conformance",
   "delegable": true,
+  "delegation_class": "non_sensitive_routine",
+  "delegation_approval_sha256": "c94e6740874cfb7a84f035e6800ced76603c55c0492011c431e37b4d88be55e3",
   "workspace": {
     "repo": "current",
     "write_scope": []

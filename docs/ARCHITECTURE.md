@@ -68,9 +68,11 @@ The adapter performs an exact `/api/tags` model check before `/api/chat`. It sen
 ## GLM delegated-worker boundary
 
 - `glm_flash_worker` is fixed to direct `https://api.z.ai/api/paas/v4`, exact `glm-5.3-flash`, max reasoning, non-streaming output, and one transport attempt.
-- The task must explicitly set `delegable=true`. Existing tasks default to false and therefore cannot reach GLM accidentally.
+- The task must explicitly set `delegable=true` and `delegation_class=non_sensitive_routine`. Existing tasks default to closed values and therefore cannot reach GLM accidentally. Frontier-restricted and private-resident classes are never eligible.
+- A SHA-256 approval manifest binds the canonical outbound envelope to exact provider ID, endpoint, model, task type, privacy class, maximum output, conservative USD ceiling, and pricing basis. Any covered mutation invalidates approval before credential resolution.
 - Only `public` or explicitly `internal_approved` tasks qualify. Local-only data, local-or-approved-cloud data, write scopes, patch authority, missing verification, non-text inputs, and insufficient conservative budget fail before credential resolution or transport.
-- The adapter sends a reduced envelope containing the goal, classification metadata, verification/return contract, capability list, and validated text inputs. It omits workspace paths and the task currency budget.
+- The adapter sends a reduced envelope containing the goal, delegation decision, verification/return contract, exact text capability, and validated text inputs. It omits local task/workspace identity and the task currency budget. Obvious path/credential markers are denied as defense in depth, not treated as semantic proof of safety.
+- `glm-preflight` validates policy and digest without reading a credential and emits only content-free metadata. The D: wrapper requires this preflight before resolving the canonical key root or loading the key.
 - No tools, web search, file reads, filesystem writes, retries, provider fallback, verifier decision, acceptance event, resident identity, or private-residence access is available.
 - List pricing is the enforcement basis. Current promotional pricing is recorded separately as non-authoritative estimated metadata.
 
@@ -96,7 +98,7 @@ pricing_basis_version
 
 Missing metrics remain null. Task inputs, prompts, answers, warnings, thinking, credentials, local source paths, artifact paths/content, and error bodies are excluded.
 
-Dispatch metadata also records the boolean `delegable` decision so an auditor can distinguish explicitly outsourced tasks without seeing their content.
+Dispatch metadata also records `delegable`, `delegation_class`, and the exact-envelope approval digest so an auditor can distinguish explicitly approved outsourced tasks without seeing their content.
 
 ## Speaker identity boundary
 

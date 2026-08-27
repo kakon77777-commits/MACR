@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
 from typing import Any, Mapping
 
 from ..config import AuthMode, ConnectionScope, ProviderConfig
-from ..contracts import PrivacyLevel, ProviderResult, ResultStatus, TaskContract
+from ..contracts import (
+    DelegationClass,
+    PrivacyLevel,
+    ProviderResult,
+    ResultStatus,
+    TaskContract,
+)
 from ..errors import (
     ConfigurationError,
     ProviderPolicyError,
@@ -20,14 +28,21 @@ from .http_json import JsonTransport, UrllibJsonTransport
 
 _LIST_INPUT_USD_PER_M = 0.15
 _LIST_OUTPUT_USD_PER_M = 0.50
-_CURRENT_INPUT_USD_PER_M = 0.075
-_CURRENT_OUTPUT_USD_PER_M = 0.25
+_PROMOTIONAL_INPUT_USD_PER_M = 0.075
+_PROMOTIONAL_OUTPUT_USD_PER_M = 0.25
+_PROMOTIONAL_PRICE_OBSERVED_ON = "2026-08-27"
 _PRICING_BASIS_VERSION = "zai-2026-08-27"
 _MAX_TEXT_INPUT_BYTES = 1_000_000
 _FIXED_BASE_URL = "https://api.z.ai/api/paas/v4"
 _FIXED_ENDPOINT_PATH = "/chat/completions"
 _FIXED_MODEL = "glm-5.3-flash"
 _ZAI_KEY_SHAPE = re.compile(r"^[^.\s]+\.[^.\s]+$")
+_ALLOWED_TASK_TYPES = frozenset({"delegated_routine", "provider_conformance"})
+_OBVIOUS_SENSITIVE_MARKER = re.compile(
+    r"(?i)(?:[a-z]:[\\/]|\\\\[^\\\s]+[\\/]|"
+    r"-----BEGIN (?:RSA )?PRIVATE KEY-----|"
+    r"(?:api[_-]?key|access[_-]?token|private[_-]?key)\s*[:=])"
+)
 
 
 def _non_negative_int(name: str, value: Any) -> int:
@@ -46,6 +61,15 @@ def _estimated_cost(
     return (
         prompt_tokens * input_rate + completion_tokens * output_rate
     ) / 1_000_000
+
+
+def _canonical_json(value: Mapping[str, Any]) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _validated_text_inputs(task: TaskContract) -> list[dict[str, str]]:
@@ -101,7 +125,8 @@ class GlmFlashWorkerProvider(BaseProvider):
                 "GlmFlashWorkerProvider requires kind=zai_glm_worker"
             )
         if (
-            config.base_url != _FIXED_BASE_URL
+            config.id != "glm_flash_worker"
+            or config.base_url != _FIXED_BASE_URL
             or config.base_url_env is not None
             or config.endpoint_path != _FIXED_ENDPOINT_PATH
             or config.model != _FIXED_MODEL
@@ -145,6 +170,13 @@ class GlmFlashWorkerProvider(BaseProvider):
     def health(self) -> ProviderHealth:
         if not self.config.enabled:
             return ProviderHealth(self.provider_id, False, "disabled")
+        if not self.config.api_usage_allowed:
+            return ProviderHealth(
+                self.provider_id,
+                False,
+                "policy_denied",
+                "API use is forbidden",
+            )
         try:
             self.config.resolve_base_url(self.environ)
             self.config.resolve_model(self.environ)
@@ -174,6 +206,14 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM dispatch requires explicit delegable=true"
             )
+        if task.delegation_class is not DelegationClass.NON_SENSITIVE_ROUTINE:
+            raise ProviderPolicyError(
+                "GLM dispatch requires non_sensitive_routine delegation class"
+            )
+        if task.task_type not in _ALLOWED_TASK_TYPES:
+            raise ProviderPolicyError(
+                "GLM dispatch requires an approved routine task type"
+            )
         if not task.constraints.internet:
             raise ProviderPolicyError("GLM task contract must permit internet access")
         if task.constraints.privacy.value not in self.config.approved_privacy:
@@ -197,10 +237,18 @@ class GlmFlashWorkerProvider(BaseProvider):
             )
 
     def _delegation_envelope(self, task: TaskContract) -> dict[str, Any]:
+        inputs = _validated_text_inputs(task)
+        if _OBVIOUS_SENSITIVE_MARKER.search(task.goal) or any(
+            _OBVIOUS_SENSITIVE_MARKER.search(item["content"])
+            for item in inputs
+        ):
+            raise ProviderPolicyError(
+                "GLM delegation contains an obvious sensitive marker"
+            )
         return {
             "goal": task.goal,
             "delegable": task.delegable,
-            "inputs": _validated_text_inputs(task),
+            "inputs": inputs,
             "required_capabilities": list(task.required_capabilities),
             "verification": task.verification.to_dict(),
             "return_contract": task.return_contract.to_dict(),
@@ -212,7 +260,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         task: TaskContract,
         system_text: str,
         user_text: str,
-    ) -> None:
+    ) -> float:
         prompt_token_ceiling = (
             len(system_text.encode("utf-8"))
             + len(user_text.encode("utf-8"))
@@ -228,17 +276,81 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM task budget is below the conservative ceiling"
             )
+        return cost_ceiling
 
-    def invoke(self, task: TaskContract) -> ProviderResult:
+    def _prepare(self, task: TaskContract) -> dict[str, Any]:
         self._check_task_policy(task)
         envelope = self._delegation_envelope(task)
         system_text = bounded_worker_instruction(task.goal)
-        user_text = json.dumps(
-            envelope,
-            ensure_ascii=False,
-            sort_keys=True,
+        user_text = _canonical_json(envelope)
+        cost_ceiling = self._check_conservative_budget(
+            task,
+            system_text,
+            user_text,
         )
-        self._check_conservative_budget(task, system_text, user_text)
+        endpoint = f"{_FIXED_BASE_URL}{_FIXED_ENDPOINT_PATH}"
+        approval_manifest = {
+            "approval_schema": 1,
+            "provider_id": "glm_flash_worker",
+            "endpoint": endpoint,
+            "model": _FIXED_MODEL,
+            "pricing_basis_version": _PRICING_BASIS_VERSION,
+            "delegation_class": task.delegation_class.value,
+            "task_type": task.task_type,
+            "privacy": task.constraints.privacy.value,
+            "max_cost_usd": task.constraints.max_cost_usd,
+            "max_output_tokens": task.constraints.max_output_tokens,
+            "envelope": envelope,
+        }
+        approval_sha256 = hashlib.sha256(
+            _canonical_json(approval_manifest).encode("utf-8")
+        ).hexdigest()
+        return {
+            "system_text": system_text,
+            "user_text": user_text,
+            "approval_sha256": approval_sha256,
+            "envelope_bytes": len(user_text.encode("utf-8")),
+            "cost_ceiling": cost_ceiling,
+            "endpoint": endpoint,
+        }
+
+    def _safe_approval_metadata(
+        self,
+        task: TaskContract,
+        prepared: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "provider_id": self.provider_id,
+            "model": _FIXED_MODEL,
+            "endpoint": prepared["endpoint"],
+            "delegation_class": task.delegation_class.value,
+            "required_approval_sha256": prepared["approval_sha256"],
+            "envelope_bytes": prepared["envelope_bytes"],
+            "conservative_cost_ceiling_usd": prepared["cost_ceiling"],
+            "pricing_basis_version": _PRICING_BASIS_VERSION,
+        }
+
+    def approval_metadata(self, task: TaskContract) -> dict[str, Any]:
+        prepared = self._prepare(task)
+        return self._safe_approval_metadata(task, prepared)
+
+    def _validate_approval_prepared(self, task: TaskContract) -> dict[str, Any]:
+        prepared = self._prepare(task)
+        supplied = task.delegation_approval_sha256 or ""
+        if not hmac.compare_digest(supplied, prepared["approval_sha256"]):
+            raise ProviderPolicyError(
+                "GLM delegation approval digest is missing or stale"
+            )
+        return prepared
+
+    def validate_approval(self, task: TaskContract) -> dict[str, Any]:
+        prepared = self._validate_approval_prepared(task)
+        return self._safe_approval_metadata(task, prepared)
+
+    def invoke(self, task: TaskContract) -> ProviderResult:
+        prepared = self._validate_approval_prepared(task)
+        system_text = prepared["system_text"]
+        user_text = prepared["user_text"]
         api_key = self._api_key()
         base_url = self.config.resolve_base_url(self.environ)
         model = self.config.resolve_model(self.environ)
@@ -268,6 +380,10 @@ class GlmFlashWorkerProvider(BaseProvider):
             payload=payload,
             timeout_s=timeout_s,
         )
+        if document.get("web_search") not in (None, {}, []):
+            raise ProviderProtocolError(
+                "GLM response unexpectedly contained web search metadata"
+            )
         returned_model = document.get("model")
         if returned_model != model:
             raise ProviderProtocolError(
@@ -324,18 +440,29 @@ class GlmFlashWorkerProvider(BaseProvider):
             input_rate=_LIST_INPUT_USD_PER_M,
             output_rate=_LIST_OUTPUT_USD_PER_M,
         )
-        current_cost = _estimated_cost(
+        promotional_cost = _estimated_cost(
             prompt_tokens,
             completion_tokens,
-            input_rate=_CURRENT_INPUT_USD_PER_M,
-            output_rate=_CURRENT_OUTPUT_USD_PER_M,
+            input_rate=_PROMOTIONAL_INPUT_USD_PER_M,
+            output_rate=_PROMOTIONAL_OUTPUT_USD_PER_M,
         )
+        over_budget = list_cost > task.constraints.max_cost_usd
         response_id = document.get("id")
         if response_id is not None and not isinstance(response_id, str):
             raise ProviderProtocolError("GLM response id must be a string")
+        warnings = [
+            "Unverified GLM output; acceptance is separate.",
+            "Cost uses conservative list pricing; the dated promotional estimate may be lower.",
+        ]
+        if over_budget:
+            warnings.append("Estimated conservative provider cost exceeded max_cost_usd.")
         return ProviderResult(
             task_id=task.task_id,
-            status=ResultStatus.CANDIDATE_SUCCESS,
+            status=(
+                ResultStatus.CANDIDATE_FAILURE
+                if over_budget
+                else ResultStatus.CANDIDATE_SUCCESS
+            ),
             answer=message["content"],
             cost={
                 "usage": {
@@ -346,14 +473,12 @@ class GlmFlashWorkerProvider(BaseProvider):
                     "reasoning_tokens": reasoning_tokens,
                 },
                 "currency_cost_usd": list_cost,
-                "current_price_estimated_usd": current_cost,
+                "promotional_price_estimated_usd": promotional_cost,
+                "promotional_price_observed_on": _PROMOTIONAL_PRICE_OBSERVED_ON,
                 "cost_kind": "estimated",
                 "pricing_basis_version": _PRICING_BASIS_VERSION,
             },
-            warnings=(
-                "Unverified GLM output; acceptance is separate.",
-                "Cost uses conservative list pricing; current promotional pricing may be lower.",
-            ),
+            warnings=tuple(warnings),
             provider_meta={
                 "provider": self.provider_id,
                 "model": returned_model,

@@ -36,6 +36,8 @@ class MacrRuntime:
                 "task_id": task.task_id,
                 "task_type": task.task_type,
                 "delegable": task.delegable,
+                "delegation_class": task.delegation_class.value,
+                "delegation_approval_sha256": task.delegation_approval_sha256,
                 "privacy": task.constraints.privacy.value,
             },
         )

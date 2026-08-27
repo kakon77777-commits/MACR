@@ -8,8 +8,10 @@ from typing import Sequence
 
 from .config import ConnectionScope, load_provider_configs
 from .contracts import ResultStatus, TaskContract
+from .errors import MacrError
 from .ledger import AppendOnlyLedger
 from .registry import ProviderRegistry
+from .providers.glm import GlmFlashWorkerProvider
 from .runtime import MacrRuntime
 from .storage import StorageLayout
 
@@ -53,6 +55,62 @@ def _validate_task(path: str) -> int:
     task = TaskContract.from_dict(document)
     print(json.dumps(task.to_dict(), ensure_ascii=False, indent=2))
     return 0
+
+
+def _glm_preflight(
+    task_path: str,
+    config_path: str | None,
+    *,
+    show_required_digest: bool,
+) -> int:
+    layout = StorageLayout.from_environment()
+    path = Path(config_path) if config_path else _default_config(layout)
+    try:
+        config = next(
+            item
+            for item in load_provider_configs(path)
+            if item.id == "glm_flash_worker"
+        )
+        task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
+        task = TaskContract.from_dict(task_document)
+        provider = GlmFlashWorkerProvider(config, environ={})
+        metadata = (
+            provider.approval_metadata(task)
+            if show_required_digest
+            else provider.validate_approval(task)
+        )
+    except StopIteration:
+        failure_type = "ConfigurationError"
+    except (OSError, json.JSONDecodeError, ValueError, MacrError) as exc:
+        failure_type = type(exc).__name__
+    else:
+        print(
+            json.dumps(
+                {
+                    "status": (
+                        "approval_required"
+                        if show_required_digest
+                        else "approved"
+                    ),
+                    **metadata,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    print(
+        json.dumps(
+            {
+                "status": "approval_invalid",
+                "failure_type": failure_type,
+                "detail": "GLM task approval preflight failed; task content omitted.",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 4
 
 
 def _print_opt_in_error(status: str, flag: str) -> int:
@@ -123,6 +181,18 @@ def build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate-task", help="validate and normalize a TaskContract JSON file")
     validate.add_argument("path")
 
+    glm_preflight = sub.add_parser(
+        "glm-preflight",
+        help="validate GLM delegation policy and exact-envelope approval without loading a key",
+    )
+    glm_preflight.add_argument("task_path")
+    glm_preflight.add_argument("--config", help="provider configuration JSON path")
+    glm_preflight.add_argument(
+        "--show-required-digest",
+        action="store_true",
+        help="print the required exact-envelope approval digest instead of requiring it",
+    )
+
     invoke = sub.add_parser(
         "invoke",
         help="invoke one configured provider and append candidate metadata to the D-drive ledger",
@@ -151,6 +221,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _init_state()
     if args.command == "validate-task":
         return _validate_task(args.path)
+    if args.command == "glm-preflight":
+        return _glm_preflight(
+            args.task_path,
+            args.config,
+            show_required_digest=args.show_required_digest,
+        )
     if args.command == "invoke":
         return _invoke(
             args.provider_id,

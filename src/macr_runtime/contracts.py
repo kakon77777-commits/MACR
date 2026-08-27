@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _non_empty(name: str, value: str) -> str:
@@ -57,6 +58,13 @@ class PrivacyLevel(str, Enum):
     INTERNAL_APPROVED = "internal_approved"
     LOCAL_OR_APPROVED_CLOUD = "local_or_approved_cloud"
     LOCAL_ONLY = "local_only"
+
+
+class DelegationClass(str, Enum):
+    NONE = "none"
+    NON_SENSITIVE_ROUTINE = "non_sensitive_routine"
+    FRONTIER_RESTRICTED = "frontier_restricted"
+    PRIVATE_RESIDENT = "private_resident"
 
 
 class ResultStatus(str, Enum):
@@ -206,6 +214,8 @@ class TaskContract:
     verification: VerificationSpec = field(default_factory=VerificationSpec)
     return_contract: ReturnContract = field(default_factory=ReturnContract)
     delegable: bool = False
+    delegation_class: DelegationClass = DelegationClass.NONE
+    delegation_approval_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str) or not _TASK_ID.fullmatch(self.task_id):
@@ -213,6 +223,21 @@ class TaskContract:
         object.__setattr__(self, "goal", _non_empty("goal", self.goal))
         object.__setattr__(self, "task_type", _non_empty("task_type", self.task_type))
         _boolean("delegable", self.delegable)
+        if not isinstance(self.delegation_class, DelegationClass):
+            raise ValueError("delegation_class must be a DelegationClass")
+        if self.delegation_approval_sha256 is not None:
+            if (
+                not isinstance(self.delegation_approval_sha256, str)
+                or not _SHA256.fullmatch(self.delegation_approval_sha256.lower())
+            ):
+                raise ValueError(
+                    "delegation_approval_sha256 must be a SHA-256 hex digest"
+                )
+            object.__setattr__(
+                self,
+                "delegation_approval_sha256",
+                self.delegation_approval_sha256.lower(),
+            )
         if not isinstance(self.workspace, WorkspaceSpec):
             raise ValueError("workspace must be a WorkspaceSpec")
         if not isinstance(self.constraints, TaskConstraints):
@@ -242,6 +267,10 @@ class TaskContract:
             goal=data["goal"],
             task_type=data["task_type"],
             delegable=_boolean("delegable", data.get("delegable", False)),
+            delegation_class=DelegationClass(
+                str(data.get("delegation_class", DelegationClass.NONE.value))
+            ),
+            delegation_approval_sha256=data.get("delegation_approval_sha256"),
             workspace=WorkspaceSpec.from_dict(_mapping("workspace", data.get("workspace", {}))),
             inputs=tuple(dict(item) for item in inputs),
             constraints=TaskConstraints.from_dict(
@@ -262,6 +291,8 @@ class TaskContract:
             "goal": self.goal,
             "task_type": self.task_type,
             "delegable": self.delegable,
+            "delegation_class": self.delegation_class.value,
+            "delegation_approval_sha256": self.delegation_approval_sha256,
             "workspace": self.workspace.to_dict(),
             "inputs": [dict(item) for item in self.inputs],
             "constraints": self.constraints.to_dict(),

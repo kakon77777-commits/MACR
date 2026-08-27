@@ -79,10 +79,15 @@ Google Gemini 3.1 Flash Image:
 Restricted GLM Flash worker, loading its key from D: for this process only:
 
 ```powershell
+# Review the exact task, then obtain the digest that binds its outbound bytes,
+# fixed route/model, privacy class, output limit, and USD ceiling.
+.\scripts\macr.ps1 glm-preflight .\examples\glm-worker-task.example.json --show-required-digest
+
+# A trusted operator/host places that digest in delegation_approval_sha256.
 .\scripts\invoke-glm.ps1 -TaskPath .\examples\glm-worker-task.example.json
 ```
 
-`glm_flash_worker` requires `delegable=true`, public or explicitly approved internal privacy, an empty `write_scope`, independent verification, no patch authority, and a positive conservative-list-price budget. It accepts only bounded text inputs with non-path labels. The outbound envelope omits the local workspace path and task-level currency budget.
+`glm_flash_worker` requires `delegable=true`, `delegation_class=non_sensitive_routine`, and an exact `delegation_approval_sha256`. The approval manifest covers the canonical outbound envelope, fixed provider/endpoint/model, task type, privacy, maximum output, pricing basis, and USD ceiling; changing any covered value invalidates approval before key resolution. Public or explicitly approved internal privacy, an empty `write_scope`, independent verification, no patch authority, and a positive conservative-list-price budget are also mandatory. It accepts only bounded text inputs with non-path labels, rejects obvious local-path/credential markers, and omits the local task/workspace identity and currency budget from the outbound envelope. Semantic classification still belongs to the trusted operator.
 
 Generated images are preserved at:
 
@@ -99,7 +104,7 @@ Only validated JPEG/PNG bytes become artifacts. Paths, prompts, answers, source 
 - Grok requests send `store: false`, no tools, and no previous response ID. This is not proof of account-level Zero Data Retention.
 - Ollama is restricted to `http://127.0.0.1:11434`; Ollama Cloud URLs and API keys are rejected.
 - Google credentials are loaded from a named D: file through `GOOGLE_APPLICATION_CREDENTIALS`; the project is read from `GOOGLE_CLOUD_PROJECT`. Google SDK retries are fixed to one total attempt, and tools/grounding are disabled.
-- GLM is fixed to the direct Z.ai API and exact `glm-5.3-flash`. The D: wrapper injects `ZAI_API_KEY` only into its child process. No tools, retries, fallback, filesystem access, patch authority, verification authority, or acceptance authority are granted.
+- GLM is fixed to the direct Z.ai API and exact `glm-5.3-flash`. The D: wrapper completes a content-free, credential-free approval preflight before resolving a key beneath its canonical key root, then injects `ZAI_API_KEY` only into its child process. No tools, retries, fallback, filesystem access, patch authority, verification authority, or acceptance authority are granted.
 - The ledger records bounded model/usage/cost/duration/media-count metadata, never task prompts, candidate answers, thinking, authorization headers, source paths, artifact content, or remote error bodies.
 - Google currency values are estimates derived from a dated pricing basis. Cloud Billing is authoritative. Promotional credits do not guarantee free model use and are not embedded into provider policy.
 - `MODEL != RESIDENT`. Provider profile names are service identifiers, not speaker names or resident identities. Without a task-local HOST-OBSERVED binding, speaker identity remains `unresolved`.

@@ -1,6 +1,7 @@
 import unittest
 
 from macr_runtime.contracts import (
+    DelegationClass,
     PrivacyLevel,
     ReturnContract,
     TaskConstraints,
@@ -103,6 +104,47 @@ class TaskContractTests(unittest.TestCase):
 
         self.assertEqual(task.workspace, workspace)
         self.assertFalse(task.delegable)
+
+    def test_delegation_class_and_approval_digest_default_closed_and_round_trip(self) -> None:
+        digest = "a" * 64
+        default_task = TaskContract(
+            task_id="delegation-defaults",
+            goal="remain closed",
+            task_type="testing",
+        )
+        approved_task = TaskContract.from_dict(
+            {
+                "task_id": "delegation-approved",
+                "goal": "approved routine bytes",
+                "task_type": "delegated_routine",
+                "delegable": True,
+                "delegation_class": "non_sensitive_routine",
+                "delegation_approval_sha256": digest,
+            }
+        )
+
+        self.assertEqual(default_task.delegation_class, DelegationClass.NONE)
+        self.assertIsNone(default_task.delegation_approval_sha256)
+        self.assertEqual(
+            approved_task.delegation_class,
+            DelegationClass.NON_SENSITIVE_ROUTINE,
+        )
+        self.assertEqual(approved_task.delegation_approval_sha256, digest)
+        self.assertEqual(
+            TaskContract.from_dict(approved_task.to_dict()),
+            approved_task,
+        )
+
+    def test_invalid_delegation_approval_digest_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "delegation_approval_sha256"):
+            TaskContract.from_dict(
+                {
+                    "task_id": "delegation-invalid-digest",
+                    "goal": "reject malformed approval",
+                    "task_type": "delegated_routine",
+                    "delegation_approval_sha256": "not-a-sha256",
+                }
+            )
 
     def test_rejects_string_return_flag(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be boolean"):

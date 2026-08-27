@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import unittest
 from dataclasses import replace
@@ -7,6 +8,7 @@ from typing import Any, Mapping
 
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import (
+    DelegationClass,
     PrivacyLevel,
     ReturnContract,
     ResultStatus,
@@ -66,12 +68,45 @@ def glm_config() -> ProviderConfig:
     )
 
 
+def _approval_digest(task: TaskContract) -> str:
+    envelope = {
+        "goal": task.goal,
+        "delegable": task.delegable,
+        "inputs": [dict(item) for item in task.inputs],
+        "required_capabilities": list(task.required_capabilities),
+        "verification": task.verification.to_dict(),
+        "return_contract": task.return_contract.to_dict(),
+        "max_output_tokens": task.constraints.max_output_tokens,
+    }
+    manifest = {
+        "approval_schema": 1,
+        "provider_id": "glm_flash_worker",
+        "endpoint": "https://api.z.ai/api/paas/v4/chat/completions",
+        "model": "glm-5.3-flash",
+        "pricing_basis_version": "zai-2026-08-27",
+        "delegation_class": "non_sensitive_routine",
+        "task_type": task.task_type,
+        "privacy": task.constraints.privacy.value,
+        "max_cost_usd": task.constraints.max_cost_usd,
+        "max_output_tokens": task.constraints.max_output_tokens,
+        "envelope": envelope,
+    }
+    encoded = json.dumps(
+        manifest,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def delegated_task(*, max_cost_usd: float = 0.01) -> TaskContract:
-    return TaskContract(
+    task = TaskContract(
         task_id="glm-worker-test",
         goal="Classify the supplied public labels.",
         task_type="delegated_routine",
         delegable=True,
+        delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
         inputs=(
             {
                 "type": "text",
@@ -88,6 +123,7 @@ def delegated_task(*, max_cost_usd: float = 0.01) -> TaskContract:
         ),
         required_capabilities=("text_generation",),
     )
+    return replace(task, delegation_approval_sha256=_approval_digest(task))
 
 
 def success_document() -> dict[str, Any]:
@@ -157,7 +193,9 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         self.assertEqual(result.status, ResultStatus.CANDIDATE_SUCCESS)
         self.assertEqual(result.answer, "candidate classification")
         self.assertEqual(result.cost["currency_cost_usd"], 0.000008)
-        self.assertEqual(result.cost["current_price_estimated_usd"], 0.000004)
+        self.assertEqual(result.cost["promotional_price_estimated_usd"], 0.000004)
+        self.assertEqual(result.cost["promotional_price_observed_on"], "2026-08-27")
+        self.assertNotIn("current_price_estimated_usd", result.cost)
         self.assertEqual(result.provider_meta["metrics"]["reasoning_tokens"], 6)
         self.assertNotIn("test-secret", str(result.to_dict()))
 
@@ -283,6 +321,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
     def test_mutated_model_route_or_reasoning_is_rejected_at_construction(self):
         cases = (
+            replace(glm_config(), id="renamed_worker"),
             replace(glm_config(), model="glm-other"),
             replace(glm_config(), base_url="https://api.z.ai/api/coding/paas/v4"),
             replace(glm_config(), endpoint_path="/other"),
@@ -420,6 +459,119 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             provider.invoke(task)
 
         self.assertEqual(transport.posts, [])
+
+    def test_health_reports_api_policy_denial_without_transport(self):
+        transport = FakeTransport(success_document())
+        provider = GlmFlashWorkerProvider(
+            replace(glm_config(), api_usage_allowed=False),
+            transport=transport,
+            environ={"ZAI_API_KEY": "test-id.test-secret"},
+        )
+
+        health = provider.health()
+
+        self.assertFalse(health.ready)
+        self.assertEqual(health.status, "policy_denied")
+        self.assertEqual(transport.posts, [])
+
+    def test_non_routine_task_type_is_rejected_before_transport(self):
+        transport = FakeTransport(success_document())
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={"ZAI_API_KEY": "test-id.test-secret"},
+        )
+
+        with self.assertRaisesRegex(ProviderPolicyError, "routine task type"):
+            provider.invoke(replace(delegated_task(), task_type="frontier_research"))
+
+        self.assertEqual(transport.posts, [])
+
+    def test_obvious_local_path_marker_is_rejected_before_credential_or_transport(self):
+        transport = FakeTransport(success_document())
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={},
+        )
+        task = replace(
+            delegated_task(),
+            goal=r"Summarize D:\private-research\theory.txt",
+        )
+
+        with self.assertRaisesRegex(ProviderPolicyError, "sensitive marker"):
+            provider.invoke(task)
+
+        self.assertEqual(transport.posts, [])
+
+    def test_nonempty_web_search_metadata_is_rejected_without_retry(self):
+        document = success_document()
+        document["web_search"] = {"queries": ["unexpected"]}
+        transport = FakeTransport(document)
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={"ZAI_API_KEY": "test-id.test-secret"},
+        )
+
+        with self.assertRaisesRegex(ProviderProtocolError, "web search"):
+            provider.invoke(delegated_task())
+
+        self.assertEqual(len(transport.posts), 1)
+
+    def test_postflight_over_budget_is_retained_as_failed_candidate(self):
+        document = success_document()
+        document["usage"]["prompt_tokens"] = 100_000
+        document["usage"]["total_tokens"] = 100_010
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(document),
+            environ={"ZAI_API_KEY": "test-id.test-secret"},
+        )
+
+        result = provider.invoke(delegated_task(max_cost_usd=0.01))
+
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertGreater(result.cost["currency_cost_usd"], 0.01)
+        self.assertTrue(any("exceeded" in warning for warning in result.warnings))
+
+    def test_exact_approval_digest_is_required_before_credential_resolution(self):
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+        )
+        task = replace(delegated_task(), delegation_approval_sha256=None)
+
+        with self.assertRaisesRegex(ProviderPolicyError, "approval digest"):
+            provider.invoke(task)
+
+    def test_content_change_invalidates_existing_approval_before_credential_resolution(self):
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+        )
+        task = replace(delegated_task(), goal="Changed after approval")
+
+        with self.assertRaisesRegex(ProviderPolicyError, "approval digest"):
+            provider.invoke(task)
+
+    def test_approval_metadata_matches_independent_manifest_digest_without_key(self):
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+        )
+        task = replace(delegated_task(), delegation_approval_sha256=None)
+
+        metadata = provider.approval_metadata(task)
+
+        self.assertEqual(metadata["required_approval_sha256"], _approval_digest(task))
+        self.assertEqual(metadata["provider_id"], "glm_flash_worker")
+        self.assertEqual(metadata["model"], "glm-5.3-flash")
+        self.assertGreater(metadata["envelope_bytes"], 0)
+        self.assertGreater(metadata["conservative_cost_ceiling_usd"], 0)
 
 
 if __name__ == "__main__":

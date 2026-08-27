@@ -2,7 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
-from macr_runtime.contracts import PrivacyLevel, TaskContract
+from macr_runtime.contracts import DelegationClass, PrivacyLevel, TaskContract
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +58,11 @@ class ExampleContractTests(unittest.TestCase):
 
         self.assertEqual(task.goal, "Return exactly: MACR_GLM_OK")
         self.assertTrue(task.delegable)
+        self.assertEqual(
+            task.delegation_class,
+            DelegationClass.NON_SENSITIVE_ROUTINE,
+        )
+        self.assertEqual(len(task.delegation_approval_sha256 or ""), 64)
         self.assertTrue(task.constraints.internet)
         self.assertEqual(task.constraints.privacy, PrivacyLevel.PUBLIC)
         self.assertEqual(task.constraints.max_cost_usd, 0.01)
