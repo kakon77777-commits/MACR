@@ -95,7 +95,7 @@ def _glm_preflight(
                     "status": (
                         "approval_required"
                         if show_required_digest
-                        else "approved"
+                        else "preflight_approved"
                     ),
                     **metadata,
                 },
@@ -123,6 +123,8 @@ def _glm_approve(
     config_path: str | None,
     *,
     expires_in_days: int,
+    key_source: Any | None = None,
+    replace_existing: bool = False,
 ) -> int:
     layout = StorageLayout.from_environment()
     path = Path(config_path) if config_path else _default_config(layout)
@@ -134,14 +136,24 @@ def _glm_approve(
         )
         task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
         task = TaskContract.from_dict(task_document)
-        provider = GlmFlashWorkerProvider(config, environ=os.environ)
+        provider = GlmFlashWorkerProvider(
+            config,
+            environ=os.environ,
+            key_source=key_source,
+        )
         metadata = provider.approval_metadata(task)
         if task.delegation_approval_sha256 != metadata["required_approval_sha256"]:
             raise ValueError("task digest is missing or stale")
-        record = provider.approval_store.create(
-            metadata["required_approval_sha256"],
-            expires_in_days=expires_in_days,
-        )
+        signing_key = provider.key_source.load()
+        try:
+            record = provider.approval_store.create(
+                metadata["required_approval_sha256"],
+                signing_key=signing_key,
+                expires_in_days=expires_in_days,
+                replace_existing=replace_existing,
+            )
+        finally:
+            signing_key = None
     except StopIteration:
         failure_type = "ConfigurationError"
     except (OSError, json.JSONDecodeError, ValueError, MacrError) as exc:
@@ -268,6 +280,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=30,
         help="approval lifetime from 1 to 365 days",
     )
+    glm_approve.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="archive and replace an existing approval record for this digest",
+    )
 
     invoke = sub.add_parser(
         "invoke",
@@ -308,6 +325,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.task_path,
             args.config,
             expires_in_days=args.expires_in_days,
+            replace_existing=args.replace_existing,
         )
     if args.command == "invoke":
         return _invoke(

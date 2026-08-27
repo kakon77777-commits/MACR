@@ -62,7 +62,7 @@ class GlmFixedKeySource:
             hasattr(os.path, "isjunction") and os.path.isjunction(path)
         )
 
-    def load(self) -> str:
+    def _validated_path(self) -> Path:
         try:
             absolute_root = self.canonical_root.absolute()
             absolute_key = self.key_path.absolute()
@@ -93,9 +93,21 @@ class GlmFixedKeySource:
             size = resolved_key.stat().st_size
             if size <= 0 or size > 16384:
                 raise ProviderUnavailableError("GLM key file size is invalid")
-            value = resolved_key.read_text(encoding="utf-8").strip()
+            return resolved_key
         except ProviderUnavailableError:
             raise
+        except OSError as exc:
+            raise ProviderUnavailableError(
+                "GLM fixed key file is unavailable"
+            ) from exc
+
+    def check_metadata(self) -> None:
+        self._validated_path()
+
+    def load(self) -> str:
+        path = self._validated_path()
+        try:
+            value = path.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError) as exc:
             raise ProviderUnavailableError(
                 "GLM fixed key file is unavailable"
@@ -245,7 +257,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         try:
             self.config.resolve_base_url(self.environ)
             self.config.resolve_model(self.environ)
-            self._api_key()
+            self.key_source.check_metadata()
         except (ConfigurationError, ProviderUnavailableError) as exc:
             return ProviderHealth(
                 self.provider_id,
@@ -420,7 +432,7 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM delegation approval digest is missing or stale"
             )
-        self.approval_store.verify(prepared["approval_sha256"])
+        self.approval_store.inspect(prepared["approval_sha256"])
         return prepared
 
     def validate_approval(self, task: TaskContract) -> dict[str, Any]:
@@ -430,6 +442,10 @@ class GlmFlashWorkerProvider(BaseProvider):
     def invoke(self, task: TaskContract) -> ProviderResult:
         prepared = self._validate_approval_prepared(task)
         api_key = self._api_key()
+        self.approval_store.verify(
+            prepared["approval_sha256"],
+            signing_key=api_key,
+        )
         model = _FIXED_MODEL
         payload = prepared["request_payload"]
         timeout_s = max(0.001, min(task.constraints.max_latency_s, 300.0))

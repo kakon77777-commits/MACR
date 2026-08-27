@@ -52,14 +52,24 @@ class FakeTransport:
 
 
 class DenyingApprovalStore:
-    def verify(self, approval_sha256):
+    def inspect(self, approval_sha256):
         del approval_sha256
         raise ProviderPolicyError("GLM host approval record is missing")
 
 
 class AllowingApprovalStore:
-    def verify(self, approval_sha256):
+    def inspect(self, approval_sha256):
         return {"approval_sha256": approval_sha256, "approved_by": "host_operator"}
+
+    def verify(self, approval_sha256, *, signing_key):
+        del signing_key
+        return {"approval_sha256": approval_sha256, "approved_by": "host_operator"}
+
+
+class RejectingMacApprovalStore(AllowingApprovalStore):
+    def verify(self, approval_sha256, *, signing_key):
+        del approval_sha256, signing_key
+        raise ProviderPolicyError("GLM host approval record MAC is invalid")
 
 
 class StaticKeySource:
@@ -68,6 +78,9 @@ class StaticKeySource:
 
     def load(self):
         return self.value
+
+    def check_metadata(self):
+        return None
 
 
 def GlmFlashWorkerProvider(*args, **kwargs):
@@ -83,6 +96,28 @@ class ExplodingKeySource:
     def load(self):
         self.calls += 1
         raise AssertionError("key source must remain untouched")
+
+
+class CountingKeySource:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def load(self):
+        self.calls += 1
+        return "test-id." + "test-secret"
+
+
+class MetadataOnlyKeySource:
+    def __init__(self) -> None:
+        self.metadata_calls = 0
+        self.load_calls = 0
+
+    def check_metadata(self):
+        self.metadata_calls += 1
+
+    def load(self):
+        self.load_calls += 1
+        raise AssertionError("health must not read key content")
 
 
 def glm_config() -> ProviderConfig:
@@ -230,6 +265,23 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             provider.invoke(delegated_task())
 
         self.assertEqual(key_source.calls, 0)
+
+    def test_invalid_approval_mac_fails_after_local_key_read_but_before_transport(self):
+        key_source = CountingKeySource()
+        transport = FakeTransport(success_document())
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={},
+            key_source=key_source,
+            approval_store=RejectingMacApprovalStore(),
+        )
+
+        with self.assertRaisesRegex(ProviderPolicyError, "MAC"):
+            provider.invoke(delegated_task())
+
+        self.assertEqual(key_source.calls, 1)
+        self.assertEqual(transport.posts, [])
 
     def test_fixed_key_source_accepts_only_files_beneath_canonical_root(self):
         with d_drive_tempdir() as root:
@@ -589,6 +641,22 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         self.assertFalse(health.ready)
         self.assertEqual(health.status, "policy_denied")
         self.assertEqual(transport.posts, [])
+
+    def test_health_checks_only_key_metadata_without_reading_content(self):
+        key_source = MetadataOnlyKeySource()
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=key_source,
+        )
+
+        health = provider.health()
+
+        self.assertTrue(health.ready)
+        self.assertEqual(health.status, "configured_offline")
+        self.assertEqual(key_source.metadata_calls, 1)
+        self.assertEqual(key_source.load_calls, 0)
 
     def test_non_routine_task_type_is_rejected_before_transport(self):
         transport = FakeTransport(success_document())

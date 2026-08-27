@@ -62,13 +62,13 @@ Dispatch requires all of:
 
 - `delegable=true` on the task contract;
 - exact `non_sensitive_routine` classification plus a current SHA-256 approval manifest over the full request, route/model, privacy, limits, and budget;
-- a separate unexpired host-approval record with fixed author role, nonce, creation time, and expiry;
+- a separate unexpired HMAC-authenticated host record with fixed author role, nonce, creation time, and expiry;
 - `public` or explicitly `internal_approved` privacy;
 - `internet=true`, positive latency and cost budgets, and `text_generation` capability only;
 - empty `workspace.write_scope`, no requested patch authority, and independent verification;
 - empty inputs or bounded text-only inputs with non-path labels.
 
-The outbound request excludes local task/workspace identity and currency budget. Credential-free preflight validates policy and approval without reading a key; provider invocation repeats validation before reading fixed `D:\KEY\GLM.txt`. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only.
+The outbound request excludes local task/workspace identity and currency budget. Credential-free preflight validates structure without reading a key; provider invocation repeats validation, reads fixed `D:\KEY\GLM.txt`, verifies the approval HMAC, and only then permits network transport. Health reads metadata only. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only.
 
 ## Claude boundary
 

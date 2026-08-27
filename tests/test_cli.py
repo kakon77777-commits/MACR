@@ -28,6 +28,9 @@ class StaticKeySource:
     def load(self):
         return "test-id." + "test-secret"
 
+    def check_metadata(self):
+        return None
+
 
 class DoctorTests(unittest.TestCase):
     def test_strict_ignores_intentionally_disabled_providers(self) -> None:
@@ -227,7 +230,11 @@ class DoctorTests(unittest.TestCase):
             )
             task_path = temp / "task.json"
             task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
-            GlmApprovalStore(temp).create(digest, expires_in_days=30)
+            GlmApprovalStore(temp).create(
+                digest,
+                signing_key="test-id." + "test-secret",
+                expires_in_days=30,
+            )
             output = io.StringIO()
             environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
             with patch.dict(os.environ, environment, clear=True):
@@ -240,7 +247,7 @@ class DoctorTests(unittest.TestCase):
 
         document = json.loads(output.getvalue())
         self.assertEqual(status, 0)
-        self.assertEqual(document["status"], "approved")
+        self.assertEqual(document["status"], "preflight_approved")
         self.assertEqual(document["required_approval_sha256"], digest)
         self.assertNotIn("system_text", document)
         self.assertNotIn("user_text", document)
@@ -292,6 +299,8 @@ class DoctorTests(unittest.TestCase):
                         str(task_path),
                         str(config_path),
                         expires_in_days=30,
+                        key_source=StaticKeySource(),
+                        replace_existing=True,
                     )
 
         document = json.loads(output.getvalue())

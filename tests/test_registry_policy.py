@@ -15,6 +15,9 @@ class StaticKeySource:
     def load(self):
         return "test-id." + "test-secret"
 
+    def check_metadata(self):
+        return None
+
 
 class RegistryPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
