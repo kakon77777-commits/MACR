@@ -25,6 +25,9 @@
   "return_contract": {
     "summary": false,
     "patch": false,
-    "evidence": false
+    "evidence": false,
+    "format": "exact_text",
+    "exact_text": "MACR_GLM_OK",
+    "language": null
   }
 }

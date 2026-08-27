@@ -24,7 +24,7 @@ from ..errors import (
 )
 from ..glm_approval import GlmApprovalStore
 from .base import BaseProvider, ProviderHealth
-from .common import bounded_worker_instruction
+from .common import compile_worker_instruction
 from .http_json import JsonTransport, UrllibJsonTransport
 
 
@@ -358,7 +358,7 @@ class GlmFlashWorkerProvider(BaseProvider):
     def _prepare(self, task: TaskContract) -> dict[str, Any]:
         self._check_task_policy(task)
         envelope = self._delegation_envelope(task)
-        system_text = bounded_worker_instruction(task.goal)
+        system_text = compile_worker_instruction(task)
         user_text = _canonical_json(envelope)
         cost_ceiling = self._check_conservative_budget(
             task,

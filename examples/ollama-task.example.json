@@ -27,6 +27,9 @@
   "return_contract": {
     "summary": false,
     "patch": false,
-    "evidence": false
+    "evidence": false,
+    "format": "exact_text",
+    "exact_text": "MACR_OLLAMA_OK",
+    "language": null
   }
 }

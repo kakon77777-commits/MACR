@@ -6,6 +6,8 @@ from typing import Any, Mapping
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import (
     PrivacyLevel,
+    ReturnContract,
+    ReturnFormat,
     ResultStatus,
     TaskConstraints,
     TaskContract,
@@ -123,7 +125,7 @@ class GrokProviderTests(unittest.TestCase):
         self.assertEqual(result.provider_meta["metrics"]["cached_tokens"], 5)
         self.assertNotIn("test-key", str(result.to_dict()))
 
-    def test_exact_goal_adds_no_extra_output_instruction(self):
+    def test_exact_return_contract_adds_no_extra_output_instruction(self):
         transport = FakeTransport(success_document("grok-4.6"))
         base = cloud_task()
         exact_task = TaskContract(
@@ -132,6 +134,13 @@ class GrokProviderTests(unittest.TestCase):
             task_type=base.task_type,
             constraints=base.constraints,
             required_capabilities=base.required_capabilities,
+            return_contract=ReturnContract(
+                summary=False,
+                patch=False,
+                evidence=False,
+                format=ReturnFormat.EXACT_TEXT,
+                exact_text="MACR_GROK_46_OK",
+            ),
         )
         GrokResponsesProvider(
             grok_config("grok", "grok-4.6", "high"),
@@ -139,7 +148,7 @@ class GrokProviderTests(unittest.TestCase):
             environ={"XAI_API_KEY": "test-key"},
         ).invoke(exact_task)
         self.assertIn(
-            "Return only the exact requested text",
+            "Return exactly the UTF-8 text",
             transport.posts[0]["payload"]["input"][0]["content"],
         )
 

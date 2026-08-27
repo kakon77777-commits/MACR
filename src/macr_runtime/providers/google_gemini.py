@@ -6,7 +6,7 @@ from typing import Mapping
 from ..config import ProviderConfig
 from ..contracts import ProviderResult, ResultStatus, TaskContract
 from ..errors import ProviderProtocolError
-from .common import bounded_worker_instruction
+from .common import compile_worker_instruction
 from .google_base import BaseGoogleProvider
 from .google_core import (
     PRICING_BASIS_VERSION,
@@ -41,7 +41,7 @@ class GoogleGeminiProvider(BaseGoogleProvider):
         response = self.transport.generate(
             GoogleGenerationRequest(
                 model=model,
-                system_instruction=bounded_worker_instruction(task.goal),
+                system_instruction=compile_worker_instruction(task),
                 goal=task.goal,
                 media=media,
                 max_output_tokens=task.constraints.max_output_tokens,

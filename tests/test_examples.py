@@ -2,7 +2,12 @@ import json
 import unittest
 from pathlib import Path
 
-from macr_runtime.contracts import DelegationClass, PrivacyLevel, TaskContract
+from macr_runtime.contracts import (
+    DelegationClass,
+    PrivacyLevel,
+    ReturnFormat,
+    TaskContract,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +19,16 @@ def load_example(name: str) -> TaskContract:
 
 
 class ExampleContractTests(unittest.TestCase):
+    def test_minimax_example_uses_structured_exact_text(self) -> None:
+        task = load_example("minimax-task.example.json")
+        self.assertEqual(task.return_contract.format, ReturnFormat.EXACT_TEXT)
+        self.assertEqual(
+            task.return_contract.exact_text,
+            "MACR MiniMax conformance candidate",
+        )
+        self.assertFalse(task.return_contract.summary)
+        self.assertFalse(task.return_contract.evidence)
+
     def test_grok_example_is_public_bounded_cloud_task(self) -> None:
         task = load_example("grok-task.example.json")
         self.assertEqual(task.goal, "Return exactly: MACR_GROK_46_OK")
@@ -23,6 +38,8 @@ class ExampleContractTests(unittest.TestCase):
         self.assertEqual(task.constraints.max_output_tokens, 64)
         self.assertFalse(task.return_contract.summary)
         self.assertFalse(task.return_contract.evidence)
+        self.assertEqual(task.return_contract.format, ReturnFormat.EXACT_TEXT)
+        self.assertEqual(task.return_contract.exact_text, "MACR_GROK_46_OK")
 
     def test_ollama_example_is_zero_cost_local_only_task(self) -> None:
         task = load_example("ollama-task.example.json")
@@ -33,6 +50,8 @@ class ExampleContractTests(unittest.TestCase):
         self.assertEqual(task.constraints.max_output_tokens, 64)
         self.assertFalse(task.return_contract.summary)
         self.assertFalse(task.return_contract.evidence)
+        self.assertEqual(task.return_contract.format, ReturnFormat.EXACT_TEXT)
+        self.assertEqual(task.return_contract.exact_text, "MACR_OLLAMA_OK")
 
     def test_google_gemini_example_is_public_bounded_cloud_task(self) -> None:
         task = load_example("google-gemini-task.example.json")
@@ -44,6 +63,11 @@ class ExampleContractTests(unittest.TestCase):
         self.assertEqual(task.required_capabilities, ("text_generation",))
         self.assertFalse(task.return_contract.summary)
         self.assertFalse(task.return_contract.evidence)
+        self.assertEqual(task.return_contract.format, ReturnFormat.EXACT_TEXT)
+        self.assertEqual(
+            task.return_contract.exact_text,
+            "MACR_GOOGLE_GEMINI_OK",
+        )
 
     def test_google_image_example_requests_one_public_image(self) -> None:
         task = load_example("google-image-task.example.json")
@@ -72,6 +96,8 @@ class ExampleContractTests(unittest.TestCase):
         self.assertEqual(task.required_capabilities, ("text_generation",))
         self.assertTrue(task.verification.required)
         self.assertFalse(task.return_contract.patch)
+        self.assertEqual(task.return_contract.format, ReturnFormat.EXACT_TEXT)
+        self.assertEqual(task.return_contract.exact_text, "MACR_GLM_OK")
 
 
 if __name__ == "__main__":

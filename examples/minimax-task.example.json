@@ -24,8 +24,11 @@
     ]
   },
   "return_contract": {
-    "summary": true,
+    "summary": false,
     "patch": false,
-    "evidence": true
+    "evidence": false,
+    "format": "exact_text",
+    "exact_text": "MACR MiniMax conformance candidate",
+    "language": null
   }
 }

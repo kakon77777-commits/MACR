@@ -4,6 +4,7 @@ from macr_runtime.contracts import (
     DelegationClass,
     PrivacyLevel,
     ReturnContract,
+    ReturnFormat,
     TaskConstraints,
     TaskContract,
     VerificationSpec,
@@ -149,6 +150,34 @@ class TaskContractTests(unittest.TestCase):
     def test_rejects_string_return_flag(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be boolean"):
             ReturnContract.from_dict({"patch": "false"})
+
+    def test_structured_return_contract_round_trips(self) -> None:
+        contract = ReturnContract(
+            summary=False,
+            patch=False,
+            evidence=False,
+            format=ReturnFormat.PLAIN_SOURCE,
+            language="typescript",
+        )
+
+        self.assertEqual(
+            ReturnContract.from_dict(contract.to_dict()),
+            contract,
+        )
+
+    def test_return_format_fields_fail_closed(self) -> None:
+        invalid = (
+            {"format": "exact_text"},
+            {"format": "exact_text", "exact_text": "x"},
+            {"format": "free_text", "exact_text": "unexpected"},
+            {"format": "plain_source"},
+            {"format": "plain_source", "language": "typescript"},
+            {"format": "json_object", "language": "json"},
+        )
+        for document in invalid:
+            with self.subTest(document=document):
+                with self.assertRaises(ValueError):
+                    ReturnContract.from_dict(document)
 
     def test_rejects_string_where_array_is_required(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be an array"):

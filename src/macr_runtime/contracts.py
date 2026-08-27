@@ -72,6 +72,13 @@ class ResultStatus(str, Enum):
     CANDIDATE_FAILURE = "candidate_failure"
 
 
+class ReturnFormat(str, Enum):
+    FREE_TEXT = "free_text"
+    EXACT_TEXT = "exact_text"
+    PLAIN_SOURCE = "plain_source"
+    JSON_OBJECT = "json_object"
+
+
 @dataclass(frozen=True)
 class WorkspaceSpec:
     repo: str = "current"
@@ -183,11 +190,61 @@ class ReturnContract:
     summary: bool = True
     patch: bool = False
     evidence: bool = True
+    format: ReturnFormat = ReturnFormat.FREE_TEXT
+    exact_text: str | None = None
+    language: str | None = None
 
     def __post_init__(self) -> None:
         _boolean("return_contract.summary", self.summary)
         _boolean("return_contract.patch", self.patch)
         _boolean("return_contract.evidence", self.evidence)
+        if not isinstance(self.format, ReturnFormat):
+            raise ValueError("return_contract.format must be a ReturnFormat")
+        if self.exact_text is not None and (
+            not isinstance(self.exact_text, str)
+            or not self.exact_text
+            or len(self.exact_text.encode("utf-8")) > 65536
+        ):
+            raise ValueError(
+                "return_contract.exact_text must be bounded non-empty text"
+            )
+        if self.language is not None:
+            if (
+                not isinstance(self.language, str)
+                or not re.fullmatch(r"[A-Za-z0-9.+#_-]{1,64}", self.language)
+            ):
+                raise ValueError("return_contract.language is invalid")
+            object.__setattr__(self, "language", self.language.lower())
+        if self.format is ReturnFormat.EXACT_TEXT:
+            if self.exact_text is None:
+                raise ValueError(
+                    "return_contract exact_text format requires exact_text"
+                )
+            if self.language is not None:
+                raise ValueError(
+                    "return_contract exact_text format may not define language"
+                )
+            if self.summary or self.evidence or self.patch:
+                raise ValueError(
+                    "return_contract exact_text format forbids summary, evidence, and patch"
+                )
+        elif self.exact_text is not None:
+            raise ValueError(
+                "return_contract exact_text is allowed only for exact_text format"
+            )
+        if self.format is ReturnFormat.PLAIN_SOURCE:
+            if self.language is None:
+                raise ValueError(
+                    "return_contract plain_source format requires language"
+                )
+            if self.summary or self.evidence or self.patch:
+                raise ValueError(
+                    "return_contract plain_source format forbids summary, evidence, and patch"
+                )
+        elif self.language is not None:
+            raise ValueError(
+                "return_contract language is allowed only for plain_source format"
+            )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "ReturnContract":
@@ -196,10 +253,22 @@ class ReturnContract:
             summary=data.get("summary", True),
             patch=data.get("patch", False),
             evidence=data.get("evidence", True),
+            format=ReturnFormat(
+                str(data.get("format", ReturnFormat.FREE_TEXT.value))
+            ),
+            exact_text=data.get("exact_text"),
+            language=data.get("language"),
         )
 
-    def to_dict(self) -> dict[str, bool]:
-        return {"summary": self.summary, "patch": self.patch, "evidence": self.evidence}
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "summary": self.summary,
+            "patch": self.patch,
+            "evidence": self.evidence,
+            "format": self.format.value,
+            "exact_text": self.exact_text,
+            "language": self.language,
+        }
 
 
 @dataclass(frozen=True)

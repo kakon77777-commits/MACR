@@ -14,7 +14,7 @@ from ..errors import (
     ProviderUnavailableError,
 )
 from .base import BaseProvider, ProviderHealth
-from .common import bounded_worker_instruction
+from .common import compile_worker_instruction
 from .http_json import JsonTransport, UrllibJsonTransport
 
 
@@ -163,7 +163,7 @@ class OllamaChatProvider(BaseProvider):
             "messages": [
                 {
                     "role": "system",
-                    "content": bounded_worker_instruction(task.goal),
+                    "content": compile_worker_instruction(task),
                 },
                 {
                     "role": "user",
