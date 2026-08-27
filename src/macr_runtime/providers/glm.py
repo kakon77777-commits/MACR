@@ -191,19 +191,14 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError("GLM worker may not receive patch authority")
         if not task.verification.required:
             raise ProviderPolicyError("GLM output requires independent verification")
-        missing = sorted(
-            set(task.required_capabilities) - set(self.config.capabilities)
-        )
-        if missing:
+        if task.required_capabilities != ("text_generation",):
             raise ProviderPolicyError(
-                f"GLM worker lacks required capabilities: {', '.join(missing)}"
+                "GLM worker requires exactly text_generation capability"
             )
 
     def _delegation_envelope(self, task: TaskContract) -> dict[str, Any]:
         return {
-            "task_id": task.task_id,
             "goal": task.goal,
-            "task_type": task.task_type,
             "delegable": task.delegable,
             "inputs": _validated_text_inputs(task),
             "required_capabilities": list(task.required_capabilities),

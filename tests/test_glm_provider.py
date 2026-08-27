@@ -148,7 +148,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         self.assertNotIn("tool_choice", payload)
 
         envelope = json.loads(payload["messages"][1]["content"])
-        self.assertEqual(envelope["task_id"], "glm-worker-test")
+        self.assertEqual(envelope["goal"], "Classify the supplied public labels.")
         self.assertTrue(envelope["delegable"])
         self.assertEqual(envelope["inputs"][0]["content"], "alpha\nbeta")
         self.assertNotIn("workspace", envelope)
@@ -390,6 +390,34 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ProviderUnavailableError, "shape"):
             provider.invoke(delegated_task())
+
+        self.assertEqual(transport.posts, [])
+
+    def test_outbound_envelope_omits_local_task_identity(self):
+        transport = FakeTransport(success_document())
+        GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={"ZAI_API_KEY": "test-id.test-secret"},
+        ).invoke(delegated_task())
+
+        envelope = json.loads(
+            transport.posts[0]["payload"]["messages"][1]["content"]
+        )
+        self.assertNotIn("task_id", envelope)
+        self.assertNotIn("task_type", envelope)
+
+    def test_text_generation_capability_must_be_explicit_before_transport(self):
+        transport = FakeTransport(success_document())
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={"ZAI_API_KEY": "test-id.test-secret"},
+        )
+        task = replace(delegated_task(), required_capabilities=())
+
+        with self.assertRaisesRegex(ProviderPolicyError, "exactly text_generation"):
+            provider.invoke(task)
 
         self.assertEqual(transport.posts, [])
 
