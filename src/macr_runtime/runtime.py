@@ -4,6 +4,7 @@ from .contracts import ProviderResult, ResultStatus, TaskContract
 from .errors import MacrError
 from .ledger import AppendOnlyLedger
 from .registry import ProviderRegistry
+from .task_preflight import validate_task_consistency
 
 
 _LEDGER_METRIC_KEYS = (
@@ -29,6 +30,7 @@ class MacrRuntime:
         self.ledger = ledger
 
     def invoke(self, provider_id: str, task: TaskContract) -> ProviderResult:
+        validate_task_consistency(task)
         dispatch = self.ledger.append(
             "provider.dispatch_requested",
             {

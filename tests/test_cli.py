@@ -11,9 +11,12 @@ from unittest.mock import patch
 from macr_runtime.cli import _doctor, _glm_approve, _glm_preflight, _invoke
 from macr_runtime.contracts import (
     DelegationClass,
+    ImportMode,
     PrivacyLevel,
+    RequiredImport,
     TaskConstraints,
     TaskContract,
+    TaskPolicyClauses,
 )
 from macr_runtime.config import load_provider_configs
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
@@ -32,7 +35,53 @@ class StaticKeySource:
         return None
 
 
+class ExplodingKeySource:
+    def load(self):
+        raise AssertionError("contradiction must fail before key load")
+
+    def check_metadata(self):
+        raise AssertionError("contradiction must fail before key metadata")
+
+
 class DoctorTests(unittest.TestCase):
+    def test_glm_approve_rejects_contradiction_before_key_access(self) -> None:
+        with d_drive_tempdir() as temp:
+            task = TaskContract(
+                task_id="contradictory-glm-task",
+                goal="Use structured policy only.",
+                task_type="delegated_routine",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                delegation_approval_sha256="0" * 64,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.01,
+                    max_latency_s=30,
+                    max_output_tokens=256,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+                policy_clauses=TaskPolicyClauses(
+                    import_mode=ImportMode.NONE,
+                    required_imports=(
+                        RequiredImport("required-module", "type_only"),
+                    ),
+                ),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+
+            with contextlib.redirect_stdout(output):
+                status = _glm_approve(
+                    str(task_path),
+                    str(ROOT / "config" / "providers.json"),
+                    expires_in_days=1,
+                    key_source=ExplodingKeySource(),
+                )
+
+        self.assertEqual(status, 4)
+        self.assertIn("TaskContradictionError", output.getvalue())
     def test_strict_ignores_intentionally_disabled_providers(self) -> None:
         with d_drive_tempdir() as temp:
             credential = write_fake_google_credential(temp / "credential.json")

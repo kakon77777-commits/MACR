@@ -14,6 +14,7 @@ from .registry import ProviderRegistry
 from .providers.glm import GlmFlashWorkerProvider
 from .runtime import MacrRuntime
 from .storage import StorageLayout
+from .task_preflight import validate_task_consistency
 
 
 def _default_config(layout: StorageLayout) -> Path:
@@ -58,6 +59,7 @@ def _init_state() -> int:
 def _validate_task(path: str) -> int:
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     task = TaskContract.from_dict(document)
+    validate_task_consistency(task)
     print(json.dumps(task.to_dict(), ensure_ascii=False, indent=2))
     return 0
 
@@ -78,6 +80,7 @@ def _glm_preflight(
         )
         task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
         task = TaskContract.from_dict(task_document)
+        validate_task_consistency(task)
         provider = GlmFlashWorkerProvider(config, environ=os.environ)
         metadata = (
             provider.approval_metadata(task)
@@ -136,6 +139,7 @@ def _glm_approve(
         )
         task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
         task = TaskContract.from_dict(task_document)
+        validate_task_consistency(task)
         provider = GlmFlashWorkerProvider(
             config,
             environ=os.environ,

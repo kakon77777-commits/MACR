@@ -150,6 +150,7 @@ def _approval_digest(task: TaskContract) -> str:
         "required_capabilities": list(task.required_capabilities),
         "verification": task.verification.to_dict(),
         "return_contract": task.return_contract.to_dict(),
+        "policy_clauses": task.policy_clauses.to_dict(),
         "max_output_tokens": task.constraints.max_output_tokens,
     }
     user_text = json.dumps(
@@ -349,6 +350,10 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         self.assertEqual(envelope["goal"], "Classify the supplied public labels.")
         self.assertTrue(envelope["delegable"])
         self.assertEqual(envelope["inputs"][0]["content"], "alpha\nbeta")
+        self.assertEqual(
+            envelope["policy_clauses"],
+            delegated_task().policy_clauses.to_dict(),
+        )
         self.assertNotIn("workspace", envelope)
         self.assertNotIn("max_cost_usd", str(envelope))
 

@@ -4,7 +4,7 @@
   "task_type": "provider_conformance",
   "delegable": true,
   "delegation_class": "non_sensitive_routine",
-  "delegation_approval_sha256": "240cca0ff34342fe73d5e170a48dbada669866195a46e4be38372b1d892dbc7e",
+  "delegation_approval_sha256": "b352475a0fcfc8f63d7cb0a65844467742b7a7bd1480f6528ed91bddf11dbdc3",
   "workspace": {
     "repo": "current",
     "write_scope": []

@@ -79,6 +79,116 @@ class ReturnFormat(str, Enum):
     JSON_OBJECT = "json_object"
 
 
+class ImportMode(str, Enum):
+    UNSPECIFIED = "unspecified"
+    NONE = "none"
+    TYPE_ONLY = "type_only"
+    RUNTIME = "runtime"
+    ANY = "any"
+
+
+class EolScope(str, Enum):
+    UNSPECIFIED = "unspecified"
+    OUT_OF_SCOPE = "out_of_scope"
+    IN_SCOPE = "in_scope"
+
+
+class EolNormalization(str, Enum):
+    NONE = "none"
+    PRESERVE = "preserve"
+    LF = "lf"
+    CRLF = "crlf"
+
+
+@dataclass(frozen=True)
+class RequiredImport:
+    module: str
+    kind: str
+
+    def __post_init__(self) -> None:
+        module = _non_empty("required import module", self.module)
+        if len(module) > 256:
+            raise ValueError("required import module is too long")
+        if self.kind not in {ImportMode.TYPE_ONLY.value, ImportMode.RUNTIME.value}:
+            raise ValueError("required import kind must be type_only or runtime")
+        object.__setattr__(self, "module", module)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "RequiredImport":
+        data = _mapping("required import", data)
+        return cls(module=data["module"], kind=data["kind"])
+
+    def to_dict(self) -> dict[str, str]:
+        return {"module": self.module, "kind": self.kind}
+
+
+@dataclass(frozen=True)
+class TaskPolicyClauses:
+    import_mode: ImportMode = ImportMode.UNSPECIFIED
+    required_imports: tuple[RequiredImport, ...] = ()
+    eol_scope: EolScope = EolScope.UNSPECIFIED
+    eol_normalization: EolNormalization = EolNormalization.NONE
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.import_mode, ImportMode):
+            raise ValueError("policy_clauses.import_mode must be an ImportMode")
+        if not isinstance(self.eol_scope, EolScope):
+            raise ValueError("policy_clauses.eol_scope must be an EolScope")
+        if not isinstance(self.eol_normalization, EolNormalization):
+            raise ValueError(
+                "policy_clauses.eol_normalization must be an EolNormalization"
+            )
+        imports = tuple(self.required_imports)
+        if any(not isinstance(item, RequiredImport) for item in imports):
+            raise ValueError(
+                "policy_clauses.required_imports must contain RequiredImport"
+            )
+        if len({(item.module, item.kind) for item in imports}) != len(imports):
+            raise ValueError(
+                "policy_clauses.required_imports must not contain duplicates"
+            )
+        object.__setattr__(self, "required_imports", imports)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "TaskPolicyClauses":
+        data = _mapping("policy_clauses", data)
+        imports = _sequence(
+            "policy_clauses.required_imports",
+            data.get("required_imports", ()),
+        )
+        if any(not isinstance(item, Mapping) for item in imports):
+            raise ValueError(
+                "policy_clauses.required_imports entries must be objects"
+            )
+        return cls(
+            import_mode=ImportMode(
+                str(data.get("import_mode", ImportMode.UNSPECIFIED.value))
+            ),
+            required_imports=tuple(
+                RequiredImport.from_dict(item) for item in imports
+            ),
+            eol_scope=EolScope(
+                str(data.get("eol_scope", EolScope.UNSPECIFIED.value))
+            ),
+            eol_normalization=EolNormalization(
+                str(
+                    data.get(
+                        "eol_normalization",
+                        EolNormalization.NONE.value,
+                    )
+                )
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "import_mode": self.import_mode.value,
+            "required_imports": [item.to_dict() for item in self.required_imports],
+            "eol_scope": self.eol_scope.value,
+            "eol_normalization": self.eol_normalization.value,
+        }
+
+
 @dataclass(frozen=True)
 class WorkspaceSpec:
     repo: str = "current"
@@ -285,6 +395,7 @@ class TaskContract:
     delegable: bool = False
     delegation_class: DelegationClass = DelegationClass.NONE
     delegation_approval_sha256: str | None = None
+    policy_clauses: TaskPolicyClauses = field(default_factory=TaskPolicyClauses)
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str) or not _TASK_ID.fullmatch(self.task_id):
@@ -315,6 +426,8 @@ class TaskContract:
             raise ValueError("verification must be a VerificationSpec")
         if not isinstance(self.return_contract, ReturnContract):
             raise ValueError("return_contract must be a ReturnContract")
+        if not isinstance(self.policy_clauses, TaskPolicyClauses):
+            raise ValueError("policy_clauses must be TaskPolicyClauses")
         capabilities = tuple(_non_empty("required capability", item) for item in self.required_capabilities)
         if len(capabilities) != len(set(capabilities)):
             raise ValueError("required_capabilities must not contain duplicates")
@@ -352,6 +465,9 @@ class TaskContract:
             return_contract=ReturnContract.from_dict(
                 _mapping("return_contract", data.get("return_contract", {}))
             ),
+            policy_clauses=TaskPolicyClauses.from_dict(
+                _mapping("policy_clauses", data.get("policy_clauses", {}))
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -368,6 +484,7 @@ class TaskContract:
             "required_capabilities": list(self.required_capabilities),
             "verification": self.verification.to_dict(),
             "return_contract": self.return_contract.to_dict(),
+            "policy_clauses": self.policy_clauses.to_dict(),
         }
 
 

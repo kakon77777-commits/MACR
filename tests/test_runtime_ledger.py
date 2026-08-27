@@ -5,16 +5,20 @@ import unittest
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import (
     DelegationClass,
+    ImportMode,
     PrivacyLevel,
     ProviderResult,
     ResultStatus,
     TaskConstraints,
     TaskContract,
+    TaskPolicyClauses,
+    RequiredImport,
 )
 from macr_runtime.ledger import AppendOnlyLedger
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime
 from macr_runtime.providers.base import ProviderHealth
+from macr_runtime.errors import TaskContradictionError
 
 from tests.support import d_drive_tempdir
 from tests.test_minimax_provider import FakeTransport
@@ -100,6 +104,32 @@ class GoogleFixedResultProvider:
 
 
 class RuntimeLedgerTests(unittest.TestCase):
+    def test_contradiction_fails_before_provider_or_ledger(self) -> None:
+        provider = FixedResultProvider()
+        registry = ProviderRegistry((provider,))
+        with d_drive_tempdir() as temp:
+            ledger = AppendOnlyLedger(temp / "events.jsonl")
+            with self.assertRaisesRegex(
+                TaskContradictionError,
+                "imports_none_but_required",
+            ):
+                MacrRuntime(registry, ledger).invoke(
+                    "grok",
+                    TaskContract(
+                        task_id="ledger-contradiction",
+                        goal="Use structured clauses.",
+                        task_type="testing",
+                        policy_clauses=TaskPolicyClauses(
+                            import_mode=ImportMode.NONE,
+                            required_imports=(
+                                RequiredImport("required", "type_only"),
+                            ),
+                        ),
+                    ),
+                )
+
+            self.assertEqual(ledger.read_all(), ())
+
     def test_ledger_records_metrics_but_not_candidate_content(self) -> None:
         registry = ProviderRegistry((FixedResultProvider(),))
         with d_drive_tempdir() as temp:

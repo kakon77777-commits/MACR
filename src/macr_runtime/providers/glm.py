@@ -23,6 +23,7 @@ from ..errors import (
     ProviderUnavailableError,
 )
 from ..glm_approval import GlmApprovalStore
+from ..task_preflight import validate_task_consistency
 from .base import BaseProvider, ProviderHealth
 from .common import compile_worker_instruction
 from .http_json import JsonTransport, UrllibJsonTransport
@@ -329,6 +330,7 @@ class GlmFlashWorkerProvider(BaseProvider):
             "required_capabilities": list(task.required_capabilities),
             "verification": task.verification.to_dict(),
             "return_contract": task.return_contract.to_dict(),
+            "policy_clauses": task.policy_clauses.to_dict(),
             "max_output_tokens": task.constraints.max_output_tokens,
         }
 
@@ -356,6 +358,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         return cost_ceiling
 
     def _prepare(self, task: TaskContract) -> dict[str, Any]:
+        validate_task_consistency(task)
         self._check_task_policy(task)
         envelope = self._delegation_envelope(task)
         system_text = compile_worker_instruction(task)

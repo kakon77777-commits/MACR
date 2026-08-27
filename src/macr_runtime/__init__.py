@@ -2,13 +2,18 @@
 
 from .contracts import (
     DelegationClass,
+    EolNormalization,
+    EolScope,
+    ImportMode,
     PrivacyLevel,
     ProviderResult,
     ReturnContract,
     ReturnFormat,
+    RequiredImport,
     ResultStatus,
     TaskConstraints,
     TaskContract,
+    TaskPolicyClauses,
     VerificationSpec,
     WorkspaceSpec,
 )
@@ -32,6 +37,9 @@ from .execution import (
 
 __all__ = [
     "DelegationClass",
+    "EolNormalization",
+    "EolScope",
+    "ImportMode",
     "AcceptanceState",
     "AuthorizationReference",
     "CaptureState",
@@ -49,10 +57,12 @@ __all__ = [
     "ResultStatus",
     "ReturnContract",
     "ReturnFormat",
+    "RequiredImport",
     "ReturnContractState",
     "StorageLayout",
     "TaskConstraints",
     "TaskContract",
+    "TaskPolicyClauses",
     "VerificationSpec",
     "VerificationState",
     "WorkspaceSpec",
