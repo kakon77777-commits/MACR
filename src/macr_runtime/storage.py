@@ -78,6 +78,14 @@ class StorageLayout:
     def quarantine_root(self) -> Path:
         return Path(self.state_root) / "quarantine"
 
+    @property
+    def direct_root(self) -> Path:
+        return Path(self.state_root) / "direct"
+
+    @property
+    def settings_root(self) -> Path:
+        return Path(self.state_root) / "settings"
+
     def ensure_state_tree(self) -> tuple[Path, ...]:
         roots = tuple(
             Path(self.state_root) / name
@@ -90,6 +98,8 @@ class StorageLayout:
                 "accounting",
                 "candidates",
                 "quarantine",
+                "direct",
+                "settings",
             )
         )
         for path in roots:

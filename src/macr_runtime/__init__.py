@@ -17,7 +17,7 @@ from .contracts import (
     VerificationSpec,
     WorkspaceSpec,
 )
-from .runtime import MacrRuntime
+from .runtime import MacrRuntime, RuntimeServices
 from .storage import StorageLayout
 from .execution import (
     AcceptanceState,
@@ -59,6 +59,7 @@ __all__ = [
     "ReturnFormat",
     "RequiredImport",
     "ReturnContractState",
+    "RuntimeServices",
     "StorageLayout",
     "TaskConstraints",
     "TaskContract",

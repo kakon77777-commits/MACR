@@ -8,8 +8,31 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from macr_runtime.accounting import AccountingStore
+from macr_runtime.authority import DispatchAuthorityStore
+from macr_runtime.candidate_vault import CandidateVault
+from macr_runtime.dispatch import AdmissionGate, DispatcherLeaseStore
+from macr_runtime.event_store import SqliteEventStore
+from macr_runtime.runtime import RuntimeServices
+
 
 DEFAULT_TEST_ROOT = Path(r"D:\AI_RESIDENCE\AI_Runtime\macr-state\test-tmp")
+
+
+def build_test_services(state_root: Path) -> RuntimeServices:
+    runtime_database = state_root / "runtime" / "dispatch.sqlite3"
+    accounting_database = state_root / "accounting" / "accounting.sqlite3"
+    events = SqliteEventStore(runtime_database)
+    authorities = DispatchAuthorityStore(runtime_database)
+    leases = DispatcherLeaseStore(runtime_database)
+    return RuntimeServices(
+        events=events,
+        authorities=authorities,
+        leases=leases,
+        admission=AdmissionGate(authorities, leases),
+        accounting=AccountingStore(accounting_database),
+        vault=CandidateVault(state_root / "candidates", runtime_database),
+    )
 
 
 def write_fake_google_credential(path: Path) -> Path:

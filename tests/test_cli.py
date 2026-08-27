@@ -4,11 +4,19 @@ import contextlib
 import io
 import json
 import os
+import sqlite3
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from macr_runtime.cli import _doctor, _glm_approve, _glm_preflight, _invoke
+from macr_runtime.cli import (
+    _doctor,
+    _glm_approve,
+    _glm_preflight,
+    _invoke,
+    _migrate_ledger,
+)
 from macr_runtime.contracts import (
     DelegationClass,
     ImportMode,
@@ -25,6 +33,29 @@ from tests.support import d_drive_tempdir, write_fake_google_credential
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def write_legacy_events(path: Path, *, count: int) -> bytes:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw = "".join(
+        json.dumps(
+            {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "provider.candidate_completed",
+                "observed_at": f"2026-08-27T00:00:{index:02d}+00:00",
+                "payload": {
+                    "provider_id": "legacy",
+                    "task_id": f"legacy-{index}",
+                    "status": "candidate_success",
+                },
+            },
+            sort_keys=True,
+        )
+        + "\n"
+        for index in range(count)
+    ).encode("utf-8")
+    path.write_bytes(raw)
+    return raw
 
 
 class StaticKeySource:
@@ -44,6 +75,131 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_migrate_ledger_dry_run_writes_nothing(self) -> None:
+        with d_drive_tempdir() as state_root:
+            source = state_root / "ledger" / "events.jsonl"
+            before = write_legacy_events(source, count=2)
+            output = io.StringIO()
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+                "CODEX_HOME_TARGET": r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _migrate_ledger(dry_run=True, expected_count=2)
+
+            self.assertEqual(source.read_bytes(), before)
+            self.assertFalse((state_root / "runtime" / "dispatch.sqlite3").exists())
+            self.assertFalse((state_root / "quarantine").exists())
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(document["status"], "legacy_migration_dry_run_complete")
+        self.assertEqual(document["valid_count"], 2)
+
+    def test_migrate_ledger_exact_import_and_second_run_are_idempotent(self) -> None:
+        with d_drive_tempdir() as state_root:
+            source = state_root / "ledger" / "events.jsonl"
+            before = write_legacy_events(source, count=2)
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+                "CODEX_HOME_TARGET": r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
+            }
+            first_output = io.StringIO()
+            second_output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(first_output):
+                    first_status = _migrate_ledger(
+                        dry_run=False,
+                        expected_count=2,
+                    )
+                with contextlib.redirect_stdout(second_output):
+                    second_status = _migrate_ledger(
+                        dry_run=False,
+                        expected_count=2,
+                    )
+
+            connection = sqlite3.connect(state_root / "runtime" / "dispatch.sqlite3")
+            event_count = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            source_count = connection.execute(
+                "SELECT COUNT(*) FROM legacy_sources WHERE complete = 1"
+            ).fetchone()[0]
+            connection.close()
+            self.assertEqual(source.read_bytes(), before)
+
+        first = json.loads(first_output.getvalue())
+        second = json.loads(second_output.getvalue())
+        self.assertEqual(first_status, 0)
+        self.assertEqual(second_status, 0)
+        self.assertEqual(first["imported_count"], 2)
+        self.assertEqual(second["imported_count"], 0)
+        self.assertEqual(second["already_imported_count"], 2)
+        self.assertEqual(event_count, 2)
+        self.assertEqual(source_count, 1)
+
+    def test_migrate_ledger_corruption_is_quarantined_and_incomplete(self) -> None:
+        with d_drive_tempdir() as state_root:
+            source = state_root / "ledger" / "events.jsonl"
+            source.parent.mkdir(parents=True)
+            corrupt = b'{"event_id":"cut" trailing\n'
+            source.write_bytes(corrupt)
+            output = io.StringIO()
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+                "CODEX_HOME_TARGET": r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _migrate_ledger(dry_run=False, expected_count=1)
+
+            quarantine_files = tuple((state_root / "quarantine").rglob("*.bin"))
+            self.assertEqual(source.read_bytes(), corrupt)
+            self.assertEqual(quarantine_files[0].read_bytes(), corrupt.rstrip(b"\n"))
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 5)
+        self.assertEqual(document["status"], "legacy_migration_incomplete")
+        self.assertEqual(document["corrupt_count"], 1)
+
+    def test_invoke_refuses_unmigrated_legacy_before_task_or_authority(self) -> None:
+        with d_drive_tempdir() as state_root:
+            source = state_root / "ledger" / "events.jsonl"
+            write_legacy_events(source, count=1)
+            output = io.StringIO()
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+                "CODEX_HOME_TARGET": r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _invoke(
+                        "minimax",
+                        "this-file-must-not-be-read.json",
+                        str(ROOT / "config" / "providers.json"),
+                        allow_network=True,
+                        allow_local=False,
+                    )
+
+            connection = sqlite3.connect(state_root / "runtime" / "dispatch.sqlite3")
+            counts = {
+                table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("dispatch_authorities", "dispatch_leases", "events")
+            }
+            connection.close()
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 5)
+        self.assertEqual(document["status"], "legacy_migration_required")
+        self.assertEqual(counts, {"dispatch_authorities": 0, "dispatch_leases": 0, "events": 0})
+
     def test_glm_approve_rejects_contradiction_before_key_access(self) -> None:
         with d_drive_tempdir() as temp:
             task = TaskContract(

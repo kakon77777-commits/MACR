@@ -96,6 +96,12 @@ class ProviderRegistry:
         except KeyError as exc:
             raise ProviderUnavailableError(f"unknown provider: {provider_id}") from exc
 
+    def requested_model(self, provider_id: str) -> str | None:
+        provider = self.get(provider_id)
+        config = getattr(provider, "config", None)
+        model = getattr(config, "model", None)
+        return model if isinstance(model, str) and model.strip() else None
+
     def health(self) -> tuple[dict[str, object], ...]:
         return tuple(
             self._providers[key].health().to_dict() for key in sorted(self._providers)

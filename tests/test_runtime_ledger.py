@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import uuid
+from datetime import datetime, timedelta, timezone
 
+from macr_runtime.authority import AuthorityScope
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import (
     DelegationClass,
@@ -14,13 +17,13 @@ from macr_runtime.contracts import (
     TaskPolicyClauses,
     RequiredImport,
 )
-from macr_runtime.ledger import AppendOnlyLedger
+from macr_runtime.execution import DispatchContext, DispatchOrigin, InteractionPlane
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime
-from macr_runtime.providers.base import ProviderHealth
+from macr_runtime.providers.base import BaseProvider, ProviderHealth
 from macr_runtime.errors import TaskContradictionError
 
-from tests.support import d_drive_tempdir
+from tests.support import build_test_services, d_drive_tempdir
 from tests.test_minimax_provider import FakeTransport
 
 
@@ -30,7 +33,7 @@ class ExplodingTransport:
         raise RuntimeError("simulated transport implementation crash")
 
 
-class FixedResultProvider:
+class FixedResultProvider(BaseProvider):
     provider_id = "grok"
     connection_scope = ConnectionScope.EXTERNAL_HTTPS
 
@@ -58,7 +61,7 @@ class FixedResultProvider:
         )
 
 
-class GoogleFixedResultProvider:
+class GoogleFixedResultProvider(BaseProvider):
     provider_id = "google_image"
     connection_scope = ConnectionScope.EXTERNAL_HTTPS
 
@@ -103,39 +106,60 @@ class GoogleFixedResultProvider:
         )
 
 
+def invoke_authorized(registry, services, provider_id, task):
+    reference = services.authorities.issue(
+        source_kind="test",
+        source_id=f"{provider_id}:{task.task_id}:{uuid.uuid4()}",
+        scope=AuthorityScope(
+            providers=(provider_id,),
+            planes=(InteractionPlane.DELEGATION.value,),
+            task_types=(task.task_type,),
+        ),
+        expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+    )
+    context = DispatchContext(
+        run_id=str(uuid.uuid4()),
+        plane=InteractionPlane.DELEGATION,
+        origin=DispatchOrigin("test", "process_id", "1234"),
+        authorization=reference,
+        policy_snapshot_sha256="a" * 64,
+    )
+    result = MacrRuntime(registry, services).invoke(provider_id, task, context)
+    return result, context
+
+
 class RuntimeLedgerTests(unittest.TestCase):
     def test_contradiction_fails_before_provider_or_ledger(self) -> None:
         provider = FixedResultProvider()
         registry = ProviderRegistry((provider,))
         with d_drive_tempdir() as temp:
-            ledger = AppendOnlyLedger(temp / "events.jsonl")
+            services = build_test_services(temp)
+            task = TaskContract(
+                task_id="ledger-contradiction",
+                goal="Use structured clauses.",
+                task_type="testing",
+                policy_clauses=TaskPolicyClauses(
+                    import_mode=ImportMode.NONE,
+                    required_imports=(
+                        RequiredImport("required", "type_only"),
+                    ),
+                ),
+            )
             with self.assertRaisesRegex(
                 TaskContradictionError,
                 "imports_none_but_required",
             ):
-                MacrRuntime(registry, ledger).invoke(
-                    "grok",
-                    TaskContract(
-                        task_id="ledger-contradiction",
-                        goal="Use structured clauses.",
-                        task_type="testing",
-                        policy_clauses=TaskPolicyClauses(
-                            import_mode=ImportMode.NONE,
-                            required_imports=(
-                                RequiredImport("required", "type_only"),
-                            ),
-                        ),
-                    ),
-                )
+                invoke_authorized(registry, services, "grok", task)
 
-            self.assertEqual(ledger.read_all(), ())
+            self.assertEqual(services.events.read_events(), ())
 
     def test_ledger_records_metrics_but_not_candidate_content(self) -> None:
         registry = ProviderRegistry((FixedResultProvider(),))
         with d_drive_tempdir() as temp:
-            ledger = AppendOnlyLedger(temp / "events.jsonl")
-            runtime = MacrRuntime(registry, ledger)
-            runtime.invoke(
+            services = build_test_services(temp)
+            _, context = invoke_authorized(
+                registry,
+                services,
                 "grok",
                 TaskContract(
                     task_id="ledger-private-001",
@@ -143,10 +167,10 @@ class RuntimeLedgerTests(unittest.TestCase):
                     task_type="testing",
                 ),
             )
-            events = ledger.read_all()
-            serialized = ledger.path.read_text(encoding="utf-8")
-        self.assertNotIn("PRIVATE ANSWER", serialized)
-        self.assertNotIn("test-key", serialized)
+            events = services.events.read_events(run_id=context.run_id)
+            serialized = services.events.path.read_bytes()
+        self.assertNotIn(b"PRIVATE ANSWER", serialized)
+        self.assertNotIn(b"test-key", serialized)
         self.assertEqual(events[-1]["payload"]["model"], "grok-4.6")
         self.assertEqual(events[-1]["payload"]["input_tokens"], 20)
         self.assertEqual(
@@ -157,8 +181,10 @@ class RuntimeLedgerTests(unittest.TestCase):
     def test_google_ledger_records_allowlisted_metrics_without_content(self) -> None:
         registry = ProviderRegistry((GoogleFixedResultProvider(),))
         with d_drive_tempdir() as temp:
-            ledger = AppendOnlyLedger(temp / "events.jsonl")
-            MacrRuntime(registry, ledger).invoke(
+            services = build_test_services(temp)
+            _, context = invoke_authorized(
+                registry,
+                services,
                 "google_image",
                 TaskContract(
                     task_id="google-ledger-private",
@@ -174,14 +200,14 @@ class RuntimeLedgerTests(unittest.TestCase):
                     ),
                 ),
             )
-            events = ledger.read_all()
-            serialized = ledger.path.read_text(encoding="utf-8")
+            events = services.events.read_events(run_id=context.run_id)
+            serialized = services.events.path.read_bytes()
         for forbidden in (
-            "PRIVATE GOOGLE PROMPT",
-            "PRIVATE GOOGLE ANSWER",
-            "private-input.png",
-            "private-file.jpg",
-            "private_key",
+            b"PRIVATE GOOGLE PROMPT",
+            b"PRIVATE GOOGLE ANSWER",
+            b"private-input.png",
+            b"private-file.jpg",
+            b"private_key",
         ):
             self.assertNotIn(forbidden, serialized)
         payload = events[-1]["payload"]
@@ -219,9 +245,10 @@ class RuntimeLedgerTests(unittest.TestCase):
             transports={"minimax": transport},
         )
         with d_drive_tempdir() as temp:
-            ledger = AppendOnlyLedger(temp / "events.jsonl")
-            runtime = MacrRuntime(registry, ledger)
-            result = runtime.invoke(
+            services = build_test_services(temp)
+            result, context = invoke_authorized(
+                registry,
+                services,
                 "minimax",
                 TaskContract(
                     task_id="ledger-test-001",
@@ -238,7 +265,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                     ),
                 ),
             )
-            events = ledger.read_all()
+            events = services.events.read_events(run_id=context.run_id)
         self.assertEqual(result.status.value, "candidate_success")
         self.assertEqual(
             [event["event_type"] for event in events],
@@ -248,14 +275,14 @@ class RuntimeLedgerTests(unittest.TestCase):
             events[1]["payload"]["dispatch_event_id"],
             events[0]["event_id"],
         )
-        self.assertTrue(events[0]["payload"]["delegable"])
+        self.assertEqual(events[0]["payload"]["origin_host"], "test")
         self.assertEqual(
-            events[0]["payload"]["delegation_class"],
-            "non_sensitive_routine",
+            events[0]["payload"]["authority_digest"],
+            context.authorization.digest,
         )
         self.assertEqual(
-            events[0]["payload"]["delegation_approval_sha256"],
-            "b" * 64,
+            events[0]["payload"]["authority_revision"],
+            context.authorization.revision,
         )
         self.assertNotEqual(events[0]["event_id"], events[1]["event_id"])
 
@@ -270,8 +297,10 @@ class RuntimeLedgerTests(unittest.TestCase):
         )
         registry = ProviderRegistry.from_configs((config,), environ={})
         with d_drive_tempdir() as temp:
-            ledger = AppendOnlyLedger(temp / "events.jsonl")
-            result = MacrRuntime(registry, ledger).invoke(
+            services = build_test_services(temp)
+            result, context = invoke_authorized(
+                registry,
+                services,
                 "grok",
                 TaskContract(
                     task_id="grok-pending-001",
@@ -279,7 +308,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                     task_type="policy_test",
                 ),
             )
-            events = ledger.read_all()
+            events = services.events.read_events(run_id=context.run_id)
         self.assertEqual(result.status.value, "candidate_failure")
         self.assertEqual(events[-1]["payload"]["status"], "candidate_failure")
 
@@ -308,8 +337,10 @@ class RuntimeLedgerTests(unittest.TestCase):
             transports={"minimax": ExplodingTransport()},
         )
         with d_drive_tempdir() as temp:
-            ledger = AppendOnlyLedger(temp / "events.jsonl")
-            result = MacrRuntime(registry, ledger).invoke(
+            services = build_test_services(temp)
+            result, context = invoke_authorized(
+                registry,
+                services,
                 "minimax",
                 TaskContract(
                     task_id="unexpected-failure-001",
@@ -324,7 +355,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                     required_capabilities=("text_generation",),
                 ),
             )
-            events = ledger.read_all()
+            events = services.events.read_events(run_id=context.run_id)
         self.assertEqual(result.status.value, "candidate_failure")
         self.assertNotIn("simulated transport", str(result.to_dict()))
         self.assertEqual(result.provider_meta["failure_type"], "RuntimeError")

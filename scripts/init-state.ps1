@@ -8,7 +8,18 @@ if ($resolvedDrive -ne 'D:\') {
     throw "Persistent MACR state is allowed only on D:. Refusing: $StateRoot"
 }
 
-$paths = @('ledger', 'artifacts', 'cache', 'test-tmp') | ForEach-Object {
+$paths = @(
+    'ledger',
+    'artifacts',
+    'cache',
+    'test-tmp',
+    'runtime',
+    'accounting',
+    'candidates',
+    'quarantine',
+    'direct',
+    'settings'
+) | ForEach-Object {
     Join-Path -Path $StateRoot -ChildPath $_
 }
 

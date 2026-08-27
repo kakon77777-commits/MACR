@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import uuid
+from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .authority import AuthorityScope
 from .config import ConnectionScope, load_provider_configs
 from .contracts import ResultStatus, TaskContract
 from .errors import MacrError
-from .ledger import AppendOnlyLedger
+from .execution import DispatchContext, DispatchOrigin, InteractionPlane
+from .legacy_ledger import LegacyLedgerImporter
 from .registry import ProviderRegistry
 from .providers.glm import GlmFlashWorkerProvider
-from .runtime import MacrRuntime
+from .runtime import MacrRuntime, RuntimeServices
 from .storage import StorageLayout
 from .task_preflight import validate_task_consistency
 
@@ -208,6 +214,124 @@ def _print_opt_in_error(status: str, flag: str) -> int:
     return 3
 
 
+def _legacy_source_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _legacy_migration_complete(
+    layout: StorageLayout,
+    services: RuntimeServices,
+) -> bool:
+    source = layout.ledger_path
+    if not source.is_file() or source.stat().st_size == 0:
+        return True
+    source_sha256 = _legacy_source_sha256(source)
+    source_bytes = source.stat().st_size
+    connection = services.events.database.connect()
+    try:
+        row = connection.execute(
+            """
+            SELECT source_bytes, complete
+            FROM legacy_sources
+            WHERE source_sha256 = ?
+            """,
+            (source_sha256,),
+        ).fetchone()
+    finally:
+        connection.close()
+    return bool(
+        row is not None
+        and row["source_bytes"] == source_bytes
+        and row["complete"] == 1
+    )
+
+
+def _migrate_ledger(*, dry_run: bool, expected_count: int | None) -> int:
+    layout = StorageLayout.from_environment()
+    source = layout.ledger_path
+    if expected_count is not None and expected_count < 0:
+        raise ValueError("expected_count must be non-negative")
+    if not source.is_file() or source.stat().st_size == 0:
+        print(
+            json.dumps(
+                {
+                    "status": "legacy_ledger_absent",
+                    "source_bytes": 0,
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    importer = LegacyLedgerImporter(
+        layout.runtime_db_path,
+        layout.quarantine_root,
+    )
+    report = (
+        importer.inspect(source, expected_count=expected_count)
+        if dry_run
+        else importer.import_file(source, expected_count=expected_count)
+    )
+    status = (
+        "legacy_migration_dry_run_complete"
+        if dry_run and report.complete
+        else (
+            "legacy_migration_complete"
+            if report.complete
+            else "legacy_migration_incomplete"
+        )
+    )
+    print(
+        json.dumps(
+            {
+                "status": status,
+                **asdict(report),
+                "network_activity": False,
+                "source_preserved": True,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if report.complete else 5
+
+
+def _cli_policy_snapshot_sha256(
+    provider_id: str,
+    provider_scope: ConnectionScope,
+    task: TaskContract,
+    *,
+    allow_network: bool,
+    allow_local: bool,
+) -> str:
+    document = {
+        "schema": "macr_cli_one_shot_v1",
+        "provider_id": provider_id,
+        "connection_scope": provider_scope.value,
+        "interaction_plane": InteractionPlane.DELEGATION.value,
+        "task_type": task.task_type,
+        "privacy": task.constraints.privacy.value,
+        "max_cost_usd": task.constraints.max_cost_usd,
+        "max_latency_s": task.constraints.max_latency_s,
+        "max_output_tokens": task.constraints.max_output_tokens,
+        "allow_network": allow_network,
+        "allow_local": allow_local,
+    }
+    encoded = json.dumps(
+        document,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _invoke(
     provider_id: str,
     task_path: str,
@@ -237,11 +361,58 @@ def _invoke(
             "--allow-local",
         )
     layout.ensure_state_tree()
+    services = RuntimeServices.from_layout(layout)
+    if not _legacy_migration_complete(layout, services):
+        print(
+            json.dumps(
+                {
+                    "status": "legacy_migration_required",
+                    "detail": (
+                        "Run macr migrate-ledger and resolve any incomplete "
+                        "legacy evidence before invoking a provider."
+                    ),
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 5
     task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
     task = TaskContract.from_dict(task_document)
-    result = MacrRuntime(registry, AppendOnlyLedger(layout.ledger_path)).invoke(
+    validate_task_consistency(task)
+    run_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    member_digest = task.delegation_approval_sha256
+    reference = services.authorities.issue(
+        source_kind="cli_opt_in",
+        source_id=f"{provider_id}:{task.task_id}:{run_id}",
+        scope=AuthorityScope(
+            providers=(provider_id,),
+            planes=(InteractionPlane.DELEGATION.value,),
+            task_types=(task.task_type,),
+            member_digests=(member_digest,) if member_digest else (),
+        ),
+        expires_at=(now + timedelta(minutes=10)).isoformat(),
+    )
+    context = DispatchContext(
+        run_id=run_id,
+        plane=InteractionPlane.DELEGATION,
+        origin=DispatchOrigin("cli", "process_id", str(os.getpid())),
+        authorization=reference,
+        policy_snapshot_sha256=_cli_policy_snapshot_sha256(
+            provider_id,
+            provider.connection_scope,
+            task,
+            allow_network=allow_network,
+            allow_local=allow_local,
+        ),
+        member_digest=member_digest,
+    )
+    result = MacrRuntime(registry, services).invoke(
         provider_id,
         task,
+        context,
     )
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     return 0 if result.status is ResultStatus.CANDIDATE_SUCCESS else 4
@@ -256,6 +427,21 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--strict", action="store_true", help="fail if any provider is not ready")
 
     sub.add_parser("init-state", help="create the configured D runtime-state directories")
+
+    migrate = sub.add_parser(
+        "migrate-ledger",
+        help="copy-import the preserved legacy JSONL ledger into SQLite",
+    )
+    migrate.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="inspect counts and hashes without writing migration state",
+    )
+    migrate.add_argument(
+        "--expected-count",
+        type=int,
+        help="require an exact number of nonblank legacy records",
+    )
 
     validate = sub.add_parser("validate-task", help="validate and normalize a TaskContract JSON file")
     validate.add_argument("path")
@@ -316,6 +502,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.config, args.strict)
     if args.command == "init-state":
         return _init_state()
+    if args.command == "migrate-ledger":
+        return _migrate_ledger(
+            dry_run=args.dry_run,
+            expected_count=args.expected_count,
+        )
     if args.command == "validate-task":
         return _validate_task(args.path)
     if args.command == "glm-preflight":

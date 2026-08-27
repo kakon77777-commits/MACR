@@ -3,6 +3,7 @@ from pathlib import Path
 
 from macr_runtime.errors import StoragePolicyError
 from macr_runtime.storage import StorageLayout
+from tests.support import d_drive_tempdir
 
 
 class StorageLayoutTests(unittest.TestCase):
@@ -28,6 +29,35 @@ class StorageLayoutTests(unittest.TestCase):
         )
         self.assertEqual(layout.candidate_root, state_root / "candidates")
         self.assertEqual(layout.quarantine_root, state_root / "quarantine")
+        self.assertEqual(layout.direct_root, state_root / "direct")
+        self.assertEqual(layout.settings_root, state_root / "settings")
+
+    def test_state_tree_includes_v05_runtime_roots(self) -> None:
+        with d_drive_tempdir() as state_root:
+            layout = StorageLayout(
+                source_root=r"D:\Ai\work together\MACR",
+                state_root=str(state_root),
+                codex_home_target=r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
+            )
+
+            roots = layout.ensure_state_tree()
+
+            self.assertEqual(
+                {path.name for path in roots},
+                {
+                    "ledger",
+                    "artifacts",
+                    "cache",
+                    "test-tmp",
+                    "runtime",
+                    "accounting",
+                    "candidates",
+                    "quarantine",
+                    "direct",
+                    "settings",
+                },
+            )
+            self.assertTrue(all(path.is_dir() for path in roots))
 
     def test_rejects_c_source_root(self) -> None:
         with self.assertRaisesRegex(StoragePolicyError, "must be on D:"):
