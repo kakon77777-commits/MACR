@@ -32,7 +32,7 @@ exit 0
                 encoding="utf-8",
             )
             key_path = root / "GLM.txt"
-            secret = "test-id.test-secret"
+            secret = "test-id." + "test-secret"
             key_path.write_text(secret, encoding="utf-8")
             task_path = root / "task.json"
             task_path.write_text("{}", encoding="utf-8")

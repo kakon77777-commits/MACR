@@ -13,6 +13,8 @@ build/
 !.env.example
 gcp-key.json
 *service-account*.json
+GLM.txt
+*zai*.key
 *.log
 *.sqlite
 *.sqlite3

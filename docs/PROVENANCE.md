@@ -34,3 +34,14 @@ These observations do not establish v0.2 live acceptance. Grok 4.6 and MACR-rout
 | Vertex model discovery | 2026-08-25 cached catalog evidence; visibility is not inference entitlement |
 
 The approved credential operation is copy-only to `D:\KEY\GOOGLE_VERTEX.json` with byte-length and SHA-256 equality checks. Neither credential bytes nor account/project identifiers belong in Git or this provenance file. Live text, multimodal, and image conformance is recorded separately only after the complete offline v0.3 gate succeeds.
+
+## v0.4 GLM delegated-worker baseline
+
+| Evidence | Identity |
+|---|---|
+| Official model profile | direct Z.ai general API, exact `glm-5.3-flash`, max reasoning |
+| Credential custody | external D: key file; shape and presence checked without retaining value or digest |
+| Pre-integration smoke test | exact returned model and fixed-string match; 20 prompt, 195 completion, 215 total tokens; one request, no tools or retry |
+| Pricing basis | 2026-08-27 official Z.ai page; list price is enforcement basis and promotional price is informational |
+
+The pre-integration smoke test established account access only. It did not grant runtime authority or acceptance. No prompt body, response body, credential value, account identifier, or credential digest belongs in Git. MACR-routed live acceptance is recorded separately only after the complete offline v0.4 gate succeeds.

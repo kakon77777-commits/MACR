@@ -1,6 +1,6 @@
 # Provider status
 
-Updated: 2026-08-26
+Updated: 2026-08-27
 
 | Provider ID | Required model/route | Credential | Billing | Runtime state |
 |---|---|---|---:|---|
@@ -8,8 +8,9 @@ Updated: 2026-08-26
 | `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | adapter implemented; live v0.2 acceptance pending |
 | `grok_standard` | `grok-4.3` | `XAI_API_KEY` | allowed | adapter implemented; manual profile only |
 | `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | adapter implemented; live MACR acceptance pending |
-| `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 acceptance pending |
-| `google_image` | `gemini-3.1-flash-image`, one 1K output | D: service-account file + project environment | allowed | adapter implemented; live v0.3 acceptance pending |
+| `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
+| `google_image` | `gemini-3.1-flash-image`, one 1K output | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
+| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | process-only `ZAI_API_KEY` from D: key file | allowed | restricted adapter implemented; live v0.4 acceptance pending |
 | `google_veo_fast` | `veo-3.1-fast-generate-001` | not loaded | unavailable | disabled; no long-running-operation adapter |
 | `google_tts` | `gemini-3.1-flash-tts-preview` | not loaded | unavailable | disabled; no audio adapter |
 | `google_lyria` | `lyria-3-clip-preview` | not loaded | unavailable | disabled; no music adapter |
@@ -52,6 +53,20 @@ MACR uses `google-genai>=2.17,<3`, passes credentials explicitly, fixes total SD
 Currency cost is estimated from a dated public pricing basis when the API does not return invoice-grade cost. Cloud Billing is authoritative; current credits and expiration dates do not change provider behavior or guarantee free use.
 
 Veo, TTS, and Lyria remain disabled until separate artifact, duration, long-running-operation, pricing, and live-verification designs are approved.
+
+## GLM delegated-worker policy
+
+`glm_flash_worker` is a low-cost external contractor for explicitly non-sensitive routine text work. It uses only the direct Z.ai general API endpoint and exact `glm-5.3-flash`; the Coding Plan endpoint, OpenRouter, substitute models, tools, retries, and provider fallback are not enabled.
+
+Dispatch requires all of:
+
+- `delegable=true` on the task contract;
+- `public` or explicitly `internal_approved` privacy;
+- `internet=true`, positive latency and cost budgets, and `text_generation` capability only;
+- empty `workspace.write_scope`, no requested patch authority, and independent verification;
+- empty inputs or bounded text-only inputs with non-path labels.
+
+The outbound envelope excludes the local workspace path and currency budget. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower promotional estimate is informational only.
 
 ## Claude boundary
 

@@ -1,4 +1,4 @@
-# MACR v0.3 architecture
+# MACR v0.4 architecture
 
 ```text
 Codex or another primary host
@@ -15,6 +15,7 @@ ProviderRegistry -- auth / privacy / budget / capability gate
         +--> Ollama local chat adapter: Qwythos-9B-v2
         +--> Google Gen AI adapter: gemini-3.7-flash text/multimodal
         +--> Google Gen AI adapter: gemini-3.1-flash-image one-image output
+        +--> Z.ai adapter: glm-5.3-flash restricted delegated text worker
         +--> Google Veo/TTS/Lyria discovery profiles: disabled
         +--> Claude subscription route: disabled
         |
@@ -64,6 +65,15 @@ The adapter performs an exact `/api/tags` model check before `/api/chat`. It sen
 - `google_veo_fast`, `google_tts`, and `google_lyria` are disabled discovery profiles with no callable adapters.
 - Cost metadata is dated and estimated when Google does not return invoice-grade currency values; Cloud Billing remains authoritative.
 
+## GLM delegated-worker boundary
+
+- `glm_flash_worker` is fixed to direct `https://api.z.ai/api/paas/v4`, exact `glm-5.3-flash`, max reasoning, non-streaming output, and one transport attempt.
+- The task must explicitly set `delegable=true`. Existing tasks default to false and therefore cannot reach GLM accidentally.
+- Only `public` or explicitly `internal_approved` tasks qualify. Local-only data, local-or-approved-cloud data, write scopes, patch authority, missing verification, non-text inputs, and insufficient conservative budget fail before credential resolution or transport.
+- The adapter sends a reduced envelope containing the goal, classification metadata, verification/return contract, capability list, and validated text inputs. It omits workspace paths and the task currency budget.
+- No tools, web search, file reads, filesystem writes, retries, provider fallback, verifier decision, acceptance event, resident identity, or private-residence access is available.
+- List pricing is the enforcement basis. Current promotional pricing is recorded separately as non-authoritative estimated metadata.
+
 ## Ledger boundary
 
 Dispatch and completion events contain task/provider/event identity plus an allowlist of:
@@ -86,6 +96,8 @@ pricing_basis_version
 
 Missing metrics remain null. Task inputs, prompts, answers, warnings, thinking, credentials, local source paths, artifact paths/content, and error bodies are excluded.
 
+Dispatch metadata also records the boolean `delegable` decision so an auditor can distinguish explicitly outsourced tasks without seeing their content.
+
 ## Speaker identity boundary
 
 ```text
@@ -94,7 +106,7 @@ provider profile != speaker label
 runtime role != authorship identity
 ```
 
-`grok`, `grok_standard`, `ollama_qwythos`, `google_gemini`, and `google_image` are service profiles only. A Google service-account identity and model-emitted self-label are claims or service provenance, not speaker identity evidence. Until a task-local identity envelope binds the current HOST-OBSERVED native task/session identifier and declares `identifier_kind`, the readable speaker identity is `unresolved`. This runtime does not authorize access to any named resident's private data.
+`grok`, `grok_standard`, `ollama_qwythos`, `google_gemini`, `google_image`, and `glm_flash_worker` are service profiles only. A provider account identity and model-emitted self-label are claims or service provenance, not speaker identity evidence. Until a task-local identity envelope binds the current HOST-OBSERVED native task/session identifier and declares `identifier_kind`, the readable speaker identity is `unresolved`. This runtime does not authorize access to any named resident's private data.
 
 ## Commit boundary
 
@@ -102,4 +114,4 @@ runtime role != authorship identity
 generation != verification != acceptance
 ```
 
-Every provider completion is a candidate. MACR v0.3 records evidence but does not add verifier decisions or accepted-result transitions.
+Every provider completion is a candidate. MACR v0.4 records evidence but does not add verifier decisions or accepted-result transitions.

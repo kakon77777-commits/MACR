@@ -23,6 +23,7 @@ class DoctorTests(unittest.TestCase):
                 "MINIMAX_BASE_URL": "https://api.minimax.io/v1",
                 "MINIMAX_MODEL": "test-model",
                 "XAI_API_KEY": "test-key",
+                "ZAI_API_KEY": "test-id." + "test-secret",
                 "GOOGLE_APPLICATION_CREDENTIALS": str(credential),
                 "GOOGLE_CLOUD_PROJECT": "test-project",
             }
