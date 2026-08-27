@@ -10,7 +10,7 @@ Updated: 2026-08-27
 | `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | adapter implemented; live MACR acceptance pending |
 | `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
 | `google_image` | `gemini-3.1-flash-image`, one 1K output | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
-| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | process-only `ZAI_API_KEY` from D: key file | allowed | restricted adapter implemented; live v0.4 acceptance pending |
+| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | process-only `ZAI_API_KEY` from D: key file | allowed | restricted adapter implemented; live v0.4 candidate evidence recorded |
 | `google_veo_fast` | `veo-3.1-fast-generate-001` | not loaded | unavailable | disabled; no long-running-operation adapter |
 | `google_tts` | `gemini-3.1-flash-tts-preview` | not loaded | unavailable | disabled; no audio adapter |
 | `google_lyria` | `lyria-3-clip-preview` | not loaded | unavailable | disabled; no music adapter |
