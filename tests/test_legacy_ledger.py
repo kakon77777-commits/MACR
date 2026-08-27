@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from macr_runtime.legacy_ledger import LegacyLedgerImporter
+from macr_runtime.runtime_db import RuntimeDatabase
 
 from tests.support import d_drive_tempdir
 
@@ -239,11 +240,13 @@ class LegacyLedgerImporterTests(unittest.TestCase):
             connection.close()
 
         self.assertTrue(report.complete)
-        self.assertEqual(version, 3)
+        self.assertEqual(version, RuntimeDatabase.SCHEMA_VERSION)
         self.assertIn("legacy_sources", tables)
         self.assertIn("legacy_quarantine", tables)
         self.assertIn("dispatch_authorities", tables)
         self.assertIn("dispatch_leases", tables)
+        self.assertIn("candidate_captures", tables)
+        self.assertIn("materializations", tables)
 
 
 if __name__ == "__main__":
