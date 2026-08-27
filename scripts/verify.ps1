@@ -23,6 +23,9 @@ if ($LASTEXITCODE) { exit $LASTEXITCODE }
 python -m compileall -q (Join-Path $repoRoot 'src') (Join-Path $repoRoot 'tests')
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+& (Join-Path $PSScriptRoot 'Test-MacrInvokerProcesses.ps1') -ExpectedCount 0
+if (-not $?) { exit 1 }
+
 $operationalTargets = @(
     (Join-Path $repoRoot 'src'),
     (Join-Path $repoRoot 'config'),

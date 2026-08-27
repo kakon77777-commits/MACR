@@ -1,0 +1,338 @@
+from __future__ import annotations
+
+import json
+import multiprocessing
+import os
+import shutil
+import subprocess
+import sys
+import time
+import unittest
+import uuid
+from pathlib import Path
+from unittest.mock import patch
+
+from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
+from macr_runtime.dispatch import AdmissionGate, DispatcherLeaseStore
+from macr_runtime.errors import DispatchLeaseError
+from macr_runtime.event_store import SqliteEventStore
+from macr_runtime.execution import DispatchContext, DispatchOrigin, InteractionPlane
+from macr_runtime.ledger import AppendOnlyLedger
+from macr_runtime.legacy_ledger import LegacyLedgerImporter
+
+from tests.support import d_drive_tempdir
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WRITER = ROOT / "tests" / "helpers" / "sqlite_event_writer.py"
+CENSUS = ROOT / "scripts" / "Test-MacrInvokerProcesses.ps1"
+
+
+def _admission_worker(
+    database: str,
+    reference,
+    run_id: str,
+    start_event,
+    release_event,
+    results,
+) -> None:
+    authorities = DispatchAuthorityStore(database)
+    leases = DispatcherLeaseStore(database)
+    gate = AdmissionGate(authorities, leases)
+    context = DispatchContext(
+        run_id=run_id,
+        plane=InteractionPlane.DELEGATION,
+        origin=DispatchOrigin("test-process", "process_id", str(os.getpid())),
+        authorization=reference,
+        policy_snapshot_sha256="a" * 64,
+    )
+    if not start_event.wait(20):
+        results.put(("error", "StartTimeout"))
+        return
+    try:
+        permit = gate.admit(
+            context,
+            resource_key="provider:glm_flash_worker:shared-test-slot",
+            provider_id="glm_flash_worker",
+            task_type="delegated_routine",
+            ttl_seconds=60,
+        )
+    except DispatchLeaseError as exc:
+        results.put(("refused", type(exc).__name__))
+        return
+    except Exception as exc:
+        results.put(("error", type(exc).__name__))
+        return
+    try:
+        SqliteEventStore(database).append_standalone(
+            "mock.transport_called",
+            str(uuid.uuid4()),
+            {"process_id": os.getpid()},
+        )
+        results.put(("admitted", permit.fencing_token))
+        if not release_event.wait(20):
+            results.put(("error", "ReleaseTimeout"))
+    finally:
+        leases.release(
+            permit.resource_key,
+            permit.run_id,
+            permit.fencing_token,
+        )
+
+
+class _BarrierBackedFile:
+    def __init__(self, writes, barrier) -> None:
+        self.writes = writes
+        self.barrier = barrier
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        del exc_type, exc_value, traceback
+        return False
+
+    def write(self, value: str) -> int:
+        self.writes.append(value)
+        self.barrier.wait(20)
+        return len(value)
+
+    def flush(self) -> None:
+        return None
+
+    def fileno(self) -> int:
+        return 0
+
+
+def _legacy_mutation_worker(
+    target: str,
+    writes,
+    barrier,
+    worker: int,
+) -> None:
+    target_path = Path(target)
+    original_open = Path.open
+
+    def patched_open(path, mode="r", *args, **kwargs):
+        if path == target_path and mode == "a":
+            return _BarrierBackedFile(writes, barrier)
+        return original_open(path, mode, *args, **kwargs)
+
+    with patch.object(Path, "open", patched_open), patch(
+        "macr_runtime.ledger.os.fsync",
+        return_value=None,
+    ):
+        AppendOnlyLedger(target_path).append(
+            "legacy.mutation",
+            {"worker": worker},
+        )
+
+
+def _powershell() -> str:
+    executable = shutil.which("powershell.exe") or shutil.which("powershell")
+    if executable is None:
+        raise unittest.SkipTest("Windows PowerShell is unavailable")
+    return executable
+
+
+def _run_census(expected_count: int | None = None) -> subprocess.CompletedProcess:
+    command = [_powershell(), "-NoProfile", "-NonInteractive", "-File", str(CENSUS)]
+    if expected_count is not None:
+        command.extend(("-ExpectedCount", str(expected_count)))
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+class MultiprocessRuntimeTests(unittest.TestCase):
+    def test_sqlite_event_store_exact_counts_across_processes(self) -> None:
+        for workers in (1, 2, 3, 4, 8):
+            with self.subTest(workers=workers), d_drive_tempdir() as temp:
+                database = temp / "dispatch.sqlite3"
+                count = 60
+                processes = [
+                    subprocess.Popen(
+                        [
+                            sys.executable,
+                            str(WRITER),
+                            str(database),
+                            f"w{index}",
+                            str(count),
+                        ],
+                        env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    for index in range(workers)
+                ]
+                completed = [process.communicate(timeout=60) for process in processes]
+                for process, (stdout, stderr) in zip(processes, completed):
+                    self.assertEqual(
+                        process.returncode,
+                        0,
+                        msg=f"stdout={stdout!r} stderr={stderr!r}",
+                    )
+                events = SqliteEventStore(database).read_events(
+                    event_type="concurrency.probe"
+                )
+                expected = workers * count
+                self.assertEqual(len(events), expected)
+                self.assertEqual(
+                    len({event["event_id"] for event in events}),
+                    expected,
+                )
+
+    def test_two_process_admission_allows_one_mock_transport_call(self) -> None:
+        context = multiprocessing.get_context("spawn")
+        with d_drive_tempdir() as temp:
+            database = temp / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(database)
+            reference = authorities.issue(
+                source_kind="test",
+                source_id="two-process-admission",
+                scope=AuthorityScope(
+                    providers=("glm_flash_worker",),
+                    planes=(InteractionPlane.DELEGATION.value,),
+                    task_types=("delegated_routine",),
+                ),
+                expires_at="2099-01-01T00:00:00+00:00",
+            )
+            start_event = context.Event()
+            release_event = context.Event()
+            results = context.Queue()
+            processes = [
+                context.Process(
+                    target=_admission_worker,
+                    args=(
+                        str(database),
+                        reference,
+                        str(uuid.uuid4()),
+                        start_event,
+                        release_event,
+                        results,
+                    ),
+                )
+                for _ in range(2)
+            ]
+            for process in processes:
+                process.start()
+            start_event.set()
+            observations = [results.get(timeout=30) for _ in range(2)]
+            release_event.set()
+            for process in processes:
+                process.join(timeout=30)
+                self.assertEqual(process.exitcode, 0)
+            results.close()
+            transport_events = SqliteEventStore(database).read_events(
+                event_type="mock.transport_called"
+            )
+
+        self.assertEqual([item[0] for item in observations].count("admitted"), 1)
+        self.assertEqual([item[0] for item in observations].count("refused"), 1)
+        refusal = next(item for item in observations if item[0] == "refused")
+        self.assertEqual(refusal[1], "DispatchLeaseError")
+        self.assertEqual(len(transport_events), 1)
+
+    def test_census_excludes_itself_even_when_own_command_has_invoker_text(self) -> None:
+        escaped = str(CENSUS).replace("'", "''")
+        command = (
+            f"& '{escaped}' -ExpectedCount 0 "
+            "# invoke-glm.ps1 -TaskPath"
+        )
+        completed = subprocess.run(
+            [_powershell(), "-NoProfile", "-NonInteractive", "-Command", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertEqual(report["count"], 0)
+        self.assertEqual(report["excluded_pid"], report["census_pid"])
+
+    def test_census_detects_and_then_excludes_exact_harmless_process(self) -> None:
+        harmless = subprocess.Popen(
+            [
+                _powershell(),
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$null = 'invoke-glm.ps1 -TaskPath'; Wait-Event -Timeout 60 | Out-Null",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            deadline = time.monotonic() + 15
+            report = None
+            while time.monotonic() < deadline:
+                completed = _run_census()
+                self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+                report = json.loads(completed.stdout)
+                if report["count"] == 1 and harmless.pid in report["matching_pids"]:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail(f"harmless invoker was not observed: {report}")
+
+            exact = _run_census(expected_count=1)
+            self.assertEqual(exact.returncode, 0, msg=exact.stderr)
+        finally:
+            harmless.terminate()
+            harmless.wait(timeout=15)
+
+        deadline = time.monotonic() + 15
+        report = None
+        while time.monotonic() < deadline:
+            completed = _run_census()
+            self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+            report = json.loads(completed.stdout)
+            if report["count"] == 0:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail(f"terminated invoker remained visible: {report}")
+        self.assertEqual(_run_census(expected_count=0).returncode, 0)
+
+    def test_legacy_two_process_forced_interleaving_is_incomplete(self) -> None:
+        context = multiprocessing.get_context("spawn")
+        with d_drive_tempdir() as temp, context.Manager() as manager:
+            target = temp / "forced-interleave.jsonl"
+            writes = manager.list()
+            barrier = context.Barrier(2)
+            processes = [
+                context.Process(
+                    target=_legacy_mutation_worker,
+                    args=(str(target), writes, barrier, worker),
+                )
+                for worker in range(2)
+            ]
+            for process in processes:
+                process.start()
+            for process in processes:
+                process.join(timeout=30)
+                self.assertEqual(process.exitcode, 0)
+            target.write_text("".join(writes), encoding="utf-8")
+
+            report = LegacyLedgerImporter(
+                temp / "dispatch.sqlite3",
+                temp / "quarantine",
+            ).inspect(target, expected_count=2)
+
+        self.assertFalse(report.complete)
+        self.assertGreater(report.corrupt_count, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
