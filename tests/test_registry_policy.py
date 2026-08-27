@@ -16,7 +16,10 @@ class RegistryPolicyTests(unittest.TestCase):
         configs = load_provider_configs(ROOT / "config" / "providers.json")
         self.registry = ProviderRegistry.from_configs(
             configs,
-            environ={"XAI_API_KEY": "test-key"},
+            environ={
+                "XAI_API_KEY": "test-key",
+                "ZAI_API_KEY": "test-id.test-secret",
+            },
         )
 
     def test_grok_profiles_are_configured_offline(self) -> None:
@@ -42,6 +45,14 @@ class RegistryPolicyTests(unittest.TestCase):
                     task_type="policy_test",
                 )
             )
+
+    def test_glm_flash_worker_is_configured_offline(self) -> None:
+        provider = self.registry.get("glm_flash_worker")
+        health = provider.health()
+
+        self.assertTrue(health.ready)
+        self.assertEqual(health.status, "configured_offline")
+        self.assertEqual(provider.config.model, "glm-5.3-flash")
 
     def test_google_gemini_is_configured_offline(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")
