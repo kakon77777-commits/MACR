@@ -9,7 +9,7 @@ from .errors import EventStoreConflict, StoragePolicyError
 class RuntimeDatabase:
     """Connection policy and schema owner for MACR runtime coordination state."""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, path: str | Path) -> None:
         candidate = Path(path)
@@ -112,6 +112,63 @@ class RuntimeDatabase:
                 connection.execute(
                     "UPDATE schema_meta SET version = ? WHERE component = ?",
                     (2, "runtime"),
+                )
+                version = 2
+            if version == 2:
+                migration_three = (
+                    """CREATE TABLE IF NOT EXISTS authority_epoch (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        epoch INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        reason_digest TEXT,
+                        updated_at TEXT NOT NULL
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS dispatch_authorities (
+                        authority_id TEXT PRIMARY KEY,
+                        source_kind TEXT NOT NULL,
+                        source_id TEXT NOT NULL,
+                        body_json TEXT NOT NULL,
+                        body_sha256 TEXT NOT NULL,
+                        revision INTEGER NOT NULL,
+                        epoch INTEGER NOT NULL,
+                        scope_json TEXT NOT NULL,
+                        issued_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        revoked_at TEXT,
+                        UNIQUE(source_kind, source_id, revision)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS dispatch_leases (
+                        resource_key TEXT PRIMARY KEY,
+                        run_id TEXT NOT NULL,
+                        fencing_token INTEGER NOT NULL,
+                        acquired_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS fencing_counter (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        value INTEGER NOT NULL
+                    )""",
+                )
+                for statement in migration_three:
+                    connection.execute(statement)
+                now = "1970-01-01T00:00:00+00:00"
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO authority_epoch(
+                        singleton, epoch, state, reason_digest, updated_at
+                    ) VALUES (1, 0, 'open', NULL, ?)
+                    """,
+                    (now,),
+                )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO fencing_counter(singleton, value)
+                    VALUES (1, 0)
+                    """
+                )
+                connection.execute(
+                    "UPDATE schema_meta SET version = ? WHERE component = ?",
+                    (3, "runtime"),
                 )
             connection.commit()
         except Exception:

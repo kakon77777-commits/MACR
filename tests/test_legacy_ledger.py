@@ -207,7 +207,7 @@ class LegacyLedgerImporterTests(unittest.TestCase):
             self.assertFalse(database.exists())
             self.assertFalse(quarantine.exists())
 
-    def test_runtime_schema_one_upgrades_in_place_to_legacy_schema(self) -> None:
+    def test_runtime_schema_one_upgrades_in_place_to_current_schema(self) -> None:
         with d_drive_tempdir() as temp:
             database = temp / "dispatch.sqlite3"
             connection = sqlite3.connect(database)
@@ -239,9 +239,11 @@ class LegacyLedgerImporterTests(unittest.TestCase):
             connection.close()
 
         self.assertTrue(report.complete)
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
         self.assertIn("legacy_sources", tables)
         self.assertIn("legacy_quarantine", tables)
+        self.assertIn("dispatch_authorities", tables)
+        self.assertIn("dispatch_leases", tables)
 
 
 if __name__ == "__main__":
