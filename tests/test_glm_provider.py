@@ -287,6 +287,20 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             replace(glm_config(), base_url="https://api.z.ai/api/coding/paas/v4"),
             replace(glm_config(), endpoint_path="/other"),
             replace(glm_config(), reasoning_effort="high"),
+            replace(glm_config(), api_key_env="OTHER_KEY"),
+            replace(glm_config(), auth_mode=AuthMode.NONE),
+            replace(
+                glm_config(),
+                approved_privacy=(
+                    PrivacyLevel.PUBLIC.value,
+                    PrivacyLevel.INTERNAL_APPROVED.value,
+                    PrivacyLevel.LOCAL_ONLY.value,
+                ),
+            ),
+            replace(
+                glm_config(),
+                capabilities=("text_generation", "filesystem_write"),
+            ),
         )
         for config in cases:
             with self.subTest(config=config):

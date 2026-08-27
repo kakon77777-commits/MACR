@@ -5,8 +5,8 @@ import os
 import re
 from typing import Any, Mapping
 
-from ..config import AuthMode, ProviderConfig
-from ..contracts import ProviderResult, ResultStatus, TaskContract
+from ..config import AuthMode, ConnectionScope, ProviderConfig
+from ..contracts import PrivacyLevel, ProviderResult, ResultStatus, TaskContract
 from ..errors import (
     ConfigurationError,
     ProviderPolicyError,
@@ -108,6 +108,17 @@ class GlmFlashWorkerProvider(BaseProvider):
             or config.model_env is not None
             or config.reasoning_effort != "max"
             or config.allowed_hosts != ("api.z.ai",)
+            or config.auth_mode is not AuthMode.API_KEY
+            or config.connection_scope is not ConnectionScope.EXTERNAL_HTTPS
+            or config.api_key_env != "ZAI_API_KEY"
+            or config.credential_path_env is not None
+            or config.project_env is not None
+            or config.capabilities != ("text_generation",)
+            or config.approved_privacy
+            != (
+                PrivacyLevel.PUBLIC.value,
+                PrivacyLevel.INTERNAL_APPROVED.value,
+            )
         ):
             raise ConfigurationError(
                 "GLM worker requires the fixed direct profile"

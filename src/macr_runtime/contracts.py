@@ -199,13 +199,13 @@ class TaskContract:
     task_id: str
     goal: str
     task_type: str
-    delegable: bool = False
     workspace: WorkspaceSpec = field(default_factory=WorkspaceSpec)
     inputs: tuple[dict[str, Any], ...] = ()
     constraints: TaskConstraints = field(default_factory=TaskConstraints)
     required_capabilities: tuple[str, ...] = ()
     verification: VerificationSpec = field(default_factory=VerificationSpec)
     return_contract: ReturnContract = field(default_factory=ReturnContract)
+    delegable: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.task_id, str) or not _TASK_ID.fullmatch(self.task_id):

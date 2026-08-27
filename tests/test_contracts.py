@@ -91,6 +91,19 @@ class TaskContractTests(unittest.TestCase):
                 }
             )
 
+    def test_existing_positional_workspace_argument_remains_compatible(self) -> None:
+        workspace = WorkspaceSpec(repo="current", write_scope=("src/**",))
+
+        task = TaskContract(
+            "positional-compatible",
+            "preserve the v0.3 constructor order",
+            "testing",
+            workspace,
+        )
+
+        self.assertEqual(task.workspace, workspace)
+        self.assertFalse(task.delegable)
+
     def test_rejects_string_return_flag(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be boolean"):
             ReturnContract.from_dict({"patch": "false"})
