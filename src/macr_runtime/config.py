@@ -54,6 +54,7 @@ def _string_array(data: Mapping[str, Any], key: str) -> tuple[str, ...]:
 
 class AuthMode(str, Enum):
     API_KEY = "api_key"
+    API_KEY_FILE = "api_key_file"
     SERVICE_ACCOUNT = "service_account"
     SUBSCRIPTION_CLIENT = "subscription_client"
     PENDING = "pending"
@@ -75,6 +76,7 @@ class ProviderConfig:
     api_usage_allowed: bool
     connection_scope: ConnectionScope = ConnectionScope.DISABLED
     api_key_env: str | None = None
+    api_key_file: str | None = None
     credential_path_env: str | None = None
     project_env: str | None = None
     base_url: str | None = None
@@ -108,6 +110,10 @@ class ProviderConfig:
         if self.model and self.model_env:
             raise ConfigurationError(
                 f"provider {self.id} may not define both model and model_env"
+            )
+        if self.api_key_env and self.api_key_file:
+            raise ConfigurationError(
+                f"provider {self.id} may not define both api_key_env and api_key_file"
             )
         if self.reasoning_effort is not None and self.reasoning_effort not in _REASONING_EFFORTS:
             raise ConfigurationError(f"provider {self.id} reasoning_effort is invalid")
@@ -174,11 +180,22 @@ class ProviderConfig:
                 raise ConfigurationError(
                     f"provider {self.id} loopback scope may not use an API key"
                 )
+            if self.api_key_file:
+                raise ConfigurationError(
+                    f"provider {self.id} loopback scope may not use an API-key file"
+                )
 
         if self.enabled:
             missing: list[str] = []
             if self.auth_mode is AuthMode.API_KEY and not self.api_key_env:
                 missing.append("api_key_env")
+            if self.auth_mode is AuthMode.API_KEY_FILE:
+                if not self.api_key_file:
+                    missing.append("api_key_file")
+                if self.api_key_env:
+                    raise ConfigurationError(
+                        f"provider {self.id} API-key file auth may not use api_key_env"
+                    )
             if self.auth_mode is AuthMode.SERVICE_ACCOUNT:
                 if not self.credential_path_env:
                     missing.append("credential_path_env")
@@ -210,6 +227,7 @@ class ProviderConfig:
                     str(data.get("connection_scope", ConnectionScope.DISABLED.value))
                 ),
                 api_key_env=_optional_string(data, "api_key_env"),
+                api_key_file=_optional_string(data, "api_key_file"),
                 credential_path_env=_optional_string(data, "credential_path_env"),
                 project_env=_optional_string(data, "project_env"),
                 base_url=_optional_string(data, "base_url"),
@@ -290,6 +308,7 @@ class ProviderConfig:
             "api_usage_allowed": self.api_usage_allowed,
             "connection_scope": self.connection_scope.value,
             "base_url": self.base_url,
+            "api_key_file": self.api_key_file,
             "model": self.model,
             "location": self.location,
             "reasoning_effort": self.reasoning_effort,

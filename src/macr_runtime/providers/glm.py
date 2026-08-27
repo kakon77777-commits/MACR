@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import re
+from pathlib import Path
 from typing import Any, Mapping
 
 from ..config import AuthMode, ConnectionScope, ProviderConfig
@@ -21,6 +22,7 @@ from ..errors import (
     ProviderProtocolError,
     ProviderUnavailableError,
 )
+from ..glm_approval import GlmApprovalStore
 from .base import BaseProvider, ProviderHealth
 from .common import bounded_worker_instruction
 from .http_json import JsonTransport, UrllibJsonTransport
@@ -43,6 +45,64 @@ _OBVIOUS_SENSITIVE_MARKER = re.compile(
     r"-----BEGIN (?:RSA )?PRIVATE KEY-----|"
     r"(?:api[_-]?key|access[_-]?token|private[_-]?key)\s*[:=])"
 )
+
+
+class GlmFixedKeySource:
+    def __init__(
+        self,
+        canonical_root: str | Path = r"D:\KEY",
+        key_path: str | Path = r"D:\KEY\GLM.txt",
+    ) -> None:
+        self.canonical_root = Path(canonical_root)
+        self.key_path = Path(key_path)
+
+    @staticmethod
+    def _is_reparse(path: Path) -> bool:
+        return path.is_symlink() or (
+            hasattr(os.path, "isjunction") and os.path.isjunction(path)
+        )
+
+    def load(self) -> str:
+        try:
+            absolute_root = self.canonical_root.absolute()
+            absolute_key = self.key_path.absolute()
+            if absolute_root.drive.upper() != "D:" or absolute_key.drive.upper() != "D:":
+                raise ProviderUnavailableError("GLM key custody must remain on D:")
+            current = Path(absolute_root.anchor)
+            for component in absolute_root.parts[1:]:
+                current = current / component
+                if self._is_reparse(current):
+                    raise ProviderUnavailableError(
+                        "GLM canonical key-root ancestry contains a reparse point"
+                    )
+            if self._is_reparse(absolute_key):
+                raise ProviderUnavailableError("GLM key file may not be a reparse point")
+            resolved_root = absolute_root.resolve(strict=True)
+            resolved_key = absolute_key.resolve(strict=True)
+            if not resolved_key.is_relative_to(resolved_root):
+                raise ProviderUnavailableError(
+                    "GLM key file is outside the canonical key root"
+                )
+            current = resolved_root
+            for component in resolved_key.relative_to(resolved_root).parts[:-1]:
+                current = current / component
+                if self._is_reparse(current):
+                    raise ProviderUnavailableError(
+                        "GLM key parent contains a reparse point"
+                    )
+            size = resolved_key.stat().st_size
+            if size <= 0 or size > 16384:
+                raise ProviderUnavailableError("GLM key file size is invalid")
+            value = resolved_key.read_text(encoding="utf-8").strip()
+        except ProviderUnavailableError:
+            raise
+        except (OSError, UnicodeError) as exc:
+            raise ProviderUnavailableError(
+                "GLM fixed key file is unavailable"
+            ) from exc
+        if not _ZAI_KEY_SHAPE.fullmatch(value):
+            raise ProviderUnavailableError("GLM key file shape is invalid")
+        return value
 
 
 def _non_negative_int(name: str, value: Any) -> int:
@@ -119,6 +179,8 @@ class GlmFlashWorkerProvider(BaseProvider):
         *,
         transport: JsonTransport | None = None,
         environ: Mapping[str, str] | None = None,
+        key_source: GlmFixedKeySource | None = None,
+        approval_store: Any | None = None,
     ) -> None:
         if config.kind != "zai_glm_worker":
             raise ConfigurationError(
@@ -133,9 +195,10 @@ class GlmFlashWorkerProvider(BaseProvider):
             or config.model_env is not None
             or config.reasoning_effort != "max"
             or config.allowed_hosts != ("api.z.ai",)
-            or config.auth_mode is not AuthMode.API_KEY
+            or config.auth_mode is not AuthMode.API_KEY_FILE
             or config.connection_scope is not ConnectionScope.EXTERNAL_HTTPS
-            or config.api_key_env != "ZAI_API_KEY"
+            or config.api_key_env is not None
+            or config.api_key_file != r"D:\KEY\GLM.txt"
             or config.credential_path_env is not None
             or config.project_env is not None
             or config.capabilities != ("text_generation",)
@@ -153,14 +216,16 @@ class GlmFlashWorkerProvider(BaseProvider):
         self.connection_scope = config.connection_scope
         self.transport = transport or UrllibJsonTransport()
         self.environ = os.environ if environ is None else environ
+        self.key_source = key_source or GlmFixedKeySource()
+        self.approval_store = approval_store or GlmApprovalStore(
+            self.environ.get(
+                "MACR_STATE_ROOT",
+                r"D:\AI_RESIDENCE\AI_Runtime\macr-state",
+            )
+        )
 
     def _api_key(self) -> str:
-        name = self.config.api_key_env
-        value = self.environ.get(name, "").strip() if name else ""
-        if not value:
-            raise ProviderUnavailableError(
-                f"provider {self.provider_id} is missing environment variable {name}"
-            )
+        value = self.key_source.load()
         if not _ZAI_KEY_SHAPE.fullmatch(value):
             raise ProviderUnavailableError(
                 f"provider {self.provider_id} credential shape is invalid"
@@ -198,9 +263,9 @@ class GlmFlashWorkerProvider(BaseProvider):
     def _check_task_policy(self, task: TaskContract) -> None:
         if not self.config.enabled or not self.config.api_usage_allowed:
             raise ProviderPolicyError(f"provider {self.provider_id} is not enabled")
-        if self.config.auth_mode is not AuthMode.API_KEY:
+        if self.config.auth_mode is not AuthMode.API_KEY_FILE:
             raise ProviderPolicyError(
-                f"provider {self.provider_id} must use API-key authentication"
+                f"provider {self.provider_id} must use fixed API-key-file authentication"
             )
         if not task.delegable:
             raise ProviderPolicyError(
@@ -289,6 +354,19 @@ class GlmFlashWorkerProvider(BaseProvider):
             user_text,
         )
         endpoint = f"{_FIXED_BASE_URL}{_FIXED_ENDPOINT_PATH}"
+        request_payload = {
+            "model": _FIXED_MODEL,
+            "messages": [
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": user_text},
+            ],
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "reasoning_effort": "max",
+            "thinking": {"type": "enabled", "clear_thinking": False},
+            "max_tokens": task.constraints.max_output_tokens,
+            "stream": False,
+        }
         approval_manifest = {
             "approval_schema": 1,
             "provider_id": "glm_flash_worker",
@@ -300,7 +378,7 @@ class GlmFlashWorkerProvider(BaseProvider):
             "privacy": task.constraints.privacy.value,
             "max_cost_usd": task.constraints.max_cost_usd,
             "max_output_tokens": task.constraints.max_output_tokens,
-            "envelope": envelope,
+            "request_payload": request_payload,
         }
         approval_sha256 = hashlib.sha256(
             _canonical_json(approval_manifest).encode("utf-8")
@@ -309,9 +387,10 @@ class GlmFlashWorkerProvider(BaseProvider):
             "system_text": system_text,
             "user_text": user_text,
             "approval_sha256": approval_sha256,
-            "envelope_bytes": len(user_text.encode("utf-8")),
+            "request_bytes": len(_canonical_json(request_payload).encode("utf-8")),
             "cost_ceiling": cost_ceiling,
             "endpoint": endpoint,
+            "request_payload": request_payload,
         }
 
     def _safe_approval_metadata(
@@ -325,7 +404,7 @@ class GlmFlashWorkerProvider(BaseProvider):
             "endpoint": prepared["endpoint"],
             "delegation_class": task.delegation_class.value,
             "required_approval_sha256": prepared["approval_sha256"],
-            "envelope_bytes": prepared["envelope_bytes"],
+            "request_bytes": prepared["request_bytes"],
             "conservative_cost_ceiling_usd": prepared["cost_ceiling"],
             "pricing_basis_version": _PRICING_BASIS_VERSION,
         }
@@ -341,6 +420,7 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM delegation approval digest is missing or stale"
             )
+        self.approval_store.verify(prepared["approval_sha256"])
         return prepared
 
     def validate_approval(self, task: TaskContract) -> dict[str, Any]:
@@ -349,33 +429,12 @@ class GlmFlashWorkerProvider(BaseProvider):
 
     def invoke(self, task: TaskContract) -> ProviderResult:
         prepared = self._validate_approval_prepared(task)
-        system_text = prepared["system_text"]
-        user_text = prepared["user_text"]
         api_key = self._api_key()
-        base_url = self.config.resolve_base_url(self.environ)
-        model = self.config.resolve_model(self.environ)
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": system_text,
-                },
-                {
-                    "role": "user",
-                    "content": user_text,
-                },
-            ],
-            "temperature": 1.0,
-            "top_p": 0.95,
-            "reasoning_effort": self.config.reasoning_effort,
-            "thinking": {"type": "enabled", "clear_thinking": False},
-            "max_tokens": task.constraints.max_output_tokens,
-            "stream": False,
-        }
+        model = _FIXED_MODEL
+        payload = prepared["request_payload"]
         timeout_s = max(0.001, min(task.constraints.max_latency_s, 300.0))
         document = self.transport.post_json(
-            f"{base_url.rstrip('/')}{self.config.endpoint_path}",
+            prepared["endpoint"],
             headers={"Authorization": f"Bearer {api_key}"},
             payload=payload,
             timeout_s=timeout_s,

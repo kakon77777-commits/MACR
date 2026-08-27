@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from .config import ConnectionScope, load_provider_configs
 from .contracts import ResultStatus, TaskContract
@@ -20,11 +20,16 @@ def _default_config(layout: StorageLayout) -> Path:
     return Path(layout.source_root) / "config" / "providers.json"
 
 
-def _doctor(config_path: str | None, strict: bool) -> int:
+def _doctor(
+    config_path: str | None,
+    strict: bool,
+    *,
+    key_sources: Mapping[str, Any] | None = None,
+) -> int:
     layout = StorageLayout.from_environment()
     path = Path(config_path) if config_path else _default_config(layout)
     configs = load_provider_configs(path)
-    registry = ProviderRegistry.from_configs(configs)
+    registry = ProviderRegistry.from_configs(configs, key_sources=key_sources)
     report = {
         "runtime": "macr-runtime",
         "version": "0.4.0",
@@ -73,7 +78,7 @@ def _glm_preflight(
         )
         task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
         task = TaskContract.from_dict(task_document)
-        provider = GlmFlashWorkerProvider(config, environ={})
+        provider = GlmFlashWorkerProvider(config, environ=os.environ)
         metadata = (
             provider.approval_metadata(task)
             if show_required_digest
@@ -105,6 +110,64 @@ def _glm_preflight(
                 "status": "approval_invalid",
                 "failure_type": failure_type,
                 "detail": "GLM task approval preflight failed; task content omitted.",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 4
+
+
+def _glm_approve(
+    task_path: str,
+    config_path: str | None,
+    *,
+    expires_in_days: int,
+) -> int:
+    layout = StorageLayout.from_environment()
+    path = Path(config_path) if config_path else _default_config(layout)
+    try:
+        config = next(
+            item
+            for item in load_provider_configs(path)
+            if item.id == "glm_flash_worker"
+        )
+        task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
+        task = TaskContract.from_dict(task_document)
+        provider = GlmFlashWorkerProvider(config, environ=os.environ)
+        metadata = provider.approval_metadata(task)
+        if task.delegation_approval_sha256 != metadata["required_approval_sha256"]:
+            raise ValueError("task digest is missing or stale")
+        record = provider.approval_store.create(
+            metadata["required_approval_sha256"],
+            expires_in_days=expires_in_days,
+        )
+    except StopIteration:
+        failure_type = "ConfigurationError"
+    except (OSError, json.JSONDecodeError, ValueError, MacrError) as exc:
+        failure_type = type(exc).__name__
+    else:
+        print(
+            json.dumps(
+                {
+                    "status": "host_approval_created",
+                    "approval_sha256": record["approval_sha256"],
+                    "approved_by": record["approved_by"],
+                    "approved_at": record["approved_at"],
+                    "expires_at": record["expires_at"],
+                    "nonce": record["nonce"],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
+    print(
+        json.dumps(
+            {
+                "status": "host_approval_failed",
+                "failure_type": failure_type,
+                "detail": "GLM host approval failed; task content omitted.",
             },
             ensure_ascii=False,
             indent=2,
@@ -193,6 +256,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the required exact-envelope approval digest instead of requiring it",
     )
 
+    glm_approve = sub.add_parser(
+        "glm-approve",
+        help="create a host-authorized, expiring approval record for an exact GLM task digest",
+    )
+    glm_approve.add_argument("task_path")
+    glm_approve.add_argument("--config", help="provider configuration JSON path")
+    glm_approve.add_argument(
+        "--expires-in-days",
+        type=int,
+        default=30,
+        help="approval lifetime from 1 to 365 days",
+    )
+
     invoke = sub.add_parser(
         "invoke",
         help="invoke one configured provider and append candidate metadata to the D-drive ledger",
@@ -226,6 +302,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.task_path,
             args.config,
             show_required_digest=args.show_required_digest,
+        )
+    if args.command == "glm-approve":
+        return _glm_approve(
+            args.task_path,
+            args.config,
+            expires_in_days=args.expires_in_days,
         )
     if args.command == "invoke":
         return _invoke(

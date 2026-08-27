@@ -10,7 +10,7 @@ Updated: 2026-08-27
 | `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | adapter implemented; live MACR acceptance pending |
 | `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
 | `google_image` | `gemini-3.1-flash-image`, one 1K output | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
-| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | process-only `ZAI_API_KEY` from D: key file | allowed | restricted adapter implemented; live v0.4 candidate evidence recorded |
+| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | provider-late fixed `D:\KEY\GLM.txt` | allowed | restricted adapter implemented; live v0.4 candidate evidence recorded |
 | `google_veo_fast` | `veo-3.1-fast-generate-001` | not loaded | unavailable | disabled; no long-running-operation adapter |
 | `google_tts` | `gemini-3.1-flash-tts-preview` | not loaded | unavailable | disabled; no audio adapter |
 | `google_lyria` | `lyria-3-clip-preview` | not loaded | unavailable | disabled; no music adapter |
@@ -61,13 +61,14 @@ Veo, TTS, and Lyria remain disabled until separate artifact, duration, long-runn
 Dispatch requires all of:
 
 - `delegable=true` on the task contract;
-- exact `non_sensitive_routine` classification plus a current SHA-256 approval manifest over outbound bytes, route/model, privacy, limits, and budget;
+- exact `non_sensitive_routine` classification plus a current SHA-256 approval manifest over the full request, route/model, privacy, limits, and budget;
+- a separate unexpired host-approval record with fixed author role, nonce, creation time, and expiry;
 - `public` or explicitly `internal_approved` privacy;
 - `internet=true`, positive latency and cost budgets, and `text_generation` capability only;
 - empty `workspace.write_scope`, no requested patch authority, and independent verification;
 - empty inputs or bounded text-only inputs with non-path labels.
 
-The outbound envelope excludes local task/workspace identity and currency budget. Credential-free preflight validates policy and approval before the wrapper resolves the D: key. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only.
+The outbound request excludes local task/workspace identity and currency budget. Credential-free preflight validates policy and approval without reading a key; provider invocation repeats validation before reading fixed `D:\KEY\GLM.txt`. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only.
 
 ## Claude boundary
 

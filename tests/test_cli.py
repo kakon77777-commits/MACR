@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from macr_runtime.cli import _doctor, _glm_preflight, _invoke
+from macr_runtime.cli import _doctor, _glm_approve, _glm_preflight, _invoke
 from macr_runtime.contracts import (
     DelegationClass,
     PrivacyLevel,
@@ -17,10 +17,16 @@ from macr_runtime.contracts import (
 )
 from macr_runtime.config import load_provider_configs
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.glm_approval import GlmApprovalStore
 from tests.support import d_drive_tempdir, write_fake_google_credential
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class StaticKeySource:
+    def load(self):
+        return "test-id." + "test-secret"
 
 
 class DoctorTests(unittest.TestCase):
@@ -32,7 +38,6 @@ class DoctorTests(unittest.TestCase):
                 "MINIMAX_BASE_URL": "https://api.minimax.io/v1",
                 "MINIMAX_MODEL": "test-model",
                 "XAI_API_KEY": "test-key",
-                "ZAI_API_KEY": "test-id." + "test-secret",
                 "GOOGLE_APPLICATION_CREDENTIALS": str(credential),
                 "GOOGLE_CLOUD_PROJECT": "test-project",
             }
@@ -42,6 +47,7 @@ class DoctorTests(unittest.TestCase):
                     status = _doctor(
                         str(ROOT / "config" / "providers.json"),
                         strict=True,
+                        key_sources={"glm_flash_worker": StaticKeySource()},
                     )
         self.assertEqual(status, 0)
         self.assertNotIn("test-key", output.getvalue())
@@ -221,13 +227,16 @@ class DoctorTests(unittest.TestCase):
             )
             task_path = temp / "task.json"
             task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            GlmApprovalStore(temp).create(digest, expires_in_days=30)
             output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                status = _glm_preflight(
-                    str(task_path),
-                    str(ROOT / "config" / "providers.json"),
-                    show_required_digest=False,
-                )
+            environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_preflight(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        show_required_digest=False,
+                    )
 
         document = json.loads(output.getvalue())
         self.assertEqual(status, 0)
@@ -236,6 +245,61 @@ class DoctorTests(unittest.TestCase):
         self.assertNotIn("system_text", document)
         self.assertNotIn("user_text", document)
         self.assertNotIn("PUBLIC APPROVED BODY", output.getvalue())
+
+    def test_glm_approve_creates_external_host_record_without_key_or_content(self) -> None:
+        with d_drive_tempdir() as state_root:
+            task = TaskContract(
+                task_id="glm-host-approve",
+                goal="PUBLIC HOST APPROVAL BODY",
+                task_type="delegated_routine",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.01,
+                    max_latency_s=30,
+                    max_output_tokens=256,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            config_path = ROOT / "config" / "providers.json"
+            config = next(
+                item
+                for item in load_provider_configs(config_path)
+                if item.id == "glm_flash_worker"
+            )
+            digest = GlmFlashWorkerProvider(config, environ={}).approval_metadata(task)[
+                "required_approval_sha256"
+            ]
+            task = TaskContract.from_dict(
+                {
+                    **task.to_dict(),
+                    "delegation_approval_sha256": digest,
+                }
+            )
+            task_path = state_root / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+            }
+            environment.pop("ZAI_API_KEY", None)
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_approve(
+                        str(task_path),
+                        str(config_path),
+                        expires_in_days=30,
+                    )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(document["status"], "host_approval_created")
+        self.assertEqual(document["approval_sha256"], digest)
+        self.assertEqual(document["approved_by"], "host_operator")
+        self.assertNotIn("PUBLIC HOST APPROVAL BODY", output.getvalue())
 
 
 if __name__ == "__main__":

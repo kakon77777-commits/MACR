@@ -11,6 +11,11 @@ from tests.support import d_drive_tempdir, write_fake_google_credential
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class StaticKeySource:
+    def load(self):
+        return "test-id." + "test-secret"
+
+
 class RegistryPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")
@@ -18,8 +23,8 @@ class RegistryPolicyTests(unittest.TestCase):
             configs,
             environ={
                 "XAI_API_KEY": "test-key",
-                "ZAI_API_KEY": "test-id.test-secret",
             },
+            key_sources={"glm_flash_worker": StaticKeySource()},
         )
 
     def test_grok_profiles_are_configured_offline(self) -> None:

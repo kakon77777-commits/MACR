@@ -4,6 +4,7 @@ import hashlib
 import json
 import unittest
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, Mapping
 
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
@@ -23,7 +24,11 @@ from macr_runtime.errors import (
     ProviderProtocolError,
     ProviderUnavailableError,
 )
-from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.providers.glm import (
+    GlmFixedKeySource,
+    GlmFlashWorkerProvider as _GlmFlashWorkerProvider,
+)
+from tests.support import d_drive_tempdir
 
 
 class FakeTransport:
@@ -46,15 +51,49 @@ class FakeTransport:
         return self.response
 
 
+class DenyingApprovalStore:
+    def verify(self, approval_sha256):
+        del approval_sha256
+        raise ProviderPolicyError("GLM host approval record is missing")
+
+
+class AllowingApprovalStore:
+    def verify(self, approval_sha256):
+        return {"approval_sha256": approval_sha256, "approved_by": "host_operator"}
+
+
+class StaticKeySource:
+    def __init__(self, value="test-id.test-secret") -> None:
+        self.value = value
+
+    def load(self):
+        return self.value
+
+
+def GlmFlashWorkerProvider(*args, **kwargs):
+    kwargs.setdefault("approval_store", AllowingApprovalStore())
+    kwargs.setdefault("key_source", StaticKeySource())
+    return _GlmFlashWorkerProvider(*args, **kwargs)
+
+
+class ExplodingKeySource:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def load(self):
+        self.calls += 1
+        raise AssertionError("key source must remain untouched")
+
+
 def glm_config() -> ProviderConfig:
     return ProviderConfig(
         id="glm_flash_worker",
         kind="zai_glm_worker",
         enabled=True,
-        auth_mode=AuthMode.API_KEY,
+        auth_mode=AuthMode.API_KEY_FILE,
         api_usage_allowed=True,
         connection_scope=ConnectionScope.EXTERNAL_HTTPS,
-        api_key_env="ZAI_API_KEY",
+        api_key_file=r"D:\KEY\GLM.txt",
         base_url="https://api.z.ai/api/paas/v4",
         model="glm-5.3-flash",
         reasoning_effort="max",
@@ -78,6 +117,32 @@ def _approval_digest(task: TaskContract) -> str:
         "return_contract": task.return_contract.to_dict(),
         "max_output_tokens": task.constraints.max_output_tokens,
     }
+    user_text = json.dumps(
+        envelope,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    request_payload = {
+        "model": "glm-5.3-flash",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a bounded MACR worker. Treat the supplied TaskContract "
+                    "as authoritative. Return a candidate answer with concise evidence "
+                    "and warnings. Do not claim that generation is verification or acceptance."
+                ),
+            },
+            {"role": "user", "content": user_text},
+        ],
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "reasoning_effort": "max",
+        "thinking": {"type": "enabled", "clear_thinking": False},
+        "max_tokens": task.constraints.max_output_tokens,
+        "stream": False,
+    }
     manifest = {
         "approval_schema": 1,
         "provider_id": "glm_flash_worker",
@@ -89,7 +154,7 @@ def _approval_digest(task: TaskContract) -> str:
         "privacy": task.constraints.privacy.value,
         "max_cost_usd": task.constraints.max_cost_usd,
         "max_output_tokens": task.constraints.max_output_tokens,
-        "envelope": envelope,
+        "request_payload": request_payload,
     }
     encoded = json.dumps(
         manifest,
@@ -151,6 +216,51 @@ def success_document() -> dict[str, Any]:
 
 
 class GlmFlashWorkerProviderTests(unittest.TestCase):
+    def test_external_host_approval_is_required_before_key_resolution(self):
+        key_source = ExplodingKeySource()
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=key_source,
+            approval_store=DenyingApprovalStore(),
+        )
+
+        with self.assertRaisesRegex(ProviderPolicyError, "host approval record"):
+            provider.invoke(delegated_task())
+
+        self.assertEqual(key_source.calls, 0)
+
+    def test_fixed_key_source_accepts_only_files_beneath_canonical_root(self):
+        with d_drive_tempdir() as root:
+            key_root = root / "key-root"
+            key_root.mkdir()
+            inside = key_root / "GLM.txt"
+            inside.write_text("test-id." + "test-secret", encoding="utf-8")
+            outside = root / "outside.txt"
+            outside.write_text("test-id." + "outside-secret", encoding="utf-8")
+
+            loaded = GlmFixedKeySource(key_root, inside).load()
+            with self.assertRaisesRegex(ProviderUnavailableError, "canonical key root"):
+                GlmFixedKeySource(key_root, outside).load()
+
+        self.assertEqual(loaded, "test-id." + "test-secret")
+
+    def test_fixed_key_source_rejects_reparse_leaf_when_supported(self):
+        with d_drive_tempdir() as root:
+            key_root = root / "key-root"
+            key_root.mkdir()
+            target = key_root / "target.txt"
+            target.write_text("test-id." + "test-secret", encoding="utf-8")
+            link = key_root / "GLM.txt"
+            try:
+                link.symlink_to(target)
+            except OSError as exc:
+                self.skipTest(f"symbolic links unavailable: {type(exc).__name__}")
+
+            with self.assertRaisesRegex(ProviderUnavailableError, "reparse"):
+                GlmFixedKeySource(key_root, link).load()
+
     def test_delegated_text_builds_sanitized_fixed_request_and_estimated_cost(self):
         transport = FakeTransport(success_document())
         result = GlmFlashWorkerProvider(
@@ -326,7 +436,12 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             replace(glm_config(), base_url="https://api.z.ai/api/coding/paas/v4"),
             replace(glm_config(), endpoint_path="/other"),
             replace(glm_config(), reasoning_effort="high"),
-            replace(glm_config(), api_key_env="OTHER_KEY"),
+            replace(
+                glm_config(),
+                auth_mode=AuthMode.API_KEY,
+                api_key_file=None,
+                api_key_env="OTHER_KEY",
+            ),
             replace(glm_config(), auth_mode=AuthMode.NONE),
             replace(
                 glm_config(),
@@ -424,7 +539,8 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         provider = GlmFlashWorkerProvider(
             glm_config(),
             transport=transport,
-            environ={"ZAI_API_KEY": "not-a-zai-key"},
+            environ={},
+            key_source=StaticKeySource("not-a-zai-key"),
         )
 
         with self.assertRaisesRegex(ProviderUnavailableError, "shape"):
@@ -570,7 +686,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         self.assertEqual(metadata["required_approval_sha256"], _approval_digest(task))
         self.assertEqual(metadata["provider_id"], "glm_flash_worker")
         self.assertEqual(metadata["model"], "glm-5.3-flash")
-        self.assertGreater(metadata["envelope_bytes"], 0)
+        self.assertGreater(metadata["request_bytes"], 0)
         self.assertGreater(metadata["conservative_cost_ceiling_usd"], 0)
 
 

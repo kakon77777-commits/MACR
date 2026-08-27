@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Mapping
+from typing import Any, Mapping
 
 from .config import ProviderConfig
 from .errors import ConfigurationError, ProviderUnavailableError
@@ -29,8 +29,10 @@ class ProviderRegistry:
         *,
         environ: Mapping[str, str] | None = None,
         transports: Mapping[str, JsonTransport] | None = None,
+        key_sources: Mapping[str, Any] | None = None,
     ) -> "ProviderRegistry":
         transport_map = {} if transports is None else dict(transports)
+        key_source_map = {} if key_sources is None else dict(key_sources)
         providers: list[BaseProvider] = []
         for config in configs:
             if config.kind == "minimax_openai_compatible":
@@ -55,6 +57,7 @@ class ProviderRegistry:
                         config,
                         environ=environ,
                         transport=transport_map.get(config.id),
+                        key_source=key_source_map.get(config.id),
                     )
                 )
             elif config.kind == "ollama_local_chat":
