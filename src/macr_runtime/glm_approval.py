@@ -83,27 +83,46 @@ class GlmApprovalStore:
         ).hexdigest()
 
     def _ensure_root(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
         self._check_root_ancestry()
+        if not self.state_root.is_dir():
+            raise ProviderPolicyError(
+                "GLM approval state root must already exist as a directory"
+            )
+        current = self.state_root
+        for component in self.root.relative_to(self.state_root).parts:
+            candidate = current / component
+            if self._is_reparse(candidate):
+                raise ProviderPolicyError(
+                    "GLM approval-root ancestry contains a reparse point"
+                )
+            if candidate.exists():
+                if not candidate.is_dir():
+                    raise ProviderPolicyError(
+                        "GLM approval-root ancestry must contain only directories"
+                    )
+            else:
+                candidate.mkdir()
+            current = candidate
+            self._check_root_ancestry()
 
     def _check_root_ancestry(self) -> None:
         current = Path(self.state_root.anchor)
         for component in self.state_root.parts[1:]:
             current = current / component
-            if not current.exists():
-                return
             if self._is_reparse(current):
                 raise ProviderPolicyError(
                     "GLM approval state-root ancestry contains a reparse point"
                 )
-        for component in self.root.relative_to(self.state_root).parts:
-            current = current / component
             if not current.exists():
                 return
+        for component in self.root.relative_to(self.state_root).parts:
+            current = current / component
             if self._is_reparse(current):
                 raise ProviderPolicyError(
                     "GLM approval-root ancestry contains a reparse point"
                 )
+            if not current.exists():
+                return
 
     @staticmethod
     def _validate_digest(value: str) -> str:

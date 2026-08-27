@@ -95,7 +95,7 @@ def _glm_preflight(
                     "status": (
                         "approval_required"
                         if show_required_digest
-                        else "preflight_approved"
+                        else "preflight_structurally_valid"
                     ),
                     **metadata,
                 },

@@ -5,6 +5,7 @@ import hmac
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 from uuid import UUID
 
 from macr_runtime.errors import ProviderPolicyError
@@ -39,6 +40,22 @@ def sign_record(document: dict, signing_key: str = SIGNING_KEY) -> None:
 
 
 class GlmApprovalStoreTests(unittest.TestCase):
+    def test_reparse_approval_ancestor_is_rejected_before_child_creation(self):
+        with d_drive_tempdir() as state_root:
+            approvals_root = state_root / "approvals"
+            approvals_root.mkdir()
+            store = GlmApprovalStore(state_root)
+
+            with patch.object(
+                store,
+                "_is_reparse",
+                side_effect=lambda path: path == approvals_root,
+            ):
+                with self.assertRaisesRegex(ProviderPolicyError, "reparse"):
+                    store._ensure_root()
+
+            self.assertFalse((approvals_root / "glm").exists())
+
     def test_host_approval_record_is_external_content_free_and_verifiable(self):
         now = datetime(2026, 8, 27, 7, 0, tzinfo=timezone.utc)
         digest = "c" * 64

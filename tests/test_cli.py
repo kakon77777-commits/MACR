@@ -247,7 +247,7 @@ class DoctorTests(unittest.TestCase):
 
         document = json.loads(output.getvalue())
         self.assertEqual(status, 0)
-        self.assertEqual(document["status"], "preflight_approved")
+        self.assertEqual(document["status"], "preflight_structurally_valid")
         self.assertEqual(document["required_approval_sha256"], digest)
         self.assertNotIn("system_text", document)
         self.assertNotIn("user_text", document)
