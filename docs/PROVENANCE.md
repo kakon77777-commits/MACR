@@ -47,3 +47,26 @@ The approved credential operation is copy-only to `D:\KEY\GOOGLE_VERTEX.json` wi
 The pre-integration smoke test established account access only. It did not grant runtime authority or acceptance. No prompt body, response body, credential value, account identifier, or credential digest belongs in Git. MACR-routed live acceptance is recorded separately only after the complete offline v0.4 gate succeeds.
 
 The final delegated-worker gate requires `non_sensitive_routine` plus a SHA-256 approval manifest over the complete credential-free request payload, exact provider/endpoint/model, task type, privacy, maximum output, conservative USD ceiling, and pricing basis. Integrity alone is not authority: a separate content-free D: host record binds the digest to a fixed author role, nonce, creation time, and expiry and carries an HMAC-SHA256 verified with fixed-key custody. The wrapper never reads the credential; provider invocation repeats structural approval against the current task, then reads fixed `D:\KEY\GLM.txt` to authenticate the record before network use. Semantic classification remains a trusted operator decision and is not inferred from model content.
+
+## v0.5.0a1 Shared Core Checkpoint A baseline
+
+The implementation boundary immediately before documentation was:
+
+```text
+implementation_commit = 89becf2cce5fcb3ff18f379bbb7bae8de9dbe6f2
+implementation_tree   = e6ed4ed624a18bea000cf140148c9bce903c4767
+```
+
+The checkpoint design and execution plan are repository artifacts under `docs/superpowers`. The implementation also incorporated version-bound field observations from the MSSP architect exchange without treating those reports as implementation authority:
+
+| Field evidence | Bytes | SHA-256 |
+|---|---:|---|
+| `2026-08-27-pragma-glm-author-island-vectors-result.md` | 3,363 | `3CB9C3B14E4E8AF3188767480409335639BF56E3EB7275ADA428AAA623F23DFD` |
+| `2026-08-27-pragma-glm-author-vectors-process-census-correction.md` | 1,338 | `9F5FE9C49710A35C95F55D7FDCEF93E487DAD52CFC94F7ED402A7630188D2DE2` |
+| `2026-08-27-macr-owner-feedback-from-glm-pilot.md` | 6,013 | `9799D35321940FCB7179E059027F58A580555290D4E2AF4F1BA3E531EBBDA915` |
+| `2026-08-27-macr-owner-feedback-t1-return-contract-addendum.md` | 3,580 | `0AB4B1D25DD4B4B0110A652AFFDED4F606C849B6FDFCB5258606A8D0AC8EB844` |
+| `2026-08-27-post-pilot-glm-dispatch-observation.md` | 2,544 | `5BBC530852111EE366A25B066383E2E21D4883130954EAFB813A8D649D2CC47A` |
+| `2026-08-27-pragma-ledger-concurrency-replay.md` | 2,419 | `4A2DE92CEE8B55B4F478BE0C91FD59DFA3C970072C39AB4E360718002ADB977D` |
+| `2026-08-27-metron-ledger-concurrency-replay.md` | 2,341 | `9B4FB0738DBBA0CF6F43C46F08989E7BFBEF98F7FF880D6E70F68933BCB18457` |
+
+The withdrawn observation that one codec CLI remained active is excluded; the correction's self-excluding control is authoritative for that field report. Checkpoint A made no provider request and generated no new live conformance claim. The field evidence remains external and unchanged.

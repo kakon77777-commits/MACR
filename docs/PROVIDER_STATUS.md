@@ -10,11 +10,19 @@ Updated: 2026-08-27
 | `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | adapter implemented; live MACR acceptance pending |
 | `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
 | `google_image` | `gemini-3.1-flash-image`, one 1K output | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
-| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | provider-late fixed `D:\KEY\GLM.txt` | allowed | restricted adapter implemented; live v0.4 candidate evidence recorded |
+| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | provider-late fixed `D:\KEY\GLM.txt` | allowed | native pre-validation observation adapter; prior v0.4 live candidate evidence retained |
 | `google_veo_fast` | `veo-3.1-fast-generate-001` | not loaded | unavailable | disabled; no long-running-operation adapter |
 | `google_tts` | `gemini-3.1-flash-tts-preview` | not loaded | unavailable | disabled; no audio adapter |
 | `google_lyria` | `lyria-3-clip-preview` | not loaded | unavailable | disabled; no music adapter |
 | `claude_subscription` | approved subscription client not selected | subscription login | API forbidden | disabled |
+
+## Checkpoint A shared execution status
+
+All callable profiles enter the v0.5.0a1 CLI through a one-shot current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Existing providers other than GLM currently receive a compatibility observation derived from their normalized `ProviderResult`; GLM observes safe response fields and raw answer bytes before protocol validation.
+
+Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. No provider was called while building or verifying Checkpoint A. Direct Chat, Codex/Claude Code host adapters, automatic routing, bounded fan-out, and Context Capsules remain unavailable.
+
+Accounting's `soft_warning` state remains distinct from each provider adapter's existing hard task-budget gate. Checkpoint A preserves the prior task-budget behavior; the operator-managed warn-only profile is not activated until the separate Direct/settings checkpoint.
 
 ## Grok policy
 

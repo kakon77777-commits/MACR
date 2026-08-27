@@ -1,6 +1,6 @@
 # Storage and migration contract
 
-Status: active from MACR v0.2
+Status: active at MACR v0.5.0a1 Shared Core Checkpoint A
 
 Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `D_RESIDENCE_CANONICAL`, `SECRETS_EXTERNAL`
 
@@ -9,7 +9,7 @@ Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `D_RESIDENCE_CANONICAL`, `SECRETS_
 | Purpose | Current root | Boundary |
 |---|---|---|
 | Source, docs, tests, non-secret configuration | `D:\Ai\work together\MACR` | active Git project |
-| Runtime ledger, cache, artifacts, test state | `D:\AI_RESIDENCE\AI_Runtime\macr-state` | shared service state |
+| Runtime databases, legacy ledger, candidates, cache, artifacts, test state | `D:\AI_RESIDENCE\AI_Runtime\macr-state` | shared service state |
 | Future Codex target | `D:\AI_RESIDENCE\AI_Runtime\codex-home` | inactive; no migration authorized |
 | Ollama model store | `D:\Ai\work together\LocalModels\models` | rebuildable local weights |
 | Active Codex application state | native C: locations | unchanged by MACR |
@@ -41,7 +41,48 @@ OLLAMA_MODELS
 - Claude API use remains forbidden.
 - Named resident private data is outside shared MACR runtime scope.
 
-## Future migration procedure
+## v0.5 runtime-state layout
+
+```text
+D:\AI_RESIDENCE\AI_Runtime\macr-state\
+  runtime\dispatch.sqlite3       operational events, runs, authority, leases,
+                                 legacy-import records, candidate provenance
+  accounting\accounting.sqlite3 invocation accounting and local outbox
+  candidates\                   immutable private candidate bytes
+  ledger\events.jsonl           preserved legacy source; no new writes
+  quarantine\                   byte-exact corrupt legacy lines
+  artifacts\                    validated provider artifacts
+  cache\                        rebuildable cache
+  test-tmp\                     bounded disposable verification state
+  direct\                       reserved; Direct runtime is not implemented
+  settings\                     reserved; settings runtime is not implemented
+```
+
+SQLite event and accounting databases contain bounded operational metadata, not prompts, candidate bytes, credentials, local input paths, or remote response bodies. Candidate files are create-once and referenced publicly by byte count and SHA-256 only. A transformed materialization cannot claim verbatim provenance.
+
+## Legacy JSONL migration
+
+The legacy JSONL file is immutable evidence. The v0.5 runtime does not append to it, truncate it, repair it in place, or delete it.
+
+Inspect without writing:
+
+```powershell
+.\scripts\macr.ps1 migrate-ledger --dry-run
+.\scripts\macr.ps1 migrate-ledger --dry-run --expected-count <N>
+```
+
+Copy-import after reviewing the counts and source hash:
+
+```powershell
+.\scripts\macr.ps1 migrate-ledger
+.\scripts\macr.ps1 migrate-ledger --expected-count <N>
+```
+
+Every nonblank line is parsed with strict UTF-8, unique JSON keys, a timezone-aware timestamp, and a content-free event payload. Invalid UTF-8, malformed JSON, invalid shape, duplicate keys, forbidden content fields, duplicate original event IDs, or expected-count mismatch makes the source incomplete. Corrupt line bytes are stored in SQLite and copied byte-for-byte to `quarantine`; valid lines remain imported as provenance but cannot make the batch complete. Repeating an identical complete import changes zero rows.
+
+When `ledger\events.jsonl` is nonempty and its current SHA-256 lacks a complete matching import record, `macr invoke` returns `legacy_migration_required` before reading the task, creating one-shot authority, acquiring a lease, dispatching, or contacting a provider. A corrupt import returns `legacy_migration_incomplete`; it never silently starts from empty history.
+
+## Future volume migration procedure
 
 1. Freeze writes and record source/destination volume identity.
 2. Copy without deleting the source.

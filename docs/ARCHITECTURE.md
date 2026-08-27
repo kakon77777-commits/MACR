@@ -1,10 +1,19 @@
-# MACR v0.4 architecture
+# MACR v0.5.0a1 Shared Core architecture
 
 ```text
 Codex or another primary host
         |
         v
 TaskContract + explicit connection opt-in
+        |
+        v
+structured contradiction preflight
+        |
+        v
+current-epoch authority --> fenced cross-process lease
+        |
+        v
+transactional SQLite dispatch event + accounting dispatch
         |
         v
 ProviderRegistry -- auth / privacy / budget / capability gate
@@ -20,14 +29,37 @@ ProviderRegistry -- auth / privacy / budget / capability gate
         +--> Claude subscription route: disabled
         |
         v
-ProviderResult(status=candidate_*)
+RawProviderObservation + ProviderResult(status=candidate_*)
         |
         v
-Append-only content-free ledger on D:
+private Candidate Vault + accounting observation
         |
         v
-Verifier / operator acceptance (not implemented)
+structured return-contract validation
+        |
+        v
+one SQLite terminal event + accounting outbox
+        |
+        v
+materialization / verification / acceptance (not implemented)
 ```
+
+Checkpoint A is a shared-core checkpoint only. It does not contain Direct Chat, a browser service, Codex or Claude Code host adapters, a fan-out scheduler, or Context Capsules.
+
+## Execution-state separation
+
+The observable lifecycle is deliberately non-collapsing:
+
+```text
+provider completion
+!= raw-answer capture
+!= return-contract validity
+!= materialization
+!= verification
+!= acceptance
+```
+
+Likewise, dispatch origin, authorization provenance, and lease ownership are independent records. An authority is exact, expiring, scoped, revisioned, and bound to the current stop epoch. A lease is an exclusive holder record with a monotonic fencing token. Admission verifies authority before and after lease acquisition; neither timing nor a process census grants authority.
 
 ## Connection scopes
 
@@ -35,7 +67,7 @@ Verifier / operator acceptance (not implemented)
 
 `loopback_http` requires both `--allow-local` and `internet=false`. The v0.2 Ollama adapter accepts exactly `http://127.0.0.1:11434`, `local_only`, zero cost, and an installed exact model. It does not treat loopback authorization as external-network authorization.
 
-The CLI resolves provider scope without creating state or reading a task file. State creation and task parsing happen only after the matching opt-in passes.
+The CLI resolves provider scope without creating state or reading a task file. State creation and task parsing happen only after the matching opt-in passes. It then rejects an incomplete legacy migration before reading the task, performs deterministic preflight, and issues a ten-minute one-shot delegation authority bound to provider, task type, optional exact member digest, origin process, and a policy snapshot hash.
 
 ## Offline doctor
 
@@ -77,9 +109,13 @@ The adapter performs an exact `/api/tags` model check before `/api/chat`. It sen
 - No tools, web search, file reads, filesystem writes, retries, provider fallback, verifier decision, acceptance event, resident identity, or private-residence access is available.
 - List pricing is the enforcement basis. Current promotional pricing is recorded separately as non-authoritative estimated metadata.
 
-## Ledger boundary
+GLM is the first provider with a native pre-validation observation adapter. Once one transport response exists, safe model, response ID, finish reason, token fields, estimated cost, duration, and exact UTF-8 answer bytes are observed before protocol checks. Non-stop, malformed, tool-bearing, web-search-bearing, model-mismatched, or over-bound responses do not retry. Public failure output omits candidate text while private capture remains available for audit. Other existing providers use the compatibility wrapper around their normalized result until migrated individually.
 
-Dispatch and completion events contain task/provider/event identity plus an allowlist of:
+## Event, candidate, and accounting boundary
+
+`runtime\dispatch.sqlite3` is the operational event, authority, lease, legacy-import, and candidate-provenance database. `accounting\accounting.sqlite3` stores invocation accounting and a local outbox. Each admitted run has exactly one dispatch event and at most one terminal event. A provider or adapter crash after admission is terminal `candidate_failure` with billing `unknown_after_dispatch`; cost never defaults to zero.
+
+Dispatch events contain origin, task/provider identity, policy hash, authority digest/revision/epoch, and fencing token. Terminal events contain an allowlist of:
 
 ```text
 model
@@ -95,11 +131,18 @@ output_artifact_count
 output_artifact_bytes
 cost_kind
 pricing_basis_version
+finish_reason
+billing_state
+provider_state
+capture_state
+return_contract_state
 ```
 
-Missing metrics remain null. Task inputs, prompts, answers, warnings, thinking, credentials, local source paths, artifact paths/content, and error bodies are excluded.
+Missing metrics remain null. Task inputs, prompts, candidate bytes, warnings, thinking, credentials, local source paths, artifact paths/content, and error bodies are excluded. Candidate bytes are immutable files beneath `candidates`; event rows expose only content-free hashes and counts. Return-contract rejection never rewrites the raw capture.
 
-Dispatch metadata also records `delegable`, `delegation_class`, and the exact-envelope approval digest so an auditor can distinguish explicitly approved outsourced tasks without seeing their content.
+The legacy `ledger\events.jsonl` is immutable input evidence. Import is copy-only and idempotent. Corrupt or forbidden lines are retained byte-for-byte in quarantine and make the source incomplete; the CLI refuses provider invocation until the current nonempty source hash has a complete import record.
+
+Accounting separates estimated/provider-reported/zero-local/unknown billing state from candidate status. Its `soft_warning` state is distinct from the existing task/provider hard budget gates. Checkpoint A preserves that existing enforcement; activating the local operator-managed warn-only profile belongs to the later Direct/settings checkpoint.
 
 ## Speaker identity boundary
 
@@ -117,4 +160,4 @@ runtime role != authorship identity
 generation != verification != acceptance
 ```
 
-Every provider completion is a candidate. MACR v0.4 records evidence but does not add verifier decisions or accepted-result transitions.
+Every provider completion is a candidate. MACR v0.5.0a1 records provider, capture, return-contract, materialization, verification, and acceptance states independently; this checkpoint still implements no verifier decision or accepted-result transition.
