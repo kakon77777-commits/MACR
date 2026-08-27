@@ -44,3 +44,7 @@ class CandidateConflict(MacrError):
 
 class TaskContradictionError(MacrError):
     """Structured task clauses contain an exact deterministic conflict."""
+
+
+class AccountingConflict(MacrError):
+    """An accounting write conflicts with append-only financial evidence."""
