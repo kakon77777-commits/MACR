@@ -53,6 +53,21 @@ class ExampleContractTests(unittest.TestCase):
         self.assertEqual(task.constraints.max_output_tokens, 2048)
         self.assertEqual(task.required_capabilities, ("image_generation",))
 
+    def test_glm_example_requires_explicit_public_delegation(self) -> None:
+        task = load_example("glm-worker-task.example.json")
+
+        self.assertEqual(task.goal, "Return exactly: MACR_GLM_OK")
+        self.assertTrue(task.delegable)
+        self.assertTrue(task.constraints.internet)
+        self.assertEqual(task.constraints.privacy, PrivacyLevel.PUBLIC)
+        self.assertEqual(task.constraints.max_cost_usd, 0.01)
+        self.assertEqual(task.constraints.max_output_tokens, 512)
+        self.assertEqual(task.workspace.write_scope, ())
+        self.assertEqual(task.inputs, ())
+        self.assertEqual(task.required_capabilities, ("text_generation",))
+        self.assertTrue(task.verification.required)
+        self.assertFalse(task.return_contract.patch)
+
 
 if __name__ == "__main__":
     unittest.main()

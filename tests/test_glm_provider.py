@@ -15,7 +15,12 @@ from macr_runtime.contracts import (
     VerificationSpec,
     WorkspaceSpec,
 )
-from macr_runtime.errors import ConfigurationError, ProviderPolicyError, ProviderProtocolError
+from macr_runtime.errors import (
+    ConfigurationError,
+    ProviderPolicyError,
+    ProviderProtocolError,
+    ProviderUnavailableError,
+)
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 
 
@@ -360,6 +365,19 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ProviderProtocolError, "no text content"):
             provider.invoke(delegated_task())
+
+    def test_malformed_key_is_rejected_before_transport(self):
+        transport = FakeTransport(success_document())
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={"ZAI_API_KEY": "not-a-zai-key"},
+        )
+
+        with self.assertRaisesRegex(ProviderUnavailableError, "shape"):
+            provider.invoke(delegated_task())
+
+        self.assertEqual(transport.posts, [])
 
 
 if __name__ == "__main__":

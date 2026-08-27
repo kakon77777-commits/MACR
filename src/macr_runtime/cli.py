@@ -25,7 +25,7 @@ def _doctor(config_path: str | None, strict: bool) -> int:
     registry = ProviderRegistry.from_configs(configs)
     report = {
         "runtime": "macr-runtime",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "network_activity": False,
         "storage": layout.describe(),
         "providers": list(registry.health()),
@@ -111,7 +111,7 @@ def _invoke(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="macr", description="MACR v0.3 control utility")
+    parser = argparse.ArgumentParser(prog="macr", description="MACR v0.4 control utility")
     sub = parser.add_subparsers(dest="command", required=True)
 
     doctor = sub.add_parser("doctor", help="run offline storage and provider configuration checks")

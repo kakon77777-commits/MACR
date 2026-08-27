@@ -196,6 +196,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                     task_id="ledger-test-001",
                     goal="produce one candidate",
                     task_type="testing",
+                    delegable=True,
                     constraints=TaskConstraints(
                         max_cost_usd=0.01,
                         max_latency_s=5,
@@ -214,6 +215,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             events[1]["payload"]["dispatch_event_id"],
             events[0]["event_id"],
         )
+        self.assertTrue(events[0]["payload"]["delegable"])
         self.assertNotEqual(events[0]["event_id"], events[1]["event_id"])
 
     def test_policy_failure_is_recorded_as_candidate_failure(self) -> None:

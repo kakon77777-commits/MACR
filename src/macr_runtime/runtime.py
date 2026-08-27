@@ -35,6 +35,7 @@ class MacrRuntime:
                 "provider_id": provider_id,
                 "task_id": task.task_id,
                 "task_type": task.task_type,
+                "delegable": task.delegable,
                 "privacy": task.constraints.privacy.value,
             },
         )

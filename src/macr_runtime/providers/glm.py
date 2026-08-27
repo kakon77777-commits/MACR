@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Mapping
 
 from ..config import AuthMode, ProviderConfig
@@ -26,6 +27,7 @@ _MAX_TEXT_INPUT_BYTES = 1_000_000
 _FIXED_BASE_URL = "https://api.z.ai/api/paas/v4"
 _FIXED_ENDPOINT_PATH = "/chat/completions"
 _FIXED_MODEL = "glm-5.3-flash"
+_ZAI_KEY_SHAPE = re.compile(r"^[^.\s]+\.[^.\s]+$")
 
 
 def _non_negative_int(name: str, value: Any) -> int:
@@ -122,6 +124,10 @@ class GlmFlashWorkerProvider(BaseProvider):
         if not value:
             raise ProviderUnavailableError(
                 f"provider {self.provider_id} is missing environment variable {name}"
+            )
+        if not _ZAI_KEY_SHAPE.fullmatch(value):
+            raise ProviderUnavailableError(
+                f"provider {self.provider_id} credential shape is invalid"
             )
         return value
 
