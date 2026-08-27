@@ -199,6 +199,7 @@ class TaskContract:
     task_id: str
     goal: str
     task_type: str
+    delegable: bool = False
     workspace: WorkspaceSpec = field(default_factory=WorkspaceSpec)
     inputs: tuple[dict[str, Any], ...] = ()
     constraints: TaskConstraints = field(default_factory=TaskConstraints)
@@ -211,6 +212,7 @@ class TaskContract:
             raise ValueError("task_id must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}")
         object.__setattr__(self, "goal", _non_empty("goal", self.goal))
         object.__setattr__(self, "task_type", _non_empty("task_type", self.task_type))
+        _boolean("delegable", self.delegable)
         if not isinstance(self.workspace, WorkspaceSpec):
             raise ValueError("workspace must be a WorkspaceSpec")
         if not isinstance(self.constraints, TaskConstraints):
@@ -239,6 +241,7 @@ class TaskContract:
             task_id=data["task_id"],
             goal=data["goal"],
             task_type=data["task_type"],
+            delegable=_boolean("delegable", data.get("delegable", False)),
             workspace=WorkspaceSpec.from_dict(_mapping("workspace", data.get("workspace", {}))),
             inputs=tuple(dict(item) for item in inputs),
             constraints=TaskConstraints.from_dict(
@@ -258,6 +261,7 @@ class TaskContract:
             "task_id": self.task_id,
             "goal": self.goal,
             "task_type": self.task_type,
+            "delegable": self.delegable,
             "workspace": self.workspace.to_dict(),
             "inputs": [dict(item) for item in self.inputs],
             "constraints": self.constraints.to_dict(),

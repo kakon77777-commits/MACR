@@ -60,6 +60,37 @@ class TaskContractTests(unittest.TestCase):
                 }
             )
 
+    def test_delegable_defaults_false_and_round_trips_true(self) -> None:
+        default_task = TaskContract(
+            task_id="delegable-default",
+            goal="remain local by default",
+            task_type="testing",
+        )
+        delegated_task = TaskContract.from_dict(
+            {
+                "task_id": "delegable-enabled",
+                "goal": "allow explicit external delegation",
+                "task_type": "delegated_routine",
+                "delegable": True,
+            }
+        )
+
+        self.assertFalse(default_task.delegable)
+        self.assertFalse(default_task.to_dict()["delegable"])
+        self.assertTrue(delegated_task.delegable)
+        self.assertTrue(delegated_task.to_dict()["delegable"])
+
+    def test_rejects_string_delegable_flag(self) -> None:
+        with self.assertRaisesRegex(ValueError, "delegable must be boolean"):
+            TaskContract.from_dict(
+                {
+                    "task_id": "delegable-string",
+                    "goal": "reject ambiguous delegation",
+                    "task_type": "delegated_routine",
+                    "delegable": "true",
+                }
+            )
+
     def test_rejects_string_return_flag(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be boolean"):
             ReturnContract.from_dict({"patch": "false"})
