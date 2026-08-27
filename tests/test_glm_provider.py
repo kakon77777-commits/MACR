@@ -21,7 +21,6 @@ from macr_runtime.contracts import (
 from macr_runtime.errors import (
     ConfigurationError,
     ProviderPolicyError,
-    ProviderProtocolError,
     ProviderUnavailableError,
 )
 from macr_runtime.providers.glm import (
@@ -534,14 +533,16 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             environ={"ZAI_API_KEY": "test-id.test-secret"},
         )
 
-        with self.assertRaisesRegex(ProviderProtocolError, "tool calls"):
-            provider.invoke(delegated_task())
+        execution = provider.invoke_observed(delegated_task())
 
         self.assertEqual(len(transport.posts), 1)
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertTrue(any("tool calls" in item for item in execution.result.warnings))
 
     def test_non_stop_finish_reason_is_rejected_without_retry(self):
         document = success_document()
         document["choices"][0]["finish_reason"] = "length"
+        document["choices"][0]["message"]["content"] = "PARTIAL PRIVATE ANSWER"
         transport = FakeTransport(document)
         provider = GlmFlashWorkerProvider(
             glm_config(),
@@ -549,10 +550,63 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             environ={"ZAI_API_KEY": "test-id.test-secret"},
         )
 
-        with self.assertRaisesRegex(ProviderProtocolError, "finish_reason"):
-            provider.invoke(delegated_task())
+        execution = provider.invoke_observed(delegated_task())
 
         self.assertEqual(len(transport.posts), 1)
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(execution.result.answer, "")
+        self.assertEqual(execution.observation.finish_reason, "length")
+        self.assertEqual(execution.observation.model, "glm-5.3-flash")
+        self.assertEqual(execution.observation.usage.input_tokens, 20)
+        self.assertEqual(
+            execution.observation.answer_bytes,
+            b"PARTIAL PRIVATE ANSWER",
+        )
+
+    def test_malformed_usage_preserves_other_observed_fields(self):
+        document = success_document()
+        document["usage"]["prompt_tokens"] = "twenty"
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(document),
+            environ={"ZAI_API_KEY": "test-id.test-secret"},
+        )
+
+        execution = provider.invoke_observed(delegated_task())
+
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(execution.result.answer, "")
+        self.assertIsNone(execution.observation.usage.input_tokens)
+        self.assertEqual(execution.observation.usage.output_tokens, 10)
+        self.assertIsNone(execution.observation.currency_cost_usd)
+        self.assertEqual(execution.observation.finish_reason, "stop")
+        self.assertEqual(
+            execution.observation.answer_bytes,
+            b"candidate classification",
+        )
+        self.assertEqual(
+            execution.result.provider_meta["failure_type"],
+            "ProviderProtocolError",
+        )
+
+    def test_returned_model_mismatch_is_observed_before_rejection(self):
+        document = success_document()
+        document["model"] = "unexpected-model"
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(document),
+            environ={"ZAI_API_KEY": "test-id.test-secret"},
+        )
+
+        execution = provider.invoke_observed(delegated_task())
+
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(execution.observation.model, "unexpected-model")
+        self.assertEqual(
+            execution.observation.answer_bytes,
+            b"candidate classification",
+        )
+        self.assertNotIn("unexpected-model", " ".join(execution.result.warnings))
 
     def test_inconsistent_usage_total_is_rejected(self):
         document = success_document()
@@ -563,8 +617,10 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             environ={"ZAI_API_KEY": "test-id.test-secret"},
         )
 
-        with self.assertRaisesRegex(ProviderProtocolError, "total_tokens"):
-            provider.invoke(delegated_task())
+        execution = provider.invoke_observed(delegated_task())
+
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertTrue(any("total_tokens" in item for item in execution.result.warnings))
 
     def test_reported_completion_tokens_cannot_exceed_requested_bound(self):
         document = success_document()
@@ -576,8 +632,10 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             environ={"ZAI_API_KEY": "test-id.test-secret"},
         )
 
-        with self.assertRaisesRegex(ProviderProtocolError, "output bound"):
-            provider.invoke(delegated_task())
+        execution = provider.invoke_observed(delegated_task())
+
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertTrue(any("output bound" in item for item in execution.result.warnings))
 
     def test_blank_candidate_content_is_rejected(self):
         document = success_document()
@@ -588,8 +646,10 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             environ={"ZAI_API_KEY": "test-id.test-secret"},
         )
 
-        with self.assertRaisesRegex(ProviderProtocolError, "no text content"):
-            provider.invoke(delegated_task())
+        execution = provider.invoke_observed(delegated_task())
+
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertTrue(any("no text content" in item for item in execution.result.warnings))
 
     def test_malformed_key_is_rejected_before_transport(self):
         transport = FakeTransport(success_document())
@@ -703,10 +763,11 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             environ={"ZAI_API_KEY": "test-id.test-secret"},
         )
 
-        with self.assertRaisesRegex(ProviderProtocolError, "web search"):
-            provider.invoke(delegated_task())
+        execution = provider.invoke_observed(delegated_task())
 
         self.assertEqual(len(transport.posts), 1)
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertTrue(any("web search" in item for item in execution.result.warnings))
 
     def test_postflight_over_budget_is_retained_as_failed_candidate(self):
         document = success_document()

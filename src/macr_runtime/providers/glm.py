@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -18,9 +19,16 @@ from ..contracts import (
 )
 from ..errors import (
     ConfigurationError,
+    MacrError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderUnavailableError,
+)
+from ..execution import (
+    ProviderExecution,
+    ProviderState,
+    ProviderUsage,
+    RawProviderObservation,
 )
 from ..glm_approval import GlmApprovalStore
 from ..task_preflight import validate_task_consistency
@@ -121,6 +129,18 @@ class GlmFixedKeySource:
 def _non_negative_int(name: str, value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ProviderProtocolError(f"GLM {name} must be a non-negative integer")
+    return value
+
+
+def _safe_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _safe_non_empty_string(value: Any) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
     return value
 
 
@@ -442,30 +462,201 @@ class GlmFlashWorkerProvider(BaseProvider):
         prepared = self._validate_approval_prepared(task)
         return self._safe_approval_metadata(task, prepared)
 
-    def invoke(self, task: TaskContract) -> ProviderResult:
+    def _post_validated_task_once(self, task: TaskContract) -> Mapping[str, Any]:
         prepared = self._validate_approval_prepared(task)
         api_key = self._api_key()
         self.approval_store.verify(
             prepared["approval_sha256"],
             signing_key=api_key,
         )
-        model = _FIXED_MODEL
-        payload = prepared["request_payload"]
         timeout_s = max(0.001, min(task.constraints.max_latency_s, 300.0))
-        document = self.transport.post_json(
+        return self.transport.post_json(
             prepared["endpoint"],
             headers={"Authorization": f"Bearer {api_key}"},
-            payload=payload,
+            payload=prepared["request_payload"],
             timeout_s=timeout_s,
         )
+
+    @staticmethod
+    def _safe_usage_detail(
+        usage: Mapping[str, Any] | None,
+        details_name: str,
+        field_name: str,
+    ) -> int | None:
+        if usage is None:
+            return None
+        if details_name not in usage or usage.get(details_name) is None:
+            return 0
+        details = usage.get(details_name)
+        if not isinstance(details, Mapping):
+            return None
+        if field_name not in details:
+            return 0
+        return _safe_non_negative_int(details.get(field_name))
+
+    def _observe_response(
+        self,
+        document: Mapping[str, Any],
+        elapsed_ms: int,
+    ) -> RawProviderObservation:
+        choices = document.get("choices")
+        choice = (
+            choices[0]
+            if isinstance(choices, list)
+            and len(choices) == 1
+            and isinstance(choices[0], dict)
+            else None
+        )
+        finish_reason = _safe_non_empty_string(
+            choice.get("finish_reason") if choice is not None else None
+        )
+        message = choice.get("message") if choice is not None else None
+        content = message.get("content") if isinstance(message, dict) else None
+        answer_bytes = None
+        if isinstance(content, str):
+            try:
+                answer_bytes = content.encode("utf-8")
+            except UnicodeEncodeError:
+                answer_bytes = None
+
+        raw_usage = document.get("usage")
+        usage = raw_usage if isinstance(raw_usage, Mapping) else None
+        prompt_tokens = _safe_non_negative_int(
+            usage.get("prompt_tokens") if usage is not None else None
+        )
+        completion_tokens = _safe_non_negative_int(
+            usage.get("completion_tokens") if usage is not None else None
+        )
+        cached_tokens = self._safe_usage_detail(
+            usage,
+            "prompt_tokens_details",
+            "cached_tokens",
+        )
+        reasoning_tokens = self._safe_usage_detail(
+            usage,
+            "completion_tokens_details",
+            "reasoning_tokens",
+        )
+        list_cost = (
+            _estimated_cost(
+                prompt_tokens,
+                completion_tokens,
+                input_rate=_LIST_INPUT_USD_PER_M,
+                output_rate=_LIST_OUTPUT_USD_PER_M,
+            )
+            if prompt_tokens is not None and completion_tokens is not None
+            else None
+        )
+        provider_state = ProviderState.MALFORMED
+        if finish_reason == "stop":
+            provider_state = ProviderState.COMPLETED
+        elif finish_reason is not None:
+            provider_state = ProviderState.INCOMPLETE
+
+        return RawProviderObservation(
+            provider_id=self.provider_id,
+            model=_safe_non_empty_string(document.get("model")),
+            response_id=_safe_non_empty_string(document.get("id")),
+            finish_reason=finish_reason,
+            usage=ProviderUsage(
+                input_tokens=prompt_tokens,
+                output_tokens=completion_tokens,
+                reasoning_tokens=reasoning_tokens,
+                cached_tokens=cached_tokens,
+            ),
+            currency_cost_usd=list_cost,
+            cost_kind="estimated" if list_cost is not None else None,
+            pricing_basis_version=(
+                _PRICING_BASIS_VERSION if list_cost is not None else None
+            ),
+            duration_ms=elapsed_ms,
+            answer_bytes=answer_bytes,
+            provider_state=provider_state,
+        )
+
+    @staticmethod
+    def _observed_total_tokens(document: Mapping[str, Any]) -> int | None:
+        usage = document.get("usage")
+        if not isinstance(usage, Mapping):
+            return None
+        return _safe_non_negative_int(usage.get("total_tokens"))
+
+    def _cost_from_observation(
+        self,
+        document: Mapping[str, Any],
+        observation: RawProviderObservation,
+    ) -> dict[str, Any]:
+        prompt_tokens = observation.usage.input_tokens
+        completion_tokens = observation.usage.output_tokens
+        promotional_cost = (
+            _estimated_cost(
+                prompt_tokens,
+                completion_tokens,
+                input_rate=_PROMOTIONAL_INPUT_USD_PER_M,
+                output_rate=_PROMOTIONAL_OUTPUT_USD_PER_M,
+            )
+            if prompt_tokens is not None and completion_tokens is not None
+            else None
+        )
+        return {
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": self._observed_total_tokens(document),
+                "cached_tokens": observation.usage.cached_tokens,
+                "reasoning_tokens": observation.usage.reasoning_tokens,
+            },
+            "currency_cost_usd": observation.currency_cost_usd,
+            "promotional_price_estimated_usd": promotional_cost,
+            "promotional_price_observed_on": (
+                _PROMOTIONAL_PRICE_OBSERVED_ON
+                if promotional_cost is not None
+                else None
+            ),
+            "cost_kind": observation.cost_kind,
+            "pricing_basis_version": observation.pricing_basis_version,
+        }
+
+    def _provider_meta_from_observation(
+        self,
+        observation: RawProviderObservation,
+        *,
+        failure_type: str | None = None,
+    ) -> dict[str, Any]:
+        meta = {
+            "provider": self.provider_id,
+            "model": observation.model,
+            "response_id": observation.response_id,
+            "finish_reason": observation.finish_reason,
+            "wire_format": "zai_chat_completions",
+            "metrics": {
+                "input_tokens": observation.usage.input_tokens,
+                "output_tokens": observation.usage.output_tokens,
+                "reasoning_tokens": observation.usage.reasoning_tokens,
+                "cached_tokens": observation.usage.cached_tokens,
+                "duration_ms": observation.duration_ms,
+                "cost_kind": observation.cost_kind,
+                "pricing_basis_version": observation.pricing_basis_version,
+            },
+        }
+        if failure_type is not None:
+            meta["failure_type"] = failure_type
+        return meta
+
+    def _validate_observation(
+        self,
+        task: TaskContract,
+        document: Mapping[str, Any],
+        observation: RawProviderObservation,
+    ) -> ProviderResult:
         if document.get("web_search") not in (None, {}, []):
             raise ProviderProtocolError(
                 "GLM response unexpectedly contained web search metadata"
             )
         returned_model = document.get("model")
-        if returned_model != model:
+        if returned_model != _FIXED_MODEL:
             raise ProviderProtocolError(
-                f"GLM response model mismatch: requested {model}, got {returned_model}"
+                "GLM response model did not match the fixed requested model"
             )
         choices = document.get("choices")
         if not isinstance(choices, list) or len(choices) != 1:
@@ -485,11 +676,15 @@ class GlmFlashWorkerProvider(BaseProvider):
         if message.get("tool_calls") not in (None, []):
             raise ProviderProtocolError("GLM response unexpectedly contained tool calls")
         usage = document.get("usage")
-        if not isinstance(usage, dict):
+        if not isinstance(usage, Mapping):
             raise ProviderProtocolError("GLM response usage must be an object")
-        prompt_tokens = _non_negative_int("prompt_tokens", usage.get("prompt_tokens"))
+        prompt_tokens = _non_negative_int(
+            "prompt_tokens",
+            observation.usage.input_tokens,
+        )
         completion_tokens = _non_negative_int(
-            "completion_tokens", usage.get("completion_tokens")
+            "completion_tokens",
+            observation.usage.output_tokens,
         )
         if completion_tokens > task.constraints.max_output_tokens:
             raise ProviderProtocolError(
@@ -500,30 +695,16 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderProtocolError(
                 "GLM total_tokens must equal prompt_tokens plus completion_tokens"
             )
-        prompt_details = usage.get("prompt_tokens_details")
-        prompt_details = prompt_details if isinstance(prompt_details, dict) else {}
-        completion_details = usage.get("completion_tokens_details")
-        completion_details = (
-            completion_details if isinstance(completion_details, dict) else {}
-        )
         cached_tokens = _non_negative_int(
-            "cached_tokens", prompt_details.get("cached_tokens", 0)
+            "cached_tokens",
+            observation.usage.cached_tokens,
         )
         reasoning_tokens = _non_negative_int(
-            "reasoning_tokens", completion_details.get("reasoning_tokens", 0)
+            "reasoning_tokens",
+            observation.usage.reasoning_tokens,
         )
-        list_cost = _estimated_cost(
-            prompt_tokens,
-            completion_tokens,
-            input_rate=_LIST_INPUT_USD_PER_M,
-            output_rate=_LIST_OUTPUT_USD_PER_M,
-        )
-        promotional_cost = _estimated_cost(
-            prompt_tokens,
-            completion_tokens,
-            input_rate=_PROMOTIONAL_INPUT_USD_PER_M,
-            output_rate=_PROMOTIONAL_OUTPUT_USD_PER_M,
-        )
+        list_cost = observation.currency_cost_usd
+        assert list_cost is not None
         over_budget = list_cost > task.constraints.max_cost_usd
         response_id = document.get("id")
         if response_id is not None and not isinstance(response_id, str):
@@ -541,35 +722,32 @@ class GlmFlashWorkerProvider(BaseProvider):
                 if over_budget
                 else ResultStatus.CANDIDATE_SUCCESS
             ),
-            answer=message["content"],
-            cost={
-                "usage": {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                    "cached_tokens": cached_tokens,
-                    "reasoning_tokens": reasoning_tokens,
-                },
-                "currency_cost_usd": list_cost,
-                "promotional_price_estimated_usd": promotional_cost,
-                "promotional_price_observed_on": _PROMOTIONAL_PRICE_OBSERVED_ON,
-                "cost_kind": "estimated",
-                "pricing_basis_version": _PRICING_BASIS_VERSION,
-            },
+            answer="" if over_budget else message["content"],
+            cost=self._cost_from_observation(document, observation),
             warnings=tuple(warnings),
-            provider_meta={
-                "provider": self.provider_id,
-                "model": returned_model,
-                "response_id": response_id,
-                "wire_format": "zai_chat_completions",
-                "metrics": {
-                    "input_tokens": prompt_tokens,
-                    "output_tokens": completion_tokens,
-                    "reasoning_tokens": reasoning_tokens,
-                    "cached_tokens": cached_tokens,
-                    "duration_ms": None,
-                    "cost_kind": "estimated",
-                    "pricing_basis_version": _PRICING_BASIS_VERSION,
-                },
-            },
+            provider_meta=self._provider_meta_from_observation(observation),
         )
+
+    def invoke_observed(self, task: TaskContract) -> ProviderExecution:
+        started = time.perf_counter()
+        document = self._post_validated_task_once(task)
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        observation = self._observe_response(document, elapsed_ms)
+        try:
+            result = self._validate_observation(task, document, observation)
+        except MacrError as exc:
+            result = ProviderResult(
+                task_id=task.task_id,
+                status=ResultStatus.CANDIDATE_FAILURE,
+                answer="",
+                cost=self._cost_from_observation(document, observation),
+                warnings=(str(exc),),
+                provider_meta=self._provider_meta_from_observation(
+                    observation,
+                    failure_type=type(exc).__name__,
+                ),
+            )
+        return ProviderExecution.from_observation(observation, result)
+
+    def invoke(self, task: TaskContract) -> ProviderResult:
+        return self.invoke_observed(task).result
