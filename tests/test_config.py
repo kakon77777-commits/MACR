@@ -28,10 +28,11 @@ class ProviderConfigTests(unittest.TestCase):
                 "google_veo_fast",
                 "google_tts",
                 "google_lyria",
+                "glm_flash_worker",
                 "claude_subscription",
             ],
         )
-        claude = configs[9]
+        claude = configs[10]
         self.assertFalse(claude.api_usage_allowed)
         self.assertEqual(claude.auth_mode, AuthMode.SUBSCRIPTION_CLIENT)
 
@@ -87,6 +88,26 @@ class ProviderConfigTests(unittest.TestCase):
             self.assertFalse(by_id[provider_id].enabled)
             self.assertFalse(by_id[provider_id].api_usage_allowed)
             self.assertIsNotNone(by_id[provider_id].disabled_reason)
+
+    def test_glm_worker_is_enabled_fixed_and_direct(self) -> None:
+        by_id = {
+            item.id: item
+            for item in load_provider_configs(ROOT / "config" / "providers.json")
+        }
+        worker = by_id["glm_flash_worker"]
+
+        self.assertTrue(worker.enabled)
+        self.assertTrue(worker.api_usage_allowed)
+        self.assertEqual(worker.kind, "zai_glm_worker")
+        self.assertEqual(worker.auth_mode, AuthMode.API_KEY)
+        self.assertEqual(worker.api_key_env, "ZAI_API_KEY")
+        self.assertEqual(worker.base_url, "https://api.z.ai/api/paas/v4")
+        self.assertEqual(worker.endpoint_path, "/chat/completions")
+        self.assertEqual(worker.allowed_hosts, ("api.z.ai",))
+        self.assertEqual(worker.model, "glm-5.3-flash")
+        self.assertEqual(worker.reasoning_effort, "max")
+        self.assertIsNone(worker.base_url_env)
+        self.assertIsNone(worker.model_env)
 
     def test_enabled_api_provider_requires_environment_names(self) -> None:
         with self.assertRaisesRegex(ConfigurationError, "lacks"):

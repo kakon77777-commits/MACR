@@ -14,7 +14,7 @@ from .errors import ConfigurationError
 
 
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh"})
+_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
 def _boolean(data: Mapping[str, Any], key: str, default: bool) -> bool:

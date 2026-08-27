@@ -148,6 +148,23 @@
       "disabled_reason": "MACR v0.3 does not implement or live-verify Lyria music generation."
     },
     {
+      "id": "glm_flash_worker",
+      "kind": "zai_glm_worker",
+      "enabled": true,
+      "auth_mode": "api_key",
+      "api_usage_allowed": true,
+      "connection_scope": "external_https",
+      "api_key_env": "ZAI_API_KEY",
+      "base_url": "https://api.z.ai/api/paas/v4",
+      "model": "glm-5.3-flash",
+      "reasoning_effort": "max",
+      "endpoint_path": "/chat/completions",
+      "allowed_hosts": ["api.z.ai"],
+      "capabilities": ["text_generation"],
+      "approved_privacy": ["public", "internal_approved"],
+      "notes": "Explicitly delegated non-sensitive text worker. Direct Z.ai API only; no tools, retries, fallback, filesystem authority, verification, or acceptance authority."
+    },
+    {
       "id": "claude_subscription",
       "kind": "external_subscription_client",
       "enabled": false,
