@@ -12,17 +12,45 @@ from .contracts import (
 )
 from .runtime import MacrRuntime
 from .storage import StorageLayout
+from .execution import (
+    AcceptanceState,
+    AuthorizationReference,
+    CaptureState,
+    DispatchContext,
+    DispatchOrigin,
+    InteractionPlane,
+    MaterializationState,
+    ProviderExecution,
+    ProviderState,
+    ProviderUsage,
+    RawProviderObservation,
+    ReturnContractState,
+    VerificationState,
+)
 
 __all__ = [
     "DelegationClass",
+    "AcceptanceState",
+    "AuthorizationReference",
+    "CaptureState",
+    "DispatchContext",
+    "DispatchOrigin",
+    "InteractionPlane",
     "MacrRuntime",
+    "MaterializationState",
     "PrivacyLevel",
+    "ProviderExecution",
     "ProviderResult",
+    "ProviderState",
+    "ProviderUsage",
+    "RawProviderObservation",
     "ResultStatus",
+    "ReturnContractState",
     "StorageLayout",
     "TaskConstraints",
     "TaskContract",
     "VerificationSpec",
+    "VerificationState",
     "WorkspaceSpec",
 ]
 

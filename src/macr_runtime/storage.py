@@ -62,10 +62,35 @@ class StorageLayout:
     def google_artifact_root(self) -> Path:
         return Path(self.state_root) / "artifacts" / "google"
 
+    @property
+    def runtime_db_path(self) -> Path:
+        return Path(self.state_root) / "runtime" / "dispatch.sqlite3"
+
+    @property
+    def accounting_db_path(self) -> Path:
+        return Path(self.state_root) / "accounting" / "accounting.sqlite3"
+
+    @property
+    def candidate_root(self) -> Path:
+        return Path(self.state_root) / "candidates"
+
+    @property
+    def quarantine_root(self) -> Path:
+        return Path(self.state_root) / "quarantine"
+
     def ensure_state_tree(self) -> tuple[Path, ...]:
         roots = tuple(
             Path(self.state_root) / name
-            for name in ("ledger", "artifacts", "cache", "test-tmp")
+            for name in (
+                "ledger",
+                "artifacts",
+                "cache",
+                "test-tmp",
+                "runtime",
+                "accounting",
+                "candidates",
+                "quarantine",
+            )
         )
         for path in roots:
             path.mkdir(parents=True, exist_ok=True)

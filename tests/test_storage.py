@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from macr_runtime.errors import StoragePolicyError
 from macr_runtime.storage import StorageLayout
@@ -16,6 +17,17 @@ class StorageLayoutTests(unittest.TestCase):
             layout.codex_home_target,
             r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
         )
+        state_root = Path(layout.state_root)
+        self.assertEqual(
+            layout.runtime_db_path,
+            state_root / "runtime" / "dispatch.sqlite3",
+        )
+        self.assertEqual(
+            layout.accounting_db_path,
+            state_root / "accounting" / "accounting.sqlite3",
+        )
+        self.assertEqual(layout.candidate_root, state_root / "candidates")
+        self.assertEqual(layout.quarantine_root, state_root / "quarantine")
 
     def test_rejects_c_source_root(self) -> None:
         with self.assertRaisesRegex(StoragePolicyError, "must be on D:"):
