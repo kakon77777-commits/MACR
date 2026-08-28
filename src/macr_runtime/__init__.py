@@ -19,6 +19,14 @@ from .contracts import (
 )
 from .runtime import MacrRuntime, RuntimeServices
 from .storage import StorageLayout
+from .direct_contracts import (
+    DirectConversationSpec,
+    DirectMessage,
+    DirectProviderId,
+    DirectRunSettings,
+    DirectTurnResult,
+    canonical_policy_snapshot,
+)
 from .execution import (
     AcceptanceState,
     AuthorizationReference,
@@ -37,6 +45,11 @@ from .execution import (
 
 __all__ = [
     "DelegationClass",
+    "DirectConversationSpec",
+    "DirectMessage",
+    "DirectProviderId",
+    "DirectRunSettings",
+    "DirectTurnResult",
     "EolNormalization",
     "EolScope",
     "ImportMode",
@@ -67,6 +80,7 @@ __all__ = [
     "VerificationSpec",
     "VerificationState",
     "WorkspaceSpec",
+    "canonical_policy_snapshot",
 ]
 
-__version__ = "0.5.0a3"
+__version__ = "0.5.0a4"
