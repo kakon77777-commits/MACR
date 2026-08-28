@@ -107,3 +107,16 @@ The third pair `674b3bb88dc086f6d8d310194717ab46397c76c0` / `ca6547d271fb97c7394
 | `D:\Ai\work together\MSSP_Architect_Exchange\evidence\2026-08-28-pragma-post-migration-legacy-tail.md` | 3,145 | `3A91A0586253E533D213D9C1768B5778281DB17B2890550248130BE4F0CF8CF3` |
 
 The 132-document manifest remains external evidence. Its exact member bytes were not resolvable from current searchable D-drive paths during this repair, so no local 132/132 rescan is claimed. Read-only inspection also found the legacy source had advanced from the previously migrated 64-event hash to 68 events under a new hash while SQLite retained only the old complete source record. The repaired comparison logic measured 64 exact prior identities, four new identities, and zero conflicts without writing. The a3 route therefore remains offline-only until old writers are retired, the source is sealed read-only, and an explicitly authorized idempotent 68-event reconciliation completes. No provider call, key read, approval creation, second legacy migration, shared-runtime write, merge, release, deployment, or publication occurred.
+
+## v0.6 design and implementation-plan intake
+
+The original v0.6 design pack remains preserved outside Git under `D:\Ai\work together\MACR_Research_Handoffs\2026-08-28-macr-v0.6-design-pack`. Its ZIP is 12,791 bytes with SHA-256 `1922C33D300CA882C6DA40641A82A07E5C430B09BA3A37D08D29BECAB4DD8290`; the original Markdown is 31,023 bytes with SHA-256 `7B4C6639C6508B5309BB4419751F875C27B371E7FB7FDDEC1C16EDF6B52F0B8C`.
+
+The reviewed canonical candidate and master implementation plan were copied byte-for-byte into `docs/superpowers` without changing the active package version or granting implementation authority:
+
+| Repository artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `docs/superpowers/specs/2026-08-28-macr-v0.6-dynamic-coordination-design.md` | 22,219 | `96F80327174335997AADDEFC8214E4116765604D9DD3F2C7F71742287AD3B67C` |
+| `docs/superpowers/plans/2026-08-28-macr-v0.6-dynamic-coordination.md` | 50,717 | `44267DB22C74124A41F1797FCE6B1E6C86B82285E18E8F324BE0E7D1B02FD172` |
+
+This intake is documentation-only. MACR remains version `0.5.0a3`; the a3 checkpoint commit/tree remains an immutable ancestor; the current route remains offline-only; no v0.6 branch, runtime schema, provider call, discovery call, automation, legacy seal/migration, merge, release, or deployment is created by the intake.
