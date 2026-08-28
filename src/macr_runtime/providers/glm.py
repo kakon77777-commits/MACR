@@ -50,18 +50,26 @@ _FIXED_MODEL = "glm-5.3-flash"
 _ZAI_KEY_SHAPE = re.compile(r"^[^.\s]+\.[^.\s]+$")
 _ALLOWED_TASK_TYPES = frozenset({"delegated_routine", "provider_conformance"})
 _OBVIOUS_CREDENTIAL_MARKER = re.compile(
-    r"(?i)(?:-----BEGIN (?:RSA )?PRIVATE KEY-----|"
-    r"(?:api[_-]?key|access[_-]?token|private[_-]?key)\s*[:=])"
+    r"(?i)(?:-----BEGIN (?:[a-z0-9]+ )*PRIVATE KEY-----|"
+    r"(?:api(?:[\s_-]+)?key|access(?:[\s_-]+)?token|"
+    r"private(?:[\s_-]+)?key)\s*[:=])"
 )
-_OBVIOUS_UNC_PATH_MARKER = re.compile(
-    r"(?i)\\{2,}[a-z0-9._-]+\\+[a-z0-9$_.-]"
+_WINDOWS_UNC_PATH_CANDIDATE = re.compile(
+    r"(?i)\\{2,}(?P<server>[^\s\\/:*?\"<>|{}\[\]]+)"
+    r"\\+(?P<share>[^\s\\/:*?\"<>|{}\[\]]+)"
 )
-# The left boundary excludes the final letter of URI schemes such as https://.
+_FORWARD_UNC_PATH_CANDIDATE = re.compile(
+    r"(?i)(?<![:/])//(?P<server>[^\s\\/:*?\"<>|{}\[\]]+)"
+    r"/(?P<share>[^\s\\/:*?\"<>|{}\[\]]+)"
+)
+_URI_TOKEN = re.compile(
+    r"(?i)(?<![a-z0-9+.-])(?P<scheme>[a-z][a-z0-9+.-]*):/{2}[^\s]*"
+)
 _WINDOWS_DRIVE_PATH_CANDIDATE = re.compile(
-    r"(?i)(?<![a-z0-9+.-])(?P<drive>[a-z]):(?P<separator>[\\/])"
+    r"(?i)(?<![a-z0-9])(?P<drive>[a-z]):(?P<separator>[\\/])"
 )
 _LATEX_CONTROL_SEQUENCE = re.compile(r"\\+(?P<command>[a-zA-Z]+)")
-_PATH_CONTINUATION_AFTER_LATEX_WORD = re.compile(r"(?i)^[a-z0-9_. -]*[\\/]")
+_WINDOWS_COMPONENT_FORBIDDEN = frozenset('<>:"|?*')
 # This is intentionally a closed ambiguity list, not a general LaTeX stripper.
 # Unlisted words and recognized words followed by path-like continuation remain denied.
 _LATEX_DRIVE_AMBIGUITIES = frozenset(
@@ -78,20 +86,60 @@ _LATEX_DRIVE_AMBIGUITIES = frozenset(
 )
 
 
+def _is_uri_drive_ambiguity(value: str, candidate: re.Match[str]) -> bool:
+    for uri in _URI_TOKEN.finditer(value):
+        if not (uri.start() <= candidate.start() < uri.end()):
+            continue
+        if candidate.start() == uri.end("scheme") - 1:
+            return True
+        return (
+            candidate.group("separator") == "/"
+            and uri.group("scheme").lower() in {"http", "https"}
+        )
+    return False
+
+
+def _has_path_like_continuation(value: str, start: int) -> bool:
+    suffix = value[start:]
+    separators = [
+        index
+        for index in (suffix.find("\\"), suffix.find("/"))
+        if index >= 0
+    ]
+    if not separators:
+        return False
+    separator_index = min(separators)
+    component = suffix[:separator_index]
+    after_separator = separator_index
+    while (
+        after_separator < len(suffix)
+        and suffix[after_separator] in {"\\", "/"}
+    ):
+        after_separator += 1
+    if (
+        after_separator < len(suffix)
+        and suffix[after_separator] in "{}[]()"
+    ):
+        return False
+    return not any(character in _WINDOWS_COMPONENT_FORBIDDEN for character in component)
+
+
 def _contains_obvious_sensitive_marker(value: str) -> bool:
     if _OBVIOUS_CREDENTIAL_MARKER.search(value):
         return True
-    if _OBVIOUS_UNC_PATH_MARKER.search(value):
+    if _WINDOWS_UNC_PATH_CANDIDATE.search(value):
+        return True
+    if _FORWARD_UNC_PATH_CANDIDATE.search(value):
         return True
     for candidate in _WINDOWS_DRIVE_PATH_CANDIDATE.finditer(value):
+        if _is_uri_drive_ambiguity(value, candidate):
+            continue
         if candidate.group("separator") == "\\":
             control = _LATEX_CONTROL_SEQUENCE.match(value, candidate.end() - 1)
             if (
                 control is not None
                 and control.group("command").lower() in _LATEX_DRIVE_AMBIGUITIES
-                and not _PATH_CONTINUATION_AFTER_LATEX_WORD.match(
-                    value[control.end() :]
-                )
+                and not _has_path_like_continuation(value, control.end())
             ):
                 continue
         return True

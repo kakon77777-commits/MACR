@@ -63,6 +63,14 @@ class _CorruptLine:
     error_code: str
 
 
+@dataclass(frozen=True)
+class _ExistingLegacyEvent:
+    event_id: str
+    event_type: str
+    observed_at: str
+    payload_json: str
+
+
 class LegacyLedgerImporter:
     def __init__(
         self,
@@ -151,6 +159,23 @@ class LegacyLedgerImporter:
                     already_imported_count=existing["imported_count"],
                     complete=bool(existing["complete"]),
                 )
+            existing_events = self._existing_legacy_events(connection)
+            new_items: list[_ValidLine] = []
+            already_imported_count = 0
+            for item in valid:
+                prior = existing_events.get(item.event_id)
+                if prior is None:
+                    new_items.append(item)
+                    continue
+                if (
+                    prior.event_type != item.event_type
+                    or prior.observed_at != item.observed_at
+                    or prior.payload_json != _canonical_json(item.payload)
+                ):
+                    raise LegacyLedgerError(
+                        "legacy event identity conflicts with prior import"
+                    )
+                already_imported_count += 1
             imported_at = datetime.now(timezone.utc).isoformat()
             connection.execute(
                 """
@@ -173,7 +198,7 @@ class LegacyLedgerImporter:
                     imported_at,
                 ),
             )
-            for item in valid:
+            for item in new_items:
                 imported_id = hashlib.sha256(
                     (
                         f"{source_sha256}:{item.line_number}:"
@@ -236,10 +261,63 @@ class LegacyLedgerImporter:
             valid_count=len(valid),
             corrupt_count=len(corrupt),
             duplicate_count=duplicate_count,
-            imported_count=len(valid),
-            already_imported_count=0,
+            imported_count=len(new_items),
+            already_imported_count=already_imported_count,
             complete=complete,
         )
+
+    @staticmethod
+    def _existing_legacy_events(
+        connection: sqlite3.Connection,
+    ) -> dict[str, _ExistingLegacyEvent]:
+        rows = connection.execute(
+            """
+            SELECT event_id, event_type, observed_at, payload_json,
+                   source_sha256, source_line
+            FROM events
+            WHERE source_sha256 IS NOT NULL
+            ORDER BY sequence
+            """
+        ).fetchall()
+        result: dict[str, _ExistingLegacyEvent] = {}
+        for row in rows:
+            try:
+                payload = json.loads(
+                    row["payload_json"],
+                    object_pairs_hook=_strict_object,
+                )
+            except (_DuplicateJsonKey, json.JSONDecodeError) as exc:
+                raise LegacyLedgerError(
+                    "existing legacy event payload is invalid"
+                ) from exc
+            if not isinstance(payload, dict):
+                raise LegacyLedgerError(
+                    "existing legacy event payload is invalid"
+                )
+            legacy_event_id = payload.pop("legacy_event_id", None)
+            legacy_source_sha256 = payload.pop("legacy_source_sha256", None)
+            legacy_source_line = payload.pop("legacy_source_line", None)
+            if (
+                not isinstance(legacy_event_id, str)
+                or not legacy_event_id.strip()
+                or legacy_source_sha256 != row["source_sha256"]
+                or legacy_source_line != row["source_line"]
+            ):
+                raise LegacyLedgerError(
+                    "existing legacy event provenance is invalid"
+                )
+            candidate = _ExistingLegacyEvent(
+                event_id=row["event_id"],
+                event_type=row["event_type"],
+                observed_at=row["observed_at"],
+                payload_json=_canonical_json(payload),
+            )
+            if legacy_event_id in result:
+                raise LegacyLedgerError(
+                    "existing legacy event identity is duplicated"
+                )
+            result[legacy_event_id] = candidate
+        return result
 
     def read_quarantine(
         self,

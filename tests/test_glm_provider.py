@@ -753,6 +753,16 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             r"Read file:///D:/private-research/theory.txt",
             r"Read D:\text\secret.txt",
             r"Read D:\delta_u\secret.txt",
+            r"Read prefix-D:\private\secret.txt",
+            r"Read D:\text~1\secret.txt",
+            r"Read D:\text{domain}\secret.txt",
+            r"Read D:\text(archive)\secret.txt",
+            r"Read D:\text[archive]\secret.txt",
+            r"Read D:\text$cache\secret.txt",
+            r"Read D:\text@cache\secret.txt",
+            r"Read D:\text資料\secret.txt",
+            r"Read \\伺服器\分享\secret.txt",
+            r"Read //server/share/secret.txt",
         ):
             with self.subTest(goal=goal):
                 task = replace(delegated_task(), goal=goal)
@@ -771,10 +781,15 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
         for goal in (
             "api_key = hidden",
+            "api key: hidden",
             "access-token: hidden",
+            "access token = hidden",
             "private_key=hidden",
+            "private key: hidden",
             "-----BEGIN " + "PRIVATE" + " KEY-----",
             "-----BEGIN RSA " + "PRIVATE" + " KEY-----",
+            "-----BEGIN OPENSSH " + "PRIVATE" + " KEY-----",
+            "-----BEGIN EC " + "PRIVATE" + " KEY-----",
         ):
             with self.subTest(goal=goal):
                 with self.assertRaisesRegex(ProviderPolicyError, "sensitive marker"):
@@ -794,6 +809,9 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
         for goal in (
             "Summarize https://example.com/public-paper.",
+            "Summarize HTTPS://EXAMPLE.COM/public-paper.",
+            "Summarize x://example.invalid/public.",
+            "Summarize https://example.com/D:/public/paper.txt.",
             r"Analyze \min\{u>s:\delta_u<\delta_s\}.",
             r"Analyze \forall B:\neg R(A,B).",
             r"Analyze \{x\in D:\neg C_k(x)\}.",
@@ -807,6 +825,26 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
                     replace(delegated_task(), goal=goal)
                 )
                 self.assertEqual(metadata["provider_id"], "glm_flash_worker")
+
+        for command in (
+            "delta",
+            "exists",
+            "forall",
+            "neg",
+            "qquad",
+            "quad",
+            "text",
+            "texttt",
+        ):
+            for slash in ("\\", "\\\\"):
+                with self.subTest(command=command, slash=slash):
+                    metadata = provider.approval_metadata(
+                        replace(
+                            delegated_task(),
+                            goal=f"Analyze X:{slash}{command}.",
+                        )
+                    )
+                    self.assertEqual(metadata["provider_id"], "glm_flash_worker")
 
         task = replace(
             delegated_task(),

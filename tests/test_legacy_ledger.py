@@ -6,6 +6,7 @@ import unittest
 import uuid
 from pathlib import Path
 
+from macr_runtime.errors import LegacyLedgerError
 from macr_runtime.legacy_ledger import LegacyLedgerImporter
 from macr_runtime.runtime_db import RuntimeDatabase
 
@@ -31,6 +32,14 @@ def write_legacy_fixture(path: Path, *, count: int) -> Path:
             json.dumps(legacy_event(index), sort_keys=True) + "\n"
             for index in range(count)
         ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def write_legacy_documents(path: Path, documents: list[dict]) -> Path:
+    path.write_text(
+        "".join(json.dumps(item, sort_keys=True) + "\n" for item in documents),
         encoding="utf-8",
     )
     return path
@@ -157,6 +166,67 @@ class LegacyLedgerImporterTests(unittest.TestCase):
         self.assertEqual(second.imported_count, 0)
         self.assertEqual(second.already_imported_count, 3)
         self.assertTrue(second.complete)
+
+    def test_appended_source_imports_only_new_logical_events(self) -> None:
+        documents = [legacy_event(1), legacy_event(2)]
+        with d_drive_tempdir() as temp:
+            source = write_legacy_documents(temp / "events.jsonl", documents)
+            database = temp / "dispatch.sqlite3"
+            importer = LegacyLedgerImporter(database, temp / "quarantine")
+
+            first = importer.import_file(source, expected_count=2)
+            documents.append(legacy_event(3))
+            write_legacy_documents(source, documents)
+            appended_bytes = source.read_bytes()
+            second = importer.import_file(source, expected_count=3)
+            repeated = importer.import_file(source, expected_count=3)
+            after_import_bytes = source.read_bytes()
+
+            connection = sqlite3.connect(database)
+            event_count = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            source_count = connection.execute(
+                "SELECT COUNT(*) FROM legacy_sources"
+            ).fetchone()[0]
+            connection.close()
+
+        self.assertEqual(first.imported_count, 2)
+        self.assertEqual(first.already_imported_count, 0)
+        self.assertEqual(second.imported_count, 1)
+        self.assertEqual(second.already_imported_count, 2)
+        self.assertEqual(repeated.imported_count, 0)
+        self.assertEqual(repeated.already_imported_count, 3)
+        self.assertEqual(event_count, 3)
+        self.assertEqual(source_count, 2)
+        self.assertEqual(after_import_bytes, appended_bytes)
+
+    def test_changed_content_for_existing_legacy_event_id_fails_closed(self) -> None:
+        original = legacy_event(1)
+        changed = {
+            **original,
+            "payload": {
+                **original["payload"],
+                "status": "candidate_failure",
+            },
+        }
+        with d_drive_tempdir() as temp:
+            source = write_legacy_documents(temp / "events.jsonl", [original])
+            database = temp / "dispatch.sqlite3"
+            importer = LegacyLedgerImporter(database, temp / "quarantine")
+            importer.import_file(source, expected_count=1)
+            write_legacy_documents(source, [changed])
+
+            with self.assertRaisesRegex(LegacyLedgerError, "conflicts"):
+                importer.import_file(source, expected_count=1)
+
+            connection = sqlite3.connect(database)
+            event_count = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            source_count = connection.execute(
+                "SELECT COUNT(*) FROM legacy_sources"
+            ).fetchone()[0]
+            connection.close()
+
+        self.assertEqual(event_count, 1)
+        self.assertEqual(source_count, 1)
 
     def test_expected_count_shortfall_is_visible(self) -> None:
         with d_drive_tempdir() as temp:
