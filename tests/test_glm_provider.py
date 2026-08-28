@@ -751,6 +751,8 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             r"Read \\server\share\secret.txt",
             r"Read \\\\server\\share\\secret.txt",
             r"Read file:///D:/private-research/theory.txt",
+            r"Read file://server/share/secret.txt",
+            r"Read file:///etc/private.txt",
             r"Read D:\text\secret.txt",
             r"Read D:\delta_u\secret.txt",
             r"Read prefix-D:\private\secret.txt",
@@ -761,6 +763,8 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             r"Read D:\text$cache\secret.txt",
             r"Read D:\text@cache\secret.txt",
             r"Read D:\text資料\secret.txt",
+            r"Read D:\text\{secret}\file.txt",
+            r"Read D:\text\(secret)\file.txt",
             r"Read \\伺服器\分享\secret.txt",
             r"Read //server/share/secret.txt",
         ):

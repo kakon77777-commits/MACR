@@ -65,6 +65,7 @@ _FORWARD_UNC_PATH_CANDIDATE = re.compile(
 _URI_TOKEN = re.compile(
     r"(?i)(?<![a-z0-9+.-])(?P<scheme>[a-z][a-z0-9+.-]*):/{2}[^\s]*"
 )
+_FILE_URI = re.compile(r"(?i)(?<![a-z0-9+.-])file:/{2,}[^\s]*")
 _WINDOWS_DRIVE_PATH_CANDIDATE = re.compile(
     r"(?i)(?<![a-z0-9])(?P<drive>[a-z]):(?P<separator>[\\/])"
 )
@@ -116,16 +117,17 @@ def _has_path_like_continuation(value: str, start: int) -> bool:
         and suffix[after_separator] in {"\\", "/"}
     ):
         after_separator += 1
-    if (
-        after_separator < len(suffix)
-        and suffix[after_separator] in "{}[]()"
-    ):
-        return False
+    if after_separator < len(suffix) and suffix[after_separator] in "}])":
+        remainder = suffix[after_separator + 1 :]
+        if "\\" not in remainder and "/" not in remainder:
+            return False
     return not any(character in _WINDOWS_COMPONENT_FORBIDDEN for character in component)
 
 
 def _contains_obvious_sensitive_marker(value: str) -> bool:
     if _OBVIOUS_CREDENTIAL_MARKER.search(value):
+        return True
+    if _FILE_URI.search(value):
         return True
     if _WINDOWS_UNC_PATH_CANDIDATE.search(value):
         return True
