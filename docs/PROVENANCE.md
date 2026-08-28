@@ -78,8 +78,8 @@ Independent a1 replay produced one green sample and one blocking red sample. The
 The implementation-only repair boundary before version and documentation edits is:
 
 ```text
-implementation_commit = d1a61079e8715658d4ef29b06b40ea858ae69ab2
-implementation_tree   = 3281d563ff6e11dcd21c0774684135e5356e76ea
+implementation_commit = b6cbab09bc792d83f706e82caf34b19313ffc1b7
+implementation_tree   = d6b599505b9d47da3a291528a42c159f7a93bf43
 ```
 
-The a1 checkpoint document and external reviewer evidence remain historical artifacts and are not rewritten. v0.5.0a2 adds bounded WAL bootstrap handling, synchronized process controls, operational event schemas and recursive privacy guards, conservative plain-source wrapper rejection, and self-contained replay instructions. No provider was called during diagnosis or repair.
+The a1 checkpoint document and external reviewer evidence remain historical artifacts and are not rewritten. The single authorized twin rejected the first a2 repair candidate `d0aff2858b263492d2d75e9a22b2a20e41b08ecf` after reproducing acronym/path aliases, missing field-type enforcement, incomplete dynamic language headings, and a Python annotation false positive. Those findings were closed in the implementation boundary above with new RED/GREEN controls. No provider was called during diagnosis or repair.

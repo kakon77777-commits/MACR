@@ -24,8 +24,8 @@ Historical evidence remains unchanged:
 The implementation-only repair boundary before version and documentation edits is:
 
 ```text
-implementation_commit = d1a61079e8715658d4ef29b06b40ea858ae69ab2
-implementation_tree   = 3281d563ff6e11dcd21c0774684135e5356e76ea
+implementation_commit = b6cbab09bc792d83f706e82caf34b19313ffc1b7
+implementation_tree   = d6b599505b9d47da3a291528a42c159f7a93bf43
 ```
 
 The final repair commit cannot self-record its own ID; reviewers must recompute the exact candidate commit/tree supplied in the handoff.
@@ -55,15 +55,16 @@ The a1 candidate was not accepted. Reproduction separated four findings:
 
 ### Operational event privacy
 
-- Dispatch and terminal events accept only reviewed top-level field subsets before transaction start.
-- Candidate-capture metadata has a reviewed nested field subset.
-- Every event API recursively rejects prompt/answer/credential plus path/body/content keys, including snake_case, kebab-case, and camelCase forms normalized to `_path`, `_paths`, `_body`, and `_content` suffixes.
-- Windows drive and UNC path-like string values are rejected even under an alias key.
+- Dispatch and terminal events enforce required keys and reviewed field value types before transaction start, not only top-level names.
+- Candidate-capture metadata must be null or a complete typed object with its exact reviewed key set.
+- Every event API recursively rejects prompt/answer/credential plus path/body/content keys, including snake_case, kebab-case, ordinary camelCase, and acronym-bearing camelCase forms normalized to `_path`, `_paths`, `_body`, and `_content` suffixes.
+- Windows drive-absolute, drive-relative, backslash-UNC, and forward-UNC path-like string values are rejected even under an alias key.
 - HTTPS URLs and `hf.co/...` model identifiers are positive controls and remain permitted.
 
 ### Return contracts
 
-- `PLAIN_SOURCE` rejects Markdown fences, evidence/warning sections, and common leading wrappers: `Here is`, `Here's`, `Below is`, `The following`, `Source:`, `Code:`, and language-label headings.
+- `PLAIN_SOURCE` rejects Markdown fences, evidence/warning sections, common leading wrappers, and headings dynamically derived from the task's declared language.
+- Generic `Source:`/`Code:` wrappers require the colon to end the line, so valid source such as Python `code: str = 'ok'` remains accepted.
 - Ordinary source comments remain valid.
 - This is a conservative format guard, not a language parser or compilation proof.
 - `JSON_OBJECT` remains semantic-object validation; `EXACT_TEXT` remains the byte-exact contract.
@@ -85,10 +86,10 @@ The complete gate remains:
 
 ## Primary-agent verification before twin replay
 
-Observed final pre-commit full gate:
+Observed final post-twin pre-commit full gate:
 
 ```text
-Ran 248 tests in 18.021s
+Ran 250 tests in 17.076s
 OK (skipped=2)
 doctor version = 0.5.0a2
 doctor network_activity = false
@@ -114,17 +115,13 @@ The synchronized 32-process bootstrap subject also passed eight consecutive addi
 - Generic standalone diagnostics remain caller-governed beyond the explicit recursive key/path guards. Operational runtime events are the strict allowlisted boundary.
 - SQLite bootstrap retry has a bounded deadline; persistent lock or storage failure remains a real failure and is not hidden.
 
-## Twin verification instructions
+## Single twin review and post-twin closure
 
-One read-only twin verifier may begin only after the repair candidate is committed and its exact commit/tree are supplied. The twin must:
+The one authorized twin reviewed exact candidate `d0aff2858b263492d2d75e9a22b2a20e41b08ecf` / tree `700f96674c6a7761ea825b91947a26fc39bd1d09` read-only. Its full and dedicated gates passed, including eight observed synchronized-bootstrap executions, but it returned **Not ready** after finding:
 
-1. recompute candidate commit/tree and verify clean pre/post status;
-2. run the two self-contained commands above;
-3. repeat synchronized 32-process fresh bootstrap at least five times;
-4. attack transient/non-transient WAL failures separately;
-5. inject unknown operational fields, path/body keys, and aliased Windows/UNC path values while retaining HTTPS/model positive controls;
-6. replay all plain-source wrappers and JSON semantic controls;
-7. confirm the a1 checkpoint and both external evidence files retain their recorded bytes/SHA;
-8. perform no provider call, source edit, merge, release, deploy, publication, or Checkpoint B work.
+1. acronym-bearing camel aliases and forward-UNC/drive-relative path bypasses;
+2. operational schemas that constrained names but not value types or candidate-capture shape;
+3. hardcoded language headings that missed Python/Rust/`TypeScript source:`;
+4. a generic `code:` pattern that rejected valid Python annotation syntax.
 
-Twin output is verification evidence only. Neo retains acceptance and integration authority.
+The implementation boundary recorded above adds independent RED/GREEN tests for each exact finding. The twin seat is consumed; no second subagent review is authorized. Final post-twin evidence is produced by the primary agent, remains verification rather than acceptance, and grants no merge/release authority.

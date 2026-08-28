@@ -60,7 +60,7 @@ D:\AI_RESIDENCE\AI_Runtime\macr-state\
 
 SQLite event and accounting databases contain bounded operational metadata, not prompts, candidate bytes, credentials, local input paths, or remote response bodies. Candidate files are create-once and referenced publicly by byte count and SHA-256 only. A transformed materialization cannot claim verbatim provenance.
 
-Operational event payloads use reviewed top-level schemas plus recursive key/value privacy guards. Windows/UNC paths and path/body/content fields fail before persistence. WAL is configured during bounded bootstrap and verified on ordinary connections, avoiding concurrent journal-mode mutation during steady-state use.
+Operational event payloads use required keys, reviewed field types, exact candidate-capture shape, and recursive key/value privacy guards. Acronym-bearing aliases and drive-relative/absolute or backslash/forward-UNC paths fail before persistence. WAL is configured during bounded bootstrap and verified on ordinary connections, avoiding concurrent journal-mode mutation during steady-state use.
 
 ## Legacy JSONL migration
 

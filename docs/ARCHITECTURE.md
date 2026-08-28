@@ -142,7 +142,7 @@ return_contract_state
 
 Missing metrics remain null. Task inputs, prompts, candidate bytes, warnings, thinking, credentials, local source paths, artifact paths/content, and error bodies are excluded. Candidate bytes are immutable files beneath `candidates`; event rows expose only content-free hashes and counts. Return-contract rejection never rewrites the raw capture.
 
-Dispatch and terminal payloads are top-level allowlisted. Every event API also applies a recursive privacy guard that rejects path/body/content keys and Windows or UNC path-like string values before transaction start. Generic diagnostics may still use reviewed metadata keys and HTTPS/model identifiers.
+Dispatch and terminal payloads enforce required keys, reviewed field types, and exact candidate-capture shape as well as top-level names. Every event API also applies a recursive privacy guard that normalizes snake/kebab/camel/acronym forms and rejects path/body/content keys plus drive-absolute, drive-relative, backslash-UNC, and forward-UNC values before transaction start. Generic diagnostics may still use reviewed metadata keys and HTTPS/model identifiers.
 
 The legacy `ledger\events.jsonl` is immutable input evidence. Import is copy-only and idempotent. Corrupt or forbidden lines are retained byte-for-byte in quarantine and make the source incomplete; the CLI refuses provider invocation until the current nonempty source hash has a complete import record.
 
@@ -166,4 +166,4 @@ generation != verification != acceptance
 
 Every provider completion is a candidate. MACR v0.5.0a2 records provider, capture, return-contract, materialization, verification, and acceptance states independently; this checkpoint still implements no verifier decision or accepted-result transition.
 
-`PLAIN_SOURCE` is a conservative wrapper-format guard: it rejects Markdown fences, evidence/warning sections, and common leading prose wrappers. It does not prove that arbitrary source compiles. `JSON_OBJECT` validates one semantic object with unique keys; whitespace, final newline, and member order are not significant. Byte-exact JSON belongs under `EXACT_TEXT`.
+`PLAIN_SOURCE` is a conservative wrapper-format guard: it rejects Markdown fences, evidence/warning sections, common leading prose wrappers, and headings derived from the task's declared language. A generic `Code:`/`Source:` heading is rejected only when the colon ends the line, avoiding false rejection of source such as Python `code: str = 'ok'`. It does not prove that arbitrary source compiles. `JSON_OBJECT` validates one semantic object with unique keys; whitespace, final newline, and member order are not significant. Byte-exact JSON belongs under `EXACT_TEXT`.
