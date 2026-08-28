@@ -24,7 +24,7 @@ Set-Location 'D:\Ai\work together\MACR\.worktrees\macr-v0.5-direct-chat-ui'
 .\scripts\install-direct-chat-shortcut.ps1
 ```
 
-Then open **MACR Direct Chat (Alpha)** from the Desktop. The shortcut contains no provider key or bootstrap token. It launches a hidden D-drive PowerShell entry point, loads the existing xAI credential helper only into the child process, starts one `127.0.0.1` server on an OS-assigned port, and opens the default browser. A second launch opens the existing instance instead of starting another server.
+Then open **MACR Direct Chat (Alpha)** from the Desktop. The shortcut contains no provider key or bootstrap token. It launches a hidden D-drive PowerShell entry point, uses the repository's bounded loader to read `D:\KEY\GROK.txt` only into the child process, starts one `127.0.0.1` server on an OS-assigned port, and opens the default browser. The loader accepts the observed legacy `xai-...` form and the current UUID-shaped credential without printing diagnostics. A second launch opens the existing instance instead of starting another server.
 
 Local startup smoke without model generation:
 

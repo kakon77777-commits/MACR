@@ -13,6 +13,7 @@ from tests.support import DEFAULT_TEST_ROOT
 ROOT = Path(__file__).resolve().parents[1]
 START = ROOT / "scripts" / "start-direct-chat.ps1"
 INSTALL = ROOT / "scripts" / "install-direct-chat-shortcut.ps1"
+READ_KEY = ROOT / "scripts" / "read-grok-key.ps1"
 
 
 def run_powershell(*arguments: str) -> subprocess.CompletedProcess[str]:
@@ -27,6 +28,61 @@ def run_powershell(*arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 class DirectLauncherScriptTests(unittest.TestCase):
+    def test_grok_key_loader_accepts_legacy_and_uuid_without_logging(self) -> None:
+        DEFAULT_TEST_ROOT.mkdir(parents=True, exist_ok=True)
+        legacy_path = DEFAULT_TEST_ROOT / f"grok-legacy-{uuid.uuid4()}.txt"
+        uuid_path = DEFAULT_TEST_ROOT / f"grok-uuid-{uuid.uuid4()}.txt"
+        invalid_path = DEFAULT_TEST_ROOT / f"grok-invalid-{uuid.uuid4()}.txt"
+        legacy_token = "xai-" + ("A" * 24)
+        uuid_token = "00000000-0000-4000-8000-000000000999"
+        legacy_path.write_text(legacy_token + "\n", encoding="utf-8")
+        uuid_path.write_text(uuid_token, encoding="utf-8")
+        invalid_path.write_text("not a valid token", encoding="utf-8")
+        try:
+            legacy = run_powershell(
+                "-File",
+                str(READ_KEY),
+                "-CredentialPath",
+                str(legacy_path),
+            )
+            self.assertEqual(legacy.returncode, 0, legacy.stderr)
+            self.assertEqual(legacy.stdout.rstrip("\r\n"), legacy_token)
+
+            current = run_powershell(
+                "-File",
+                str(READ_KEY),
+                "-CredentialPath",
+                str(uuid_path),
+            )
+            self.assertEqual(current.returncode, 0, current.stderr)
+            self.assertEqual(current.stdout.rstrip("\r\n"), uuid_token)
+
+            escaped_script = str(READ_KEY).replace("'", "''")
+            escaped_path = str(uuid_path).replace("'", "''")
+            capture_command = (
+                "$value=& '"
+                + escaped_script
+                + "' -CredentialPath '"
+                + escaped_path
+                + "'; if ($null -eq $value) { exit 7 }; "
+                "[Console]::Out.Write($value)"
+            )
+            captured = run_powershell("-Command", capture_command)
+            self.assertEqual(captured.returncode, 0, captured.stderr)
+            self.assertEqual(captured.stdout, uuid_token)
+
+            invalid = run_powershell(
+                "-File",
+                str(READ_KEY),
+                "-CredentialPath",
+                str(invalid_path),
+            )
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertNotIn("not a valid token", invalid.stderr)
+        finally:
+            for path in (legacy_path, uuid_path, invalid_path):
+                path.unlink(missing_ok=True)
+
     def test_start_script_dry_run_is_content_free_and_d_drive_bound(self) -> None:
         result = run_powershell("-File", str(START), "-DryRun")
         self.assertEqual(result.returncode, 0, result.stderr)

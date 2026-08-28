@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $stateRoot = 'D:\AI_RESIDENCE\AI_Runtime\macr-state'
-$credentialHelper = 'D:\AI_RESIDENCE\AI_Runtime\codex-home\helpers\Get-XaiApiKey.ps1'
+$credentialHelper = (Resolve-Path (Join-Path $PSScriptRoot 'read-grok-key.ps1')).Path
 $pythonCommand = Get-Command python.exe -ErrorAction Stop
 
 if (-not $repoRoot.StartsWith('D:\', [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -33,7 +33,7 @@ if ($DryRun) {
 
 $xaiKey = $null
 try {
-    $xaiKey = (& $credentialHelper)
+    $xaiKey = (& $credentialHelper -CredentialPath 'D:\KEY\GROK.txt')
     if ([string]::IsNullOrWhiteSpace($xaiKey)) {
         throw 'The xAI credential helper returned no credential.'
     }

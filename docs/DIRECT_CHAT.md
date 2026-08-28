@@ -18,11 +18,13 @@ The resulting Desktop entry is **MACR Direct Chat (Alpha)**. It points to `scrip
 On launch, the PowerShell entry point:
 
 1. resolves the a4 source tree and D-drive runtime root;
-2. invokes the existing `D:\AI_RESIDENCE\AI_Runtime\codex-home\helpers\Get-XaiApiKey.ps1` helper without printing the returned token;
+2. invokes the repository's `scripts\read-grok-key.ps1` bounded loader against `D:\KEY\GROK.txt` without printing the returned token or diagnostics;
 3. injects the token into the hidden child process only;
 4. starts or reopens one loopback Direct server;
 5. clears the parent PowerShell environment value;
 6. opens the default browser with a one-time fragment bootstrap.
+
+The loader accepts only a single non-whitespace token in the historical `xai-...` form or the currently observed UUID form. The credential file must be an ordinary D-drive file, not a reparse point.
 
 The server shuts down after 30 idle minutes by default. Active requests and unsettled accounting keep it alive. Launching the shortcut again opens the existing instance when it is reachable.
 
