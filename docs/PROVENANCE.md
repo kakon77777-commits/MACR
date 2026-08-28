@@ -106,7 +106,22 @@ The third pair `674b3bb88dc086f6d8d310194717ab46397c76c0` / `ca6547d271fb97c7394
 | `D:\Ai\work together\MSSP_Architect_Exchange\evidence\2026-08-28-pragma-macr-route-drift-after-t6.md` | 2,284 | `6C0FE0A103601CBFA7371A68E04DB541E020930B3B23917832B27D73F78246B7` |
 | `D:\Ai\work together\MSSP_Architect_Exchange\evidence\2026-08-28-pragma-post-migration-legacy-tail.md` | 3,145 | `3A91A0586253E533D213D9C1768B5778281DB17B2890550248130BE4F0CF8CF3` |
 
-The 132-document manifest remains external evidence. Its exact member bytes were not resolvable from current searchable D-drive paths during this repair, so no local 132/132 rescan is claimed. Read-only inspection also found the legacy source had advanced from the previously migrated 64-event hash to 68 events under a new hash while SQLite retained only the old complete source record. The repaired comparison logic measured 64 exact prior identities, four new identities, and zero conflicts without writing. The a3 route therefore remains offline-only until old writers are retired, the source is sealed read-only, and an explicitly authorized idempotent 68-event reconciliation completes. No provider call, key read, approval creation, second legacy migration, shared-runtime write, merge, release, deployment, or publication occurred.
+The 132-document manifest remains external evidence. Its exact member bytes were not resolvable from current searchable D-drive paths during this repair, so no local 132/132 rescan is claimed. At the initial a3 checkpoint, read-only inspection found the legacy source had advanced from the previously migrated 64-event hash to 68 events under a new hash while SQLite retained only the old complete source record. The repaired comparison logic measured 64 exact prior identities, four new identities, and zero conflicts without writing. The checkpoint was therefore correctly published as offline-only at that time. No provider call, key read, approval creation, second legacy migration, shared-runtime write, merge, release, deployment, or publication occurred during that repair checkpoint.
+
+## v0.5.0a3 bounded live-route activation
+
+Neo later clarified that MACR/v0.6 development was paused so the three MSSP architects could use the stable a3 runtime; this was not a cancellation of bounded MACR/GLM use. The MACR owner froze the clean a3 subject and published an exact live route. The legacy source had advanced to 74 events before sealing, so the earlier 68-event runbook remained historical and was not reused.
+
+| Route evidence | Bytes | SHA-256 |
+|---|---:|---|
+| `decisions/2026-08-28-neo-macr-update-pause-clarification.md` | 1,495 | `69839675762BEA309B8FE0759379FBBAE76B26D170E9647613992958BEDB11ED` |
+| `decisions/2026-08-28-macr-a3-live-route-legacy74.md` | 7,289 | `8A43F7F6FEFF86D05120C66A0720FF03C058570270A7CF9EC839687A55647B13` |
+| `evidence/2026-08-28-metron-macr-a3-legacy74-reconciliation.md` | 2,579 | `AB8144F777AAF779E666D5D39962B5BFDCFB80D30A404833C25ACE3A8313D098` |
+| `decisions/2026-08-28-neo-mssp-p1-p3-standing-authorization.md` | 4,777 | `FA2C0044274D8362105315E3414B4E99855C18134EDB54E57B8E2A8E68267CF0` |
+
+The authorized one-operator reconciliation sealed the 41,490-byte legacy JSONL read-only at SHA-256 `80AF74FB9FB20FF805E168F13A40E4DC585DA20AEA3778347FDDE6CC29128299`. Dry-run observed 74 valid/distinct events with zero corrupt or duplicate records. The first copy-import reported 10 new and 64 already imported; the identical repeat reported zero new and 74 already imported. Readback showed 76 runtime events, 74 legacy-backed events, one complete current-source row, and zero active leases.
+
+The current route is active for bounded sequential `glm_flash_worker` use after each exact P1/P2/P3 v2 member exists and passes one peer static audit. Standing Neo authorization permits a trusted operator to finalize the exact digest, create/replace the 30-day host approval, preflight, and invoke once without returning for a new conversational authorization on every member. All v1 tasks remain blocked. No automatic retry, provider/model fallback, concurrent fan-out, merge, release, deployment, adoption, or named resident authority follows.
 
 ## v0.6 design and implementation-plan intake
 
@@ -119,4 +134,4 @@ The reviewed canonical candidate and master implementation plan were copied byte
 | `docs/superpowers/specs/2026-08-28-macr-v0.6-dynamic-coordination-design.md` | 22,219 | `96F80327174335997AADDEFC8214E4116765604D9DD3F2C7F71742287AD3B67C` |
 | `docs/superpowers/plans/2026-08-28-macr-v0.6-dynamic-coordination.md` | 50,717 | `44267DB22C74124A41F1797FCE6B1E6C86B82285E18E8F324BE0E7D1B02FD172` |
 
-This intake is documentation-only. MACR remains version `0.5.0a3`; the a3 checkpoint commit/tree remains an immutable ancestor; the current route remains offline-only; no v0.6 branch, runtime schema, provider call, discovery call, automation, legacy seal/migration, merge, release, or deployment is created by the intake.
+This intake is documentation-only. MACR remains version `0.5.0a3`; the original a3 checkpoint commit/tree remains an immutable ancestor. The intake itself did not create provider, discovery, automation, migration, merge, release, or deployment authority. The bounded live route described above was activated separately under Neo's direct clarification and completed 74-event reconciliation; v0.6 implementation remains paused while the MSSP batch uses the frozen a3 runtime.
