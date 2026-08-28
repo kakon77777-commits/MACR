@@ -23,6 +23,14 @@ _LANGUAGE_LABELS = {
     "javascript": "JavaScript",
     "typescript": "TypeScript",
 }
+_PLAIN_SOURCE_WRAPPER = re.compile(
+    r"""(?ix)\A\s*(?:
+        here(?:['’]s|\s+is)\b
+        | below\s+is\b
+        | the\s+following\b
+        | (?:plain\s+)?(?:source|code|typescript|javascript|c\#)\s*:
+    )"""
+)
 
 
 class _DuplicateJsonKey(ValueError):
@@ -110,10 +118,13 @@ def validate_return_contract(
             "exact_text_match" if answer == contract.exact_text else "exact_text_mismatch",
         )
     if contract.format is ReturnFormat.PLAIN_SOURCE:
-        prohibited = re.search(
-            r"```|^\s*(?:evidence|warnings?)\s*:",
-            answer,
-            flags=re.IGNORECASE | re.MULTILINE,
+        prohibited = (
+            re.search(
+                r"```|^\s*(?:evidence|warnings?)\s*:",
+                answer,
+                flags=re.IGNORECASE | re.MULTILINE,
+            )
+            or _PLAIN_SOURCE_WRAPPER.search(answer)
         )
         return ReturnContractValidation(
             (

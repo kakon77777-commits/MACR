@@ -42,7 +42,19 @@ class ReturnContractCompilerTests(unittest.TestCase):
             task,
             "```typescript\nexport {};\n```\nEvidence: compiled",
         )
+        prose_wrappers = (
+            "Here is the source:\nexport {};",
+            "Here's the TypeScript:\nexport {};",
+            "Below is the code:\nexport {};",
+            "The following source implements it:\nexport {};",
+            "Source:\nexport {};",
+            "Code:\nexport {};",
+        )
         valid = validate_return_contract(task, "export {};\n")
+        comment_control = validate_return_contract(
+            task,
+            "// bounded source\nexport {};\n",
+        )
 
         self.assertIn("Return only plain TypeScript source", instruction)
         self.assertNotIn("evidence and warnings", instruction)
@@ -51,7 +63,16 @@ class ReturnContractCompilerTests(unittest.TestCase):
             invalid.reason_code,
             "plain_source_has_fence_or_prose",
         )
+        for answer in prose_wrappers:
+            with self.subTest(answer=answer):
+                validation = validate_return_contract(task, answer)
+                self.assertEqual(validation.state, ReturnContractState.INVALID)
+                self.assertEqual(
+                    validation.reason_code,
+                    "plain_source_has_fence_or_prose",
+                )
         self.assertEqual(valid.state, ReturnContractState.VALID)
+        self.assertEqual(comment_control.state, ReturnContractState.VALID)
 
     def test_exact_text_no_longer_depends_on_goal_prefix(self) -> None:
         task = replace(
@@ -89,10 +110,18 @@ class ReturnContractCompilerTests(unittest.TestCase):
         )
 
         valid = validate_return_contract(task, '{"one":1}')
+        whitespace_and_order_control = validate_return_contract(
+            task,
+            '{\n  "two": 2,\n  "one": 1\n}\n',
+        )
         duplicate = validate_return_contract(task, '{"one":1,"one":2}')
         array = validate_return_contract(task, "[]")
 
         self.assertEqual(valid.state, ReturnContractState.VALID)
+        self.assertEqual(
+            whitespace_and_order_control.state,
+            ReturnContractState.VALID,
+        )
         self.assertEqual(duplicate.reason_code, "json_duplicate_key")
         self.assertEqual(array.reason_code, "json_not_object")
 
