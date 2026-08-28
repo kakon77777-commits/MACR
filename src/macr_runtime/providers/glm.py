@@ -65,7 +65,7 @@ _FORWARD_UNC_PATH_CANDIDATE = re.compile(
 _URI_TOKEN = re.compile(
     r"(?i)(?<![a-z0-9+.-])(?P<scheme>[a-z][a-z0-9+.-]*):/{2}[^\s]*"
 )
-_FILE_URI = re.compile(r"(?i)(?<![a-z0-9+.-])file:/{2,}[^\s]*")
+_FILE_URI = re.compile(r"(?i)(?<![a-z0-9+.-])file:[^\s]+")
 _WINDOWS_DRIVE_PATH_CANDIDATE = re.compile(
     r"(?i)(?<![a-z0-9])(?P<drive>[a-z]):(?P<separator>[\\/])"
 )
