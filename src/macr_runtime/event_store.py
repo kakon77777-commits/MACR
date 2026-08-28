@@ -136,7 +136,11 @@ def _validate_payload(value: Any) -> None:
         for key, child in value.items():
             if not isinstance(key, str):
                 raise ValueError("event payload keys must be strings")
-            normalized_key = key.strip().lower().replace("-", "_")
+            normalized_key = re.sub(
+                r"(?<=[a-z0-9])(?=[A-Z])",
+                "_",
+                key.strip(),
+            ).lower().replace("-", "_")
             if (
                 normalized_key in _FORBIDDEN_PAYLOAD_KEYS
                 or normalized_key.endswith(_FORBIDDEN_PAYLOAD_KEY_SUFFIXES)

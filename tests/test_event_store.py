@@ -100,6 +100,8 @@ class SqliteEventStoreTests(unittest.TestCase):
             "source_path",
             "remote_body",
             "error_body",
+            "localPath",
+            "remoteBody",
         )
         with d_drive_tempdir() as temp:
             store = SqliteEventStore(temp / "dispatch.sqlite3")
