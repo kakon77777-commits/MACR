@@ -552,6 +552,16 @@ class AccountingStore:
             for row in rows
         )
 
+    def unsettled_count(self) -> int:
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM invocations WHERE terminal_at IS NULL"
+            ).fetchone()
+        finally:
+            connection.close()
+        return int(row["count"])
+
     def upsert_provider_account(
         self,
         *,

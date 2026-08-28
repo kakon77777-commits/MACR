@@ -5,6 +5,8 @@ import hmac
 import json
 import re
 import secrets
+import threading
+import time
 from dataclasses import dataclass
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -51,6 +53,9 @@ class _DirectServerState:
         self.bootstrap_token = secrets.token_urlsafe(32)
         self._bootstrap_digest: str | None = self._digest(self.bootstrap_token)
         self._sessions: dict[str, str] = {}
+        self._activity_lock = threading.Lock()
+        self._active_requests = 0
+        self._last_activity = time.monotonic()
 
     @staticmethod
     def _digest(value: str) -> str:
@@ -84,6 +89,26 @@ class _DirectServerState:
                 return native_id
         return None
 
+    def request_started(self) -> None:
+        with self._activity_lock:
+            self._active_requests += 1
+            self._last_activity = time.monotonic()
+
+    def request_finished(self) -> None:
+        with self._activity_lock:
+            self._active_requests = max(0, self._active_requests - 1)
+            self._last_activity = time.monotonic()
+
+    @property
+    def active_requests(self) -> int:
+        with self._activity_lock:
+            return self._active_requests
+
+    @property
+    def idle_seconds(self) -> float:
+        with self._activity_lock:
+            return max(0.0, time.monotonic() - self._last_activity)
+
 
 class DirectChatServer:
     def __init__(
@@ -111,6 +136,14 @@ class DirectChatServer:
     @property
     def bootstrap_url(self) -> str:
         return f"{self.base_url}/#{self.bootstrap_token}"
+
+    @property
+    def active_requests(self) -> int:
+        return self._state.active_requests
+
+    @property
+    def idle_seconds(self) -> float:
+        return self._state.idle_seconds
 
     def serve_forever(self) -> None:
         self._httpd.serve_forever(poll_interval=0.1)
@@ -468,6 +501,7 @@ def _handler_class(state: _DirectServerState):
             raise _HttpFailure(404, "route_not_found")
 
         def _handle(self) -> None:
+            state.request_started()
             try:
                 self._dispatch()
             except _HttpFailure as exc:
@@ -482,6 +516,8 @@ def _handler_class(state: _DirectServerState):
                 self._reject(409, "direct_failure")
             except Exception:
                 self._reject(500, "internal_error")
+            finally:
+                state.request_finished()
 
         def do_GET(self) -> None:
             self._handle()

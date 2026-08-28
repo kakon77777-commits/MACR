@@ -39,7 +39,7 @@ def _doctor(
     registry = ProviderRegistry.from_configs(configs, key_sources=key_sources)
     report = {
         "runtime": "macr-runtime",
-        "version": "0.5.0a3",
+        "version": "0.5.0a4",
         "network_activity": False,
         "storage": layout.describe(),
         "providers": list(registry.health()),
@@ -421,7 +421,7 @@ def _invoke(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="macr",
-        description="MACR v0.5.0a3 shared-core control utility",
+        description="MACR v0.5.0a4 shared-core and Direct Chat control utility",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -496,6 +496,28 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="explicitly authorize this command to load and call a loopback provider",
     )
+
+    direct = sub.add_parser(
+        "direct-chat",
+        help="start the on-demand loopback Direct Chat UI",
+    )
+    direct.add_argument(
+        "--smoke",
+        action="store_true",
+        help="start, bootstrap, and stop locally without provider generation",
+    )
+    direct.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="serve without opening the default browser",
+    )
+    direct.add_argument(
+        "--idle-minutes",
+        type=int,
+        default=30,
+        help="idle shutdown window from 1 to 1440 minutes",
+    )
+    direct.add_argument("--config", help="provider configuration JSON path")
     return parser
 
 
@@ -532,5 +554,31 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.config,
             args.allow_network,
             args.allow_local,
+        )
+    if args.command == "direct-chat":
+        from .direct_launcher import run_direct_chat, smoke_direct_chat
+
+        layout = StorageLayout.from_environment()
+        if args.smoke:
+            print(
+                json.dumps(
+                    smoke_direct_chat(
+                        layout,
+                        config_path=args.config,
+                        environ=os.environ,
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        if not 1 <= args.idle_minutes <= 1440:
+            raise ValueError("idle-minutes must be between 1 and 1440")
+        return run_direct_chat(
+            layout,
+            config_path=args.config,
+            idle_timeout_seconds=args.idle_minutes * 60,
+            open_browser=not args.no_browser,
+            environ=os.environ,
         )
     raise AssertionError(f"unhandled command: {args.command}")
