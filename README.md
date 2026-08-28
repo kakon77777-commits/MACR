@@ -2,7 +2,7 @@
 
 MACR is a migration-aware runtime for heterogeneous AI workers. Checkpoint A adds a host-neutral, cross-process-safe shared core around the existing provider adapters. Provider generation, return-contract validity, materialization, verification, and acceptance remain separate states; a provider completion never becomes accepted work automatically.
 
-This alpha line supersedes the unaccepted v0.5.0a1 candidate after independent replay found a fresh-SQLite bootstrap race, incomplete event-payload privacy enforcement, a plain-source wrapper gap, and a non-self-contained replay command. v0.5.0a3 additionally separates obvious Windows-path detection from HTTPS schemes and a closed set of observed LaTeX control-sequence ambiguities while retaining drive, UNC, credential, and private-key refusal controls. It does **not** implement Direct Chat, a browser UI, Codex/Claude Code host adapters, bounded fan-out, or Context Capsules.
+This alpha line supersedes the unaccepted v0.5.0a1 candidate after independent replay found a fresh-SQLite bootstrap race, incomplete event-payload privacy enforcement, a plain-source wrapper gap, and a non-self-contained replay command. v0.5.0a3 additionally separates obvious Windows-path detection from URI/HTTPS and a closed set of observed LaTeX control-sequence ambiguities while retaining drive, Unicode/backslash/forward UNC, credential-label, and algorithm-prefixed private-key refusal controls. It also reconciles append-only legacy source growth by logical event identity rather than duplicating the unchanged prefix under every new source hash. It does **not** implement Direct Chat, a browser UI, Codex/Claude Code host adapters, bounded fan-out, or Context Capsules.
 
 ## Canonical D: placement
 
@@ -81,6 +81,8 @@ If the preserved JSONL ledger is nonempty, inspect it before the first v0.5 invo
 ```
 
 Use `--expected-count N` when an external exact count is available. Import is copy-only and idempotent. Invalid UTF-8, malformed JSON, duplicate keys, forbidden content fields, duplicate original IDs, or an expected-count mismatch make migration incomplete. Corrupt bytes are retained under `quarantine`; provider invocation remains blocked until the current source hash has a complete import record.
+
+If an append-only source grows after an earlier import, unchanged logical events are matched by original event ID, type, timestamp, and canonical payload. Only the new tail is inserted; conflicting reuse of an existing ID fails closed.
 
 A v0.5 live route also requires every v0.4 invoker to be retired and the preserved JSONL source to be sealed with the Windows read-only attribute before the authoritative hash/count snapshot and migration. See `docs/STORAGE_AND_MIGRATION.md`. The SQLite current-hash gate detects later drift, but it does not grant authority to unseal or rerun an old writer.
 

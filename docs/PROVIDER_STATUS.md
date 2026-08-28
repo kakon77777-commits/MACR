@@ -1,6 +1,6 @@
 # Provider status
 
-Updated: 2026-08-27
+Updated: 2026-08-28
 
 | Provider ID | Required model/route | Credential | Billing | Runtime state |
 |---|---|---|---:|---|

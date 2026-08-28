@@ -82,6 +82,8 @@ Copy-import after reviewing the counts and source hash:
 
 Every nonblank line is parsed with strict UTF-8, unique JSON keys, a timezone-aware timestamp, and a content-free event payload. Invalid UTF-8, malformed JSON, invalid shape, duplicate keys, forbidden content fields, duplicate original event IDs, or expected-count mismatch makes the source incomplete. Corrupt line bytes are stored in SQLite and copied byte-for-byte to `quarantine`; valid lines remain imported as provenance but cannot make the batch complete. Repeating an identical complete import changes zero rows.
 
+When an append-only source grows and therefore receives a new file hash, the importer reconciles each valid line against prior imports using the original legacy event ID, event type, timestamp, and canonical original payload. Exact matches count as already imported and only new logical events are inserted. Reusing an existing legacy event ID with changed content fails the transaction. Reused event rows retain their first-import source provenance; each reviewed source snapshot has its own exact `legacy_sources` hash and count record.
+
 When `ledger\events.jsonl` is nonempty and its current SHA-256 lacks a complete matching import record, `macr invoke` returns `legacy_migration_required` before reading the task, creating one-shot authority, acquiring a lease, dispatching, or contacting a provider. A corrupt import returns `legacy_migration_incomplete`; it never silently starts from empty history.
 
 Before any v0.5 live route, retire all legacy v0.4 invocation entry points, confirm the GLM invoker census is zero, and set the preserved JSONL source to Windows read-only. Verify the attribute before taking the hash/count snapshot used for dry-run and copy-import:

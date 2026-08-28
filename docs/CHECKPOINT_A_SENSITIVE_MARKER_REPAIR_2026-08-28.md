@@ -5,12 +5,14 @@ Status: local offline candidate; not merged, released, deployed, live-accepted, 
 ## Exact implementation boundary
 
 ```text
-implementation_commit = 4a54acbdd405ee955346f112a1a45e3798850841
-implementation_tree   = 22d4549090fbfcfbdbaba036391a928f5cf8b785
+implementation_commit = dd0e36831f8b64556aa2df5ad4f6a8abdc2d3f59
+implementation_tree   = 242658eaa718e41ea3f043ec76ac7c1c6c22838a
 parent_candidate      = 8697e25fa8541a89aa2f39b294a733cf15c79bcd
 ```
 
 The earlier live route bound to the clean parent candidate closed as soon as this repair worktree changed. No approval, migration, provider call, or shared-runtime write was performed by this repair.
+
+The initial a3 implementation/checkpoint pair `4a54acbdd405ee955346f112a1a45e3798850841` / `575b9b5555874067ba999b84f5176ce19dfa7853` was independently rejected. Review proved that changed source hashes would duplicate prior legacy events, recognized LaTeX words could hide paths through valid Windows filename characters, and the documented UNC/credential/private-key coverage was narrower than claimed. The exact implementation boundary above supersedes that rejected pair without rewriting it.
 
 ## Defect and repair boundary
 
@@ -18,11 +20,11 @@ The former case-insensitive pattern treated every `letter + colon + slash` seque
 
 v0.5.0a3 keeps this as an intentionally conservative obvious-marker heuristic rather than claiming general semantic classification:
 
-- credential and private-key markers are checked independently;
-- UNC candidates require an evident server and share component;
-- drive candidates require a left boundary that excludes URI-scheme letters;
+- credential labels accept space, underscore, or hyphen separators, and private-key headers accept algorithm prefixes;
+- backslash and forward UNC candidates require evident server and share components and support Unicode names;
+- drive candidates are separated from URI scheme prefixes and public HTTP(S) URL tokens;
 - a closed set of observed LaTeX control words is treated as ambiguous rather than obviously path-shaped;
-- a recognized LaTeX word followed by path-like continuation, for example `D:\text\secret.txt`, is still rejected;
+- a recognized LaTeX word followed by a Windows-valid component and another separator, for example `D:\text{domain}\secret.txt`, is still rejected;
 - unrecognized `X:\word`, forward-slash drive paths, file URLs, UNC paths, and escaped UNC representations remain rejected.
 
 The closed set is not a LaTeX parser and must not be generalized into stripping formulas before scanning.
@@ -37,8 +39,10 @@ RED observations reproduced before production changes:
 2. Double-backslash mathematical source remained rejected through the UNC branch.
 3. The first ambiguity rule incorrectly allowed real continuations `D:\text\secret.txt` and `D:\delta_u\secret.txt` to reach the approval-digest gate.
 4. The version test expected `0.5.0a3` while both package sources still reported `0.5.0a2`.
+5. Cross-hash append replay reported three newly imported rows instead of one, and changed content under an existing legacy event ID did not fail.
+6. Valid Windows filename characters after a listed LaTeX word, Unicode/forward UNC, spaced credential labels, algorithm-prefixed private-key headers, and URI edge cases reproduced the independent review gaps.
 
-Each RED was followed by one bounded production change and a targeted GREEN run. Credential-shaped inputs, actual drive paths, lowercase drive paths, forward-slash drive paths, file URLs, UNC, escaped UNC, LaTeX in goals, and LaTeX in text inputs have direct behavioral controls.
+Each RED was followed by a bounded production change and a targeted GREEN run. Credential-shaped inputs, actual drive paths, lowercase drive paths, forward-slash drive paths, file URLs, Unicode/backslash/forward/escaped UNC, LaTeX in goals, LaTeX in text inputs, append-only source growth, and conflicting legacy identity reuse have direct behavioral controls.
 
 ## Offline gate
 
@@ -46,14 +50,14 @@ The full gate immediately before the implementation commit reported:
 
 ```text
 scripts/verify.ps1       exit 0
-unittest                 252 run / 250 pass / 2 skip
+unittest                 254 run / 252 pass / 2 skip
 doctor                   version 0.5.0a3 / network_activity false
 invoker census           0
 secret scan              clean
 git diff --check         exit 0
 ```
 
-An earlier full-gate run had the same 252 unit tests green but correctly failed the repository secret scan because the test source contained literal PEM header controls. The test now constructs those exact runtime values from non-secret fragments; the behavior remains exercised without committing credential-shaped material.
+An earlier full-gate run had 252 unit tests green but correctly failed the repository secret scan because the test source contained literal PEM header controls. The test now constructs those exact runtime values from non-secret fragments; the behavior remains exercised without committing credential-shaped material.
 
 ## Evidence inputs and blind spots
 
@@ -66,7 +70,7 @@ An earlier full-gate run had the same 252 unit tests green but correctly failed 
 
 The manifest declares 132 distinct documents, but none of its exact document hashes could be resolved from currently searchable D-drive files. This checkpoint therefore does **not** claim a fresh 132/132 corpus replay. That replay remains an independent external acceptance subject.
 
-Ambiguity is deliberate: a bare real directory whose complete text is exactly a listed LaTeX word may not count as an *obvious* path until further path-like continuation appears. Semantic sensitivity classification and exact task approval remain operator responsibilities.
+Ambiguity is deliberate: a bare real directory whose complete text is exactly a listed LaTeX word may not count as an *obvious* path until further path-like continuation appears. The classifier is still a bounded obvious-marker heuristic, not a general secret detector or LaTeX parser. Semantic sensitivity classification and exact task approval remain operator responsibilities.
 
 ## Post-migration legacy tail
 
@@ -92,10 +96,12 @@ The future operator reconciliation sequence is exact and is **not** performed by
 2. Set `ledger\events.jsonl` to Windows read-only and verify the attribute before taking the authoritative hash/count snapshot. This prevents ordinary legacy append writers during reconciliation and later v0.5 route use.
 3. Run `migrate-ledger --dry-run --expected-count 68`; require the exact current SHA, 68 valid, zero corrupt, zero duplicate, complete, and no writes.
 4. Run `migrate-ledger --expected-count 68`; the idempotent expectation is 64 already-imported legacy IDs and four newly imported IDs. Existing native v0.5 events remain separate.
-5. Repeat the identical import; require zero newly imported IDs, 68 already imported, unchanged event count, and a complete current-hash source record.
+5. Require runtime event rows to move from 66 to 70. Repeat the identical import; require zero newly imported IDs, 68 already imported, the event count to remain 70, and a complete current-hash source record.
 6. Use only scripts from a newly authorized exact clean v0.5 checkpoint. Keep the legacy file read-only. Any later byte drift changes the source hash and re-closes the invocation gate.
 
 Read-only file metadata is a reversible operational seal, not an ACL or cryptographic immutability proof. Removing the attribute or using an administrative bypass violates the route; the current-hash migration gate remains the independent detection control.
+
+The repaired importer compares current entries with prior imports by original legacy event ID, event type, timestamp, and canonical original payload. Exact matches count as already imported; identity reuse with changed content rolls back the transaction. A read-only probe against the current shared state measured 64 already imported, four new, and zero conflicts. Reused event rows retain their first-import `source_sha256` provenance; the current snapshot remains separately represented by its exact `legacy_sources` row and counts.
 
 ## Route statement
 

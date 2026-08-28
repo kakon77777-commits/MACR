@@ -86,12 +86,14 @@ The a1 checkpoint document and external reviewer evidence remain historical arti
 
 ## v0.5.0a3 sensitive-marker repair baseline
 
-Field observation showed that the GLM obvious-sensitive heuristic confused HTTPS and LaTeX control sequences with Windows drive paths. The repair is bounded to that classifier, its behavioral tests, active alpha version labels, and checkpoint documentation. It does not adopt v0.6 work.
+Field observation showed that the GLM obvious-sensitive heuristic confused HTTPS and LaTeX control sequences with Windows drive paths. Subsequent route evidence also exposed append-only legacy growth after a completed migration. The repair is bounded to the classifier, logical cross-hash legacy reconciliation, their behavioral tests, active alpha version labels, and checkpoint documentation. It does not adopt v0.6 work.
 
 ```text
-implementation_commit = 4a54acbdd405ee955346f112a1a45e3798850841
-implementation_tree   = 22d4549090fbfcfbdbaba036391a928f5cf8b785
+implementation_commit = dd0e36831f8b64556aa2df5ad4f6a8abdc2d3f59
+implementation_tree   = 242658eaa718e41ea3f043ec76ac7c1c6c22838a
 ```
+
+The initial a3 implementation/checkpoint pair `4a54acbdd405ee955346f112a1a45e3798850841` / `575b9b5555874067ba999b84f5176ce19dfa7853` was independently rejected after reproducing cross-hash duplicate imports and additional classifier underblocking. It remains historical and carries no route authority.
 
 | Evidence | Bytes | SHA-256 |
 |---|---:|---|
@@ -100,4 +102,4 @@ implementation_tree   = 22d4549090fbfcfbdbaba036391a928f5cf8b785
 | `D:\Ai\work together\MSSP_Architect_Exchange\evidence\2026-08-28-pragma-macr-route-drift-after-t6.md` | 2,284 | `6C0FE0A103601CBFA7371A68E04DB541E020930B3B23917832B27D73F78246B7` |
 | `D:\Ai\work together\MSSP_Architect_Exchange\evidence\2026-08-28-pragma-post-migration-legacy-tail.md` | 3,145 | `3A91A0586253E533D213D9C1768B5778281DB17B2890550248130BE4F0CF8CF3` |
 
-The 132-document manifest remains external evidence. Its exact member bytes were not resolvable from current searchable D-drive paths during this repair, so no local 132/132 rescan is claimed. Read-only inspection also found the legacy source had advanced from the previously migrated 64-event hash to 68 events under a new hash while SQLite retained only the old complete source record. The a3 route therefore remains offline-only until old writers are retired, the source is sealed read-only, and an explicitly authorized idempotent 68-event reconciliation completes. No provider call, key read, approval creation, second legacy migration, shared-runtime write, merge, release, deployment, or publication occurred.
+The 132-document manifest remains external evidence. Its exact member bytes were not resolvable from current searchable D-drive paths during this repair, so no local 132/132 rescan is claimed. Read-only inspection also found the legacy source had advanced from the previously migrated 64-event hash to 68 events under a new hash while SQLite retained only the old complete source record. The repaired comparison logic measured 64 exact prior identities, four new identities, and zero conflicts without writing. The a3 route therefore remains offline-only until old writers are retired, the source is sealed read-only, and an explicitly authorized idempotent 68-event reconciliation completes. No provider call, key read, approval creation, second legacy migration, shared-runtime write, merge, release, deployment, or publication occurred.
