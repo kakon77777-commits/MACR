@@ -108,8 +108,10 @@ class DirectContractTests(unittest.TestCase):
         document, digest = canonical_policy_snapshot(operator_settings())
         self.assertEqual(
             document,
-            '{"budget_behavior":"warn_only","context_warning_tokens":7000,'
+            '{"accounting":"required","automatic_retry":false,'
+            '"budget_behavior":"warn_only","context_warning_tokens":7000,'
             '"hard_context_tokens":8192,"max_output_tokens":4096,'
+            '"multi_turn":"full","paid_call_confirmation":"never",'
             '"profile_name":"operator_managed","profile_version":1,'
             '"provider_improvement_preference":"allowed",'
             '"schema":"macr_direct_policy_v1","soft_budget_usd":null,'
@@ -117,7 +119,7 @@ class DirectContractTests(unittest.TestCase):
         )
         self.assertEqual(
             digest,
-            "775b1d32998b3a03c6c717b7ec18d8e274649bf29e6f9b32ae6cf5269638f90a",
+            "a3a9270371297f338c75c404ae116e825591755a6761c9b73269555cb21506e7",
         )
         self.assertNotIn("prompt", document)
         self.assertNotIn("message", document)

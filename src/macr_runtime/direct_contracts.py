@@ -262,6 +262,10 @@ def canonical_policy_snapshot(
         raise ValueError("settings must be DirectRunSettings")
     document = {
         "schema": "macr_direct_policy_v1",
+        "paid_call_confirmation": "never",
+        "multi_turn": "full",
+        "automatic_retry": False,
+        "accounting": "required",
         **settings.to_dict(),
     }
     encoded = json.dumps(
