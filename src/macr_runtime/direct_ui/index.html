@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>MACR Direct Chat</title>
+    <link rel="stylesheet" href="/style.css">
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <div class="shell">
+      <aside class="sidebar" aria-label="對話導覽">
+        <header class="brand-block">
+          <div class="brand-mark" aria-hidden="true">M</div>
+          <div>
+            <p class="eyebrow">LOCAL DIRECT PLANE</p>
+            <h1>MACR Direct Chat</h1>
+            <p class="version-line">MACR 0.5.0a4 · Direct UI 0.1 alpha</p>
+          </div>
+        </header>
+
+        <section class="side-section" aria-labelledby="provider-heading">
+          <div class="section-heading">
+            <h2 id="provider-heading">模型入口</h2>
+            <button id="refresh-providers" class="icon-button" type="button" aria-label="重新檢查模型">↻</button>
+          </div>
+          <div id="provider-cards" class="provider-cards" aria-live="polite"></div>
+        </section>
+
+        <section class="side-section new-thread" aria-labelledby="new-heading">
+          <div class="section-heading">
+            <h2 id="new-heading">建立對話</h2>
+            <span id="selected-provider-label" class="tiny-chip">尚未選擇</span>
+          </div>
+          <label for="conversation-title">標題</label>
+          <input id="conversation-title" maxlength="256" value="New conversation">
+          <label for="system-prompt">可見 System Prompt</label>
+          <textarea id="system-prompt" rows="3" maxlength="262144" placeholder="預設空白；若有內容，會完整顯示並原樣送出。"></textarea>
+          <button id="create-conversation" class="primary-button" type="button">建立固定模型對話</button>
+        </section>
+
+        <section class="side-section history-section" aria-labelledby="history-heading">
+          <div class="section-heading">
+            <h2 id="history-heading">歷史</h2>
+            <label class="archive-toggle"><input id="include-archived" type="checkbox"> 封存</label>
+          </div>
+          <label class="sr-only" for="conversation-search">搜尋本機對話</label>
+          <input id="conversation-search" type="search" placeholder="搜尋本機歷史">
+          <nav id="conversation-list" class="conversation-list" aria-label="對話清單"></nav>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p id="current-provider" class="eyebrow">NO CONVERSATION SELECTED</p>
+            <h2 id="current-title">選擇模型，建立第一個 Direct 對話</h2>
+          </div>
+          <div class="header-actions">
+            <span id="connection-status" class="status-pill" aria-live="polite">啟動中</span>
+            <button id="archive-conversation" class="ghost-button" type="button" hidden>封存</button>
+            <button id="toggle-settings" class="ghost-button" type="button" aria-expanded="false">設定與記帳</button>
+          </div>
+        </header>
+
+        <section id="message-list" class="message-list" aria-label="完整對話內容" aria-live="polite">
+          <div class="empty-state">
+            <p class="empty-symbol" aria-hidden="true">◇</p>
+            <h3>原生直連，完整投影</h3>
+            <p>沒有隱藏 worker prompt、沒有 token 動畫。模型完成後，回覆會一次完整出現。</p>
+          </div>
+        </section>
+
+        <section class="composer-zone" aria-label="訊息輸入">
+          <div id="generation-state" class="generation-state" aria-live="polite">待命</div>
+          <form id="message-form" class="composer">
+            <label class="sr-only" for="message-input">輸入訊息</label>
+            <textarea id="message-input" rows="3" maxlength="1048576" placeholder="選擇一個對話後開始輸入。Enter 送出，Shift+Enter 換行。" disabled></textarea>
+            <button id="send-message" class="send-button" type="submit" disabled aria-label="送出完整訊息">↑</button>
+          </form>
+          <p class="composer-note">完整多輪 · 不自動壓縮 · 不自動重試 · 純文字安全投影</p>
+        </section>
+      </main>
+
+      <aside id="settings-panel" class="settings-panel" aria-label="設定與記帳" hidden>
+        <header class="panel-header">
+          <div>
+            <p class="eyebrow">OPERATOR MANAGED</p>
+            <h2>設定與記帳</h2>
+          </div>
+          <button id="close-settings" class="icon-button" type="button" aria-label="關閉設定">×</button>
+        </header>
+
+        <section aria-labelledby="settings-heading">
+          <h3 id="settings-heading">版本化執行設定</h3>
+          <div id="settings-summary" class="notice"></div>
+          <div class="settings-grid">
+            <label for="setting-profile-name">設定檔名稱</label>
+            <input id="setting-profile-name" value="custom">
+            <label for="setting-profile-version">版本</label>
+            <input id="setting-profile-version" type="number" min="1" max="1000000" value="1">
+            <label for="setting-max-output">最大輸出 tokens</label>
+            <input id="setting-max-output" type="number" min="1" max="131072">
+            <label for="setting-timeout">逾時秒數</label>
+            <input id="setting-timeout" type="number" min="1" max="3600" step="1">
+            <label for="setting-temperature">Temperature</label>
+            <input id="setting-temperature" type="number" min="0" max="2" step="0.1">
+            <label for="setting-top-p">Top P</label>
+            <input id="setting-top-p" type="number" min="0.01" max="1" step="0.01">
+            <label for="setting-warning">Context 警告</label>
+            <input id="setting-warning" type="number" min="1">
+            <label for="setting-hard-context">Context 上限</label>
+            <input id="setting-hard-context" type="number" min="2">
+            <label for="setting-soft-budget">單次軟預算 USD</label>
+            <input id="setting-soft-budget" type="number" min="0" step="0.001" placeholder="空白＝只記帳">
+            <label for="setting-improvement">Provider improvement</label>
+            <select id="setting-improvement">
+              <option value="allowed">allowed</option>
+              <option value="disabled">disabled</option>
+              <option value="not_asserted">not_asserted</option>
+            </select>
+          </div>
+          <button id="save-settings" class="primary-button" type="button">另存並啟用新版本</button>
+        </section>
+
+        <section aria-labelledby="accounting-heading">
+          <h3 id="accounting-heading">AI 費用子帳</h3>
+          <pre id="accounting-panel" class="accounting-panel">尚無可顯示資料</pre>
+        </section>
+
+        <section class="notice privacy-note" aria-labelledby="privacy-heading">
+          <h3 id="privacy-heading">本機邊界</h3>
+          <p>對話目前以明文保存於 D 槽。瀏覽器看不到 provider 金鑰；Grok 的外部資料保留狀態仍以 provider 政策為準。</p>
+        </section>
+      </aside>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="assertive" hidden></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

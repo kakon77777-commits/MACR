@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from .direct_contracts import DirectRunSettings
+from .direct_ui import read_asset
 from .errors import DirectStoreConflict, MacrError
 
 
@@ -154,6 +155,23 @@ def _handler_class(state: _DirectServerState):
             self.end_headers()
             self.wfile.write(raw)
 
+        def _send_asset(self, name: str, content_type: str) -> None:
+            raw = read_asset(name)
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+                "style-src 'self'; script-src 'self'; object-src 'none'; "
+                "base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+            )
+            self.end_headers()
+            self.wfile.write(raw)
+
         def _reject(self, status: int, code: str) -> None:
             self._send_json(
                 status,
@@ -251,6 +269,20 @@ def _handler_class(state: _DirectServerState):
             path = target.path
             query = parse_qs(target.query, keep_blank_values=True)
 
+            assets = {
+                "/": ("index.html", "text/html; charset=utf-8"),
+                "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+                "/style.css": ("style.css", "text/css; charset=utf-8"),
+            }
+            if path in assets:
+                if self.command != "GET":
+                    raise _HttpFailure(405, "method_not_allowed")
+                if query:
+                    raise _HttpFailure(400, "invalid_query")
+                name, content_type = assets[path]
+                self._send_asset(name, content_type)
+                return
+
             if path == f"{_API_PREFIX}/bootstrap":
                 if self.command != "POST":
                     raise _HttpFailure(405, "method_not_allowed")
@@ -273,6 +305,9 @@ def _handler_class(state: _DirectServerState):
                     },
                 )
                 return
+
+            if not path.startswith(_API_PREFIX):
+                raise _HttpFailure(404, "route_not_found")
 
             native_id = self._session()
             runtime = state.runtime
