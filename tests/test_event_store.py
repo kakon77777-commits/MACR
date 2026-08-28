@@ -96,6 +96,10 @@ class SqliteEventStoreTests(unittest.TestCase):
             "authorization",
             "api_key",
             "raw_response",
+            "path",
+            "source_path",
+            "remote_body",
+            "error_body",
         )
         with d_drive_tempdir() as temp:
             store = SqliteEventStore(temp / "dispatch.sqlite3")
@@ -110,6 +114,69 @@ class SqliteEventStoreTests(unittest.TestCase):
                             str(uuid.uuid4()),
                             {"nested": [{key: "PRIVATE"}]},
                         )
+
+    def test_event_payload_rejects_path_values_hidden_under_aliases(self) -> None:
+        path_values = (
+            r"D:\SECRET\task.txt",
+            r"\\private-host\share\task.txt",
+        )
+        with d_drive_tempdir() as temp:
+            store = SqliteEventStore(temp / "dispatch.sqlite3")
+            for value in path_values:
+                with self.subTest(value=value):
+                    with self.assertRaisesRegex(ValueError, "path-like value"):
+                        store.append_standalone(
+                            "runtime.test",
+                            str(uuid.uuid4()),
+                            {"detail": value},
+                        )
+            accepted = store.append_standalone(
+                "runtime.test",
+                str(uuid.uuid4()),
+                {
+                    "endpoint": "https://api.example.invalid/v1",
+                    "model": "hf.co/example/model",
+                },
+            )
+
+        self.assertEqual(
+            accepted["payload"],
+            {
+                "endpoint": "https://api.example.invalid/v1",
+                "model": "hf.co/example/model",
+            },
+        )
+
+    def test_operational_events_reject_unknown_payload_fields(self) -> None:
+        with d_drive_tempdir() as temp:
+            store = SqliteEventStore(temp / "dispatch.sqlite3")
+            with self.assertRaisesRegex(ValueError, "not allowed"):
+                store.start_run(
+                    run_id=RUN_ID,
+                    dispatch_event_id=DISPATCH_ID,
+                    payload={
+                        "provider_id": "glm",
+                        "unreviewed_metric": 1,
+                    },
+                )
+            self.assertIsNone(store.read_run(RUN_ID))
+
+            store.start_run(
+                run_id=RUN_ID,
+                dispatch_event_id=DISPATCH_ID,
+                payload={"provider_id": "glm"},
+            )
+            with self.assertRaisesRegex(ValueError, "not allowed"):
+                store.finish_run(
+                    run_id=RUN_ID,
+                    terminal_event_id=TERMINAL_ID,
+                    state="candidate_failure",
+                    payload={
+                        "status": "candidate_failure",
+                        "unreviewed_metric": 1,
+                    },
+                )
+            self.assertIsNone(store.read_run(RUN_ID)["terminal_event_id"])
 
     def test_start_run_rolls_back_run_when_event_insert_fails(self) -> None:
         with d_drive_tempdir() as temp:

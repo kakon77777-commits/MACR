@@ -21,10 +21,92 @@ _FORBIDDEN_PAYLOAD_KEYS = frozenset(
         "authorization",
         "authorization_header",
         "bearer_token",
+        "body",
+        "content",
         "credential",
+        "path",
+        "paths",
         "private_key",
         "prompt",
         "raw_response",
+    }
+)
+_FORBIDDEN_PAYLOAD_KEY_SUFFIXES = (
+    "_body",
+    "_content",
+    "_path",
+    "_paths",
+)
+_LOCAL_PATH_MARKER = re.compile(
+    r"(?i)(?<![a-z0-9])(?:[a-z]:[\\/]|\\\\[^\\/\s]+[\\/])"
+)
+_OPERATIONAL_PAYLOAD_KEYS = {
+    "provider.dispatch_requested": frozenset(
+        {
+            "provider_id",
+            "task_id",
+            "task_type",
+            "interaction_plane",
+            "origin_host",
+            "origin_identifier_kind",
+            "origin_native_id",
+            "authority_source_kind",
+            "authority_source_id",
+            "authority_digest",
+            "authority_revision",
+            "authority_epoch",
+            "authority_scope_sha256",
+            "policy_snapshot_sha256",
+            "batch_id",
+            "member_digest",
+            "relay_is_authorship",
+            "fencing_token",
+        }
+    ),
+    "provider.candidate_completed": frozenset(
+        {
+            "provider_id",
+            "task_id",
+            "dispatch_event_id",
+            "status",
+            "model",
+            "response_id",
+            "finish_reason",
+            "provider_state",
+            "input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "cached_tokens",
+            "currency_cost_usd",
+            "cost_kind",
+            "pricing_basis_version",
+            "duration_ms",
+            "input_media_count",
+            "input_media_bytes",
+            "output_artifact_count",
+            "output_artifact_bytes",
+            "billing_state",
+            "capture_state",
+            "candidate_capture",
+            "return_contract_state",
+            "return_contract_reason",
+            "failure_type",
+            "authority_digest",
+            "authority_revision",
+            "authority_epoch",
+        }
+    ),
+}
+_CANDIDATE_CAPTURE_KEYS = frozenset(
+    {
+        "capture_id",
+        "run_id",
+        "provider_id",
+        "answer_sha256",
+        "answer_bytes",
+        "task_digest",
+        "approval_digest",
+        "captured_at",
     }
 )
 
@@ -54,7 +136,11 @@ def _validate_payload(value: Any) -> None:
         for key, child in value.items():
             if not isinstance(key, str):
                 raise ValueError("event payload keys must be strings")
-            if key.strip().lower() in _FORBIDDEN_PAYLOAD_KEYS:
+            normalized_key = key.strip().lower().replace("-", "_")
+            if (
+                normalized_key in _FORBIDDEN_PAYLOAD_KEYS
+                or normalized_key.endswith(_FORBIDDEN_PAYLOAD_KEY_SUFFIXES)
+            ):
                 raise ValueError(f"forbidden payload key: {key}")
             _validate_payload(child)
         return
@@ -64,6 +150,30 @@ def _validate_payload(value: Any) -> None:
         return
     if isinstance(value, bytes):
         raise ValueError("event payload may not contain bytes")
+    if isinstance(value, str) and _LOCAL_PATH_MARKER.search(value):
+        raise ValueError("event payload contains a path-like value")
+
+
+def _validate_operational_payload(
+    event_type: str,
+    payload: Mapping[str, Any],
+) -> None:
+    allowed = _OPERATIONAL_PAYLOAD_KEYS[event_type]
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(
+            f"event payload key is not allowed for {event_type}: {unknown[0]}"
+        )
+    if event_type == "provider.candidate_completed":
+        capture = payload.get("candidate_capture")
+        if isinstance(capture, Mapping):
+            unknown_capture = sorted(set(capture) - _CANDIDATE_CAPTURE_KEYS)
+            if unknown_capture:
+                raise ValueError(
+                    "candidate capture payload key is not allowed: "
+                    f"{unknown_capture[0]}"
+                )
+    _validate_payload(payload)
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
@@ -78,6 +188,14 @@ def _canonical_json(payload: Mapping[str, Any]) -> str:
         )
     except (TypeError, ValueError) as exc:
         raise ValueError("event payload must be canonical JSON data") from exc
+
+
+def _canonical_operational_json(
+    event_type: str,
+    payload: Mapping[str, Any],
+) -> str:
+    _validate_operational_payload(event_type, payload)
+    return _canonical_json(payload)
 
 
 class SqliteEventStore:
@@ -127,7 +245,10 @@ class SqliteEventStore:
     ) -> dict[str, Any]:
         normalized_run = _uuid4("run_id", run_id)
         normalized_event = _uuid4("dispatch_event_id", dispatch_event_id)
-        payload_json = _canonical_json(payload)
+        payload_json = _canonical_operational_json(
+            "provider.dispatch_requested",
+            payload,
+        )
         observed_at = _utc_now()
         connection = self.database.connect()
         try:
@@ -176,7 +297,10 @@ class SqliteEventStore:
         normalized_run = _uuid4("run_id", run_id)
         normalized_event = _uuid4("terminal_event_id", terminal_event_id)
         normalized_state = _non_empty("terminal state", state)
-        payload_json = _canonical_json(payload)
+        payload_json = _canonical_operational_json(
+            "provider.candidate_completed",
+            payload,
+        )
         observed_at = _utc_now()
         connection = self.database.connect()
         try:
