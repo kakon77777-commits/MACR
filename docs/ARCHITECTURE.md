@@ -1,4 +1,4 @@
-# MACR v0.5.0a1 Shared Core architecture
+# MACR v0.5.0a2 Shared Core architecture
 
 ```text
 Codex or another primary host
@@ -115,6 +115,8 @@ GLM is the first provider with a native pre-validation observation adapter. Once
 
 `runtime\dispatch.sqlite3` is the operational event, authority, lease, legacy-import, and candidate-provenance database. `accounting\accounting.sqlite3` stores invocation accounting and a local outbox. Each admitted run has exactly one dispatch event and at most one terminal event. A provider or adapter crash after admission is terminal `candidate_failure` with billing `unknown_after_dispatch`; cost never defaults to zero.
 
+Fresh runtime-database construction negotiates WAL through a bounded bootstrap-only retry for transient SQLite `BUSY/LOCKED` results. Ordinary connections verify the persisted WAL mode instead of trying to change journal mode on every connection. This database retry is unrelated to provider transport, which remains single-attempt.
+
 Dispatch events contain origin, task/provider identity, policy hash, authority digest/revision/epoch, and fencing token. Terminal events contain an allowlist of:
 
 ```text
@@ -140,6 +142,8 @@ return_contract_state
 
 Missing metrics remain null. Task inputs, prompts, candidate bytes, warnings, thinking, credentials, local source paths, artifact paths/content, and error bodies are excluded. Candidate bytes are immutable files beneath `candidates`; event rows expose only content-free hashes and counts. Return-contract rejection never rewrites the raw capture.
 
+Dispatch and terminal payloads are top-level allowlisted. Every event API also applies a recursive privacy guard that rejects path/body/content keys and Windows or UNC path-like string values before transaction start. Generic diagnostics may still use reviewed metadata keys and HTTPS/model identifiers.
+
 The legacy `ledger\events.jsonl` is immutable input evidence. Import is copy-only and idempotent. Corrupt or forbidden lines are retained byte-for-byte in quarantine and make the source incomplete; the CLI refuses provider invocation until the current nonempty source hash has a complete import record.
 
 Accounting separates estimated/provider-reported/zero-local/unknown billing state from candidate status. Its `soft_warning` state is distinct from the existing task/provider hard budget gates. Checkpoint A preserves that existing enforcement; activating the local operator-managed warn-only profile belongs to the later Direct/settings checkpoint.
@@ -160,4 +164,6 @@ runtime role != authorship identity
 generation != verification != acceptance
 ```
 
-Every provider completion is a candidate. MACR v0.5.0a1 records provider, capture, return-contract, materialization, verification, and acceptance states independently; this checkpoint still implements no verifier decision or accepted-result transition.
+Every provider completion is a candidate. MACR v0.5.0a2 records provider, capture, return-contract, materialization, verification, and acceptance states independently; this checkpoint still implements no verifier decision or accepted-result transition.
+
+`PLAIN_SOURCE` is a conservative wrapper-format guard: it rejects Markdown fences, evidence/warning sections, and common leading prose wrappers. It does not prove that arbitrary source compiles. `JSON_OBJECT` validates one semantic object with unique keys; whitespace, final newline, and member order are not significant. Byte-exact JSON belongs under `EXACT_TEXT`.

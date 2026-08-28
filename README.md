@@ -1,8 +1,8 @@
-# MACR Runtime v0.5.0a1 — Shared Core Checkpoint A
+# MACR Runtime v0.5.0a2 — Shared Core Checkpoint A Repair
 
 MACR is a migration-aware runtime for heterogeneous AI workers. Checkpoint A adds a host-neutral, cross-process-safe shared core around the existing provider adapters. Provider generation, return-contract validity, materialization, verification, and acceptance remain separate states; a provider completion never becomes accepted work automatically.
 
-This alpha checkpoint does **not** implement Direct Chat, a browser UI, Codex/Claude Code host adapters, bounded fan-out, or Context Capsules.
+This alpha repair supersedes the unaccepted v0.5.0a1 candidate after independent replay found a fresh-SQLite bootstrap race, incomplete event-payload privacy enforcement, a plain-source wrapper gap, and a non-self-contained replay command. It does **not** implement Direct Chat, a browser UI, Codex/Claude Code host adapters, bounded fan-out, or Context Capsules.
 
 ## Canonical D: placement
 
@@ -61,6 +61,15 @@ cd 'D:\Ai\work together\MACR'
 ```
 
 The default suite is offline. It compiles source/tests, attacks SQLite with 1/2/3/4/8 concurrent writers, verifies lease contention and process-census controls, scans credential-shaped material and operational C/R paths, validates configuration, and runs `doctor` without contacting a provider or loading a model.
+
+For the dedicated multiprocess replay from a source checkout:
+
+```powershell
+$env:PYTHONPATH = Join-Path (Get-Location) 'src'
+python -m unittest tests.test_multiprocess_runtime -v
+```
+
+The synchronized fresh-database test starts 32 processes behind one barrier. WAL bootstrap retries only transient SQLite `BUSY/LOCKED` conditions within a bounded deadline; provider calls are never retried by this mechanism.
 
 ## Legacy-ledger migration gate
 
@@ -142,6 +151,7 @@ Only validated JPEG/PNG bytes become artifacts. Paths, prompts, answers, source 
 - SQLite events and accounting record bounded origin, authority, model, usage, cost, duration, finish, media-count, capture-hash, and contract-state metadata. They never store task prompts, candidate bytes, thinking, authorization headers, source paths, artifact content, or remote error bodies.
 - GLM captures safe model, finish reason, token usage, estimated cost, duration, and exact answer bytes before protocol validation. A non-`stop` or malformed response remains a failed candidate without losing those safe observations and is never retried automatically.
 - Candidate answer bytes are create-once files beneath `candidates`; public event rows contain only byte count and SHA-256 metadata. Verbatim materialization and transformed materialization have distinct provenance.
+- Operational dispatch and terminal events accept only reviewed top-level fields. All event APIs recursively reject path/body/content keys and Windows/UNC path-like values; HTTPS URLs and provider model IDs remain valid metadata.
 - Google currency values are estimates derived from a dated pricing basis. Cloud Billing is authoritative. Promotional credits do not guarantee free model use and are not embedded into provider policy.
 - `MODEL != RESIDENT`. Provider profile names are service identifiers, not speaker names or resident identities. Without a task-local HOST-OBSERVED binding, speaker identity remains `unresolved`.
 
@@ -155,3 +165,4 @@ Only validated JPEG/PNG bytes become artifacts. Paths, prompts, answers, source 
 - No implicit GLM substitution or quota router. GLM must be named explicitly and every task must be marked `delegable=true`; semantic sensitivity classification remains the operator's responsibility.
 - Google accepts only bounded workspace-relative local media; URLs, `gs://`, automatic uploads, multi-image output, Veo, TTS, and Lyria invocation are unavailable.
 - SQLite event and accounting writes are cross-process transactional. The legacy JSONL writer remains intentionally unsafe historical code used only by migration and mutation tests; it is not an operational writer.
+- `PLAIN_SOURCE` rejects fences and common prose wrappers but is not a language parser; compilation remains independent verification. `JSON_OBJECT` is semantic-object validation, so whitespace and key order are not byte contracts. Use `EXACT_TEXT` for byte-exact JSON.

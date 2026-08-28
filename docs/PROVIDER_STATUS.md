@@ -18,7 +18,7 @@ Updated: 2026-08-27
 
 ## Checkpoint A shared execution status
 
-All callable profiles enter the v0.5.0a1 CLI through a one-shot current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Existing providers other than GLM currently receive a compatibility observation derived from their normalized `ProviderResult`; GLM observes safe response fields and raw answer bytes before protocol validation.
+All callable profiles enter the v0.5.0a2 CLI through a one-shot current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Existing providers other than GLM currently receive a compatibility observation derived from their normalized `ProviderResult`; GLM observes safe response fields and raw answer bytes before protocol validation.
 
 Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. No provider was called while building or verifying Checkpoint A. Direct Chat, Codex/Claude Code host adapters, automatic routing, bounded fan-out, and Context Capsules remain unavailable.
 

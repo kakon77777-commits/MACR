@@ -70,3 +70,16 @@ The checkpoint design and execution plan are repository artifacts under `docs/su
 | `2026-08-27-metron-ledger-concurrency-replay.md` | 2,341 | `9B4FB0738DBBA0CF6F43C46F08989E7BFBEF98F7FF880D6E70F68933BCB18457` |
 
 The withdrawn observation that one codec CLI remained active is excluded; the correction's self-excluding control is authoritative for that field report. Checkpoint A made no provider request and generated no new live conformance claim. The field evidence remains external and unchanged.
+
+## v0.5.0a2 replay-repair baseline
+
+Independent a1 replay produced one green sample and one blocking red sample. The blocking report was independently reproduced before repair: synchronized fresh SQLite construction failed at `PRAGMA journal_mode=WAL`; `PLAIN_SOURCE` accepted a leading prose wrapper; EventStore accepted `path`, `source_path`, and `remote_body`; and the documented bare multiprocess command failed without `PYTHONPATH=src`.
+
+The implementation-only repair boundary before version and documentation edits is:
+
+```text
+implementation_commit = d1a61079e8715658d4ef29b06b40ea858ae69ab2
+implementation_tree   = 3281d563ff6e11dcd21c0774684135e5356e76ea
+```
+
+The a1 checkpoint document and external reviewer evidence remain historical artifacts and are not rewritten. v0.5.0a2 adds bounded WAL bootstrap handling, synchronized process controls, operational event schemas and recursive privacy guards, conservative plain-source wrapper rejection, and self-contained replay instructions. No provider was called during diagnosis or repair.
