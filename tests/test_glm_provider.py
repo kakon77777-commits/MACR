@@ -743,13 +743,83 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             transport=transport,
             environ={},
         )
-        task = replace(
-            delegated_task(),
-            goal=r"Summarize D:\private-research\theory.txt",
+
+        for goal in (
+            r"Summarize D:\private-research\theory.txt",
+            r"Summarize d:\private-research\theory.txt",
+            r"Summarize D:/private-research/theory.txt",
+            r"Read \\server\share\secret.txt",
+            r"Read \\\\server\\share\\secret.txt",
+            r"Read file:///D:/private-research/theory.txt",
+            r"Read D:\text\secret.txt",
+            r"Read D:\delta_u\secret.txt",
+        ):
+            with self.subTest(goal=goal):
+                task = replace(delegated_task(), goal=goal)
+                with self.assertRaisesRegex(ProviderPolicyError, "sensitive marker"):
+                    provider.invoke(task)
+
+        self.assertEqual(transport.posts, [])
+
+    def test_obvious_credential_marker_is_rejected_before_transport(self):
+        transport = FakeTransport(success_document())
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={},
         )
 
-        with self.assertRaisesRegex(ProviderPolicyError, "sensitive marker"):
-            provider.invoke(task)
+        for goal in (
+            "api_key = hidden",
+            "access-token: hidden",
+            "private_key=hidden",
+            "-----BEGIN " + "PRIVATE" + " KEY-----",
+            "-----BEGIN RSA " + "PRIVATE" + " KEY-----",
+        ):
+            with self.subTest(goal=goal):
+                with self.assertRaisesRegex(ProviderPolicyError, "sensitive marker"):
+                    provider.approval_metadata(
+                        replace(delegated_task(), goal=goal)
+                    )
+
+        self.assertEqual(transport.posts, [])
+
+    def test_latex_and_https_are_not_mistaken_for_local_paths(self):
+        transport = FakeTransport(success_document())
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={},
+        )
+
+        for goal in (
+            "Summarize https://example.com/public-paper.",
+            r"Analyze \min\{u>s:\delta_u<\delta_s\}.",
+            r"Analyze \forall B:\neg R(A,B).",
+            r"Analyze \{x\in D:\neg C_k(x)\}.",
+            r"Analyze D:\quad y^2=x^3+x^2+8x-16.",
+            r"Analyze \mathsf D:\text{domain}.",
+            r"Analyze \\min\\{u>s:\\delta_u<\\delta_s\\}.",
+            r"Analyze \\forall B:\\neg R(A,B).",
+        ):
+            with self.subTest(goal=goal):
+                metadata = provider.approval_metadata(
+                    replace(delegated_task(), goal=goal)
+                )
+                self.assertEqual(metadata["provider_id"], "glm_flash_worker")
+
+        task = replace(
+            delegated_task(),
+            inputs=(
+                {
+                    "type": "text",
+                    "name": "public-mathematics",
+                    "content": r"E_k=\\{x\\in D:\\neg C_k(x)\\}.",
+                },
+            ),
+        )
+        metadata = provider.approval_metadata(task)
+        self.assertEqual(metadata["provider_id"], "glm_flash_worker")
 
         self.assertEqual(transport.posts, [])
 

@@ -9,12 +9,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class VersionTests(unittest.TestCase):
-    def test_package_versions_are_0_5_0a2(self) -> None:
+    def test_package_versions_are_0_5_0a3(self) -> None:
         project = tomllib.loads(
             (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
-        self.assertEqual(project["project"]["version"], "0.5.0a2")
-        self.assertEqual(macr_runtime.__version__, "0.5.0a2")
+        self.assertEqual(project["project"]["version"], "0.5.0a3")
+        self.assertEqual(macr_runtime.__version__, "0.5.0a3")
 
 
 if __name__ == "__main__":

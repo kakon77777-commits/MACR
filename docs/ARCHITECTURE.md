@@ -1,4 +1,4 @@
-# MACR v0.5.0a2 Shared Core architecture
+# MACR v0.5.0a3 Shared Core architecture
 
 ```text
 Codex or another primary host
@@ -164,6 +164,6 @@ runtime role != authorship identity
 generation != verification != acceptance
 ```
 
-Every provider completion is a candidate. MACR v0.5.0a2 records provider, capture, return-contract, materialization, verification, and acceptance states independently; this checkpoint still implements no verifier decision or accepted-result transition.
+Every provider completion is a candidate. MACR v0.5.0a3 records provider, capture, return-contract, materialization, verification, and acceptance states independently; this checkpoint still implements no verifier decision or accepted-result transition.
 
 `PLAIN_SOURCE` is a conservative wrapper-format guard: it rejects Markdown fences, evidence/warning sections, common leading prose wrappers, and headings derived from the task's declared language. A generic `Code:`/`Source:` heading is rejected only when the colon ends the line, avoiding false rejection of source such as Python `code: str = 'ok'`. It does not prove that arbitrary source compiles. `JSON_OBJECT` validates one semantic object with unique keys; whitespace, final newline, and member order are not significant. Byte-exact JSON belongs under `EXACT_TEXT`.

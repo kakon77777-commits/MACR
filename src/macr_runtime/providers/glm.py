@@ -49,11 +49,53 @@ _FIXED_ENDPOINT_PATH = "/chat/completions"
 _FIXED_MODEL = "glm-5.3-flash"
 _ZAI_KEY_SHAPE = re.compile(r"^[^.\s]+\.[^.\s]+$")
 _ALLOWED_TASK_TYPES = frozenset({"delegated_routine", "provider_conformance"})
-_OBVIOUS_SENSITIVE_MARKER = re.compile(
-    r"(?i)(?:[a-z]:[\\/]|\\\\[^\\\s]+[\\/]|"
-    r"-----BEGIN (?:RSA )?PRIVATE KEY-----|"
+_OBVIOUS_CREDENTIAL_MARKER = re.compile(
+    r"(?i)(?:-----BEGIN (?:RSA )?PRIVATE KEY-----|"
     r"(?:api[_-]?key|access[_-]?token|private[_-]?key)\s*[:=])"
 )
+_OBVIOUS_UNC_PATH_MARKER = re.compile(
+    r"(?i)\\{2,}[a-z0-9._-]+\\+[a-z0-9$_.-]"
+)
+# The left boundary excludes the final letter of URI schemes such as https://.
+_WINDOWS_DRIVE_PATH_CANDIDATE = re.compile(
+    r"(?i)(?<![a-z0-9+.-])(?P<drive>[a-z]):(?P<separator>[\\/])"
+)
+_LATEX_CONTROL_SEQUENCE = re.compile(r"\\+(?P<command>[a-zA-Z]+)")
+_PATH_CONTINUATION_AFTER_LATEX_WORD = re.compile(r"(?i)^[a-z0-9_. -]*[\\/]")
+# This is intentionally a closed ambiguity list, not a general LaTeX stripper.
+# Unlisted words and recognized words followed by path-like continuation remain denied.
+_LATEX_DRIVE_AMBIGUITIES = frozenset(
+    {
+        "delta",
+        "exists",
+        "forall",
+        "neg",
+        "qquad",
+        "quad",
+        "text",
+        "texttt",
+    }
+)
+
+
+def _contains_obvious_sensitive_marker(value: str) -> bool:
+    if _OBVIOUS_CREDENTIAL_MARKER.search(value):
+        return True
+    if _OBVIOUS_UNC_PATH_MARKER.search(value):
+        return True
+    for candidate in _WINDOWS_DRIVE_PATH_CANDIDATE.finditer(value):
+        if candidate.group("separator") == "\\":
+            control = _LATEX_CONTROL_SEQUENCE.match(value, candidate.end() - 1)
+            if (
+                control is not None
+                and control.group("command").lower() in _LATEX_DRIVE_AMBIGUITIES
+                and not _PATH_CONTINUATION_AFTER_LATEX_WORD.match(
+                    value[control.end() :]
+                )
+            ):
+                continue
+        return True
+    return False
 
 
 class GlmFixedKeySource:
@@ -336,8 +378,8 @@ class GlmFlashWorkerProvider(BaseProvider):
 
     def _delegation_envelope(self, task: TaskContract) -> dict[str, Any]:
         inputs = _validated_text_inputs(task)
-        if _OBVIOUS_SENSITIVE_MARKER.search(task.goal) or any(
-            _OBVIOUS_SENSITIVE_MARKER.search(item["content"])
+        if _contains_obvious_sensitive_marker(task.goal) or any(
+            _contains_obvious_sensitive_marker(item["content"])
             for item in inputs
         ):
             raise ProviderPolicyError(

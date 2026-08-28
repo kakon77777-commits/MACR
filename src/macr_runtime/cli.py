@@ -39,7 +39,7 @@ def _doctor(
     registry = ProviderRegistry.from_configs(configs, key_sources=key_sources)
     report = {
         "runtime": "macr-runtime",
-        "version": "0.5.0a2",
+        "version": "0.5.0a3",
         "network_activity": False,
         "storage": layout.describe(),
         "providers": list(registry.health()),
@@ -421,7 +421,7 @@ def _invoke(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="macr",
-        description="MACR v0.5.0a2 shared-core control utility",
+        description="MACR v0.5.0a3 shared-core control utility",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

@@ -1,6 +1,6 @@
 # Storage and migration contract
 
-Status: active at MACR v0.5.0a2 Shared Core Checkpoint A Repair
+Status: active at MACR v0.5.0a3 Shared Core Sensitive-Marker Repair
 
 Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `D_RESIDENCE_CANONICAL`, `SECRETS_EXTERNAL`
 

@@ -69,4 +69,4 @@ __all__ = [
     "WorkspaceSpec",
 ]
 
-__version__ = "0.5.0a2"
+__version__ = "0.5.0a3"
