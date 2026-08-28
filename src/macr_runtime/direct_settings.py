@@ -267,6 +267,33 @@ class DirectSettingsStore:
             raise DirectStoreConflict("Direct active settings profile is missing")
         return self._decode(row)
 
+    def get_profile(
+        self,
+        profile_name: str,
+        profile_version: int,
+    ) -> DirectRunSettings:
+        if not isinstance(profile_name, str) or not profile_name.strip():
+            raise ValueError("profile_name must be non-empty")
+        if (
+            isinstance(profile_version, bool)
+            or not isinstance(profile_version, int)
+            or profile_version < 1
+        ):
+            raise ValueError("profile_version must be positive")
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """SELECT settings_json, settings_sha256
+                FROM settings_profiles
+                WHERE profile_name = ? AND profile_version = ?""",
+                (profile_name.strip(), profile_version),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise DirectStoreConflict("Direct settings profile is missing")
+        return self._decode(row)
+
     def profiles(self) -> tuple[DirectRunSettings, ...]:
         connection = self.database.connect()
         try:

@@ -505,6 +505,31 @@ class AccountingStore:
             connection.close()
         return dict(row) if row is not None else None
 
+    def mark_soft_warning(self, run_id: str) -> None:
+        run = _uuid4("run_id", run_id)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT soft_warning FROM invocations WHERE run_id = ?",
+                (run,),
+            ).fetchone()
+            if row is None:
+                raise AccountingConflict(
+                    "accounting warning has no dispatch"
+                )
+            if row["soft_warning"] != 1:
+                connection.execute(
+                    "UPDATE invocations SET soft_warning = 1 WHERE run_id = ?",
+                    (run,),
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def pending_outbox(self) -> tuple[dict[str, Any], ...]:
         connection = self._connect()
         try:
