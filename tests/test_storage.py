@@ -31,6 +31,18 @@ class StorageLayoutTests(unittest.TestCase):
         self.assertEqual(layout.quarantine_root, state_root / "quarantine")
         self.assertEqual(layout.direct_root, state_root / "direct")
         self.assertEqual(layout.settings_root, state_root / "settings")
+        self.assertEqual(
+            layout.direct_db_path,
+            state_root / "direct" / "conversations.sqlite3",
+        )
+        self.assertEqual(
+            layout.settings_db_path,
+            state_root / "settings" / "settings.sqlite3",
+        )
+        self.assertEqual(
+            layout.direct_instance_path,
+            state_root / "direct" / "instance.json",
+        )
 
     def test_state_tree_includes_v05_runtime_roots(self) -> None:
         with d_drive_tempdir() as state_root:

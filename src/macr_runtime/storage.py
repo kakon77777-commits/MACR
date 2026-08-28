@@ -86,6 +86,18 @@ class StorageLayout:
     def settings_root(self) -> Path:
         return Path(self.state_root) / "settings"
 
+    @property
+    def direct_db_path(self) -> Path:
+        return self.direct_root / "conversations.sqlite3"
+
+    @property
+    def settings_db_path(self) -> Path:
+        return self.settings_root / "settings.sqlite3"
+
+    @property
+    def direct_instance_path(self) -> Path:
+        return self.direct_root / "instance.json"
+
     def ensure_state_tree(self) -> tuple[Path, ...]:
         roots = tuple(
             Path(self.state_root) / name

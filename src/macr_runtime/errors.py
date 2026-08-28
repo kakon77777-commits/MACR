@@ -48,3 +48,7 @@ class TaskContradictionError(MacrError):
 
 class AccountingConflict(MacrError):
     """An accounting write conflicts with append-only financial evidence."""
+
+
+class DirectStoreConflict(MacrError):
+    """Direct settings, conversation, or message state violates an invariant."""
