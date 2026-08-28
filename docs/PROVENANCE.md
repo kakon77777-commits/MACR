@@ -89,13 +89,15 @@ The a1 checkpoint document and external reviewer evidence remain historical arti
 Field observation showed that the GLM obvious-sensitive heuristic confused HTTPS and LaTeX control sequences with Windows drive paths. Subsequent route evidence also exposed append-only legacy growth after a completed migration. The repair is bounded to the classifier, logical cross-hash legacy reconciliation, their behavioral tests, active alpha version labels, and checkpoint documentation. It does not adopt v0.6 work.
 
 ```text
-implementation_commit = 674b3bb88dc086f6d8d310194717ab46397c76c0
-implementation_tree   = 487edab4de91af7ec46bbc73be06655f2c37a286
+implementation_commit = c64d9b8ae8593319bd4c5b6b9aa33a999ea489f1
+implementation_tree   = c0d8f33ea2a1d6ec87fdbe20b1b882da5f371745
 ```
 
 The initial a3 implementation/checkpoint pair `4a54acbdd405ee955346f112a1a45e3798850841` / `575b9b5555874067ba999b84f5176ce19dfa7853` was independently rejected after reproducing cross-hash duplicate imports and additional classifier underblocking. It remains historical and carries no route authority.
 
 The second pair `dd0e36831f8b64556aa2df5ad4f6a8abdc2d3f59` / `ee8fe2815e05ab01fa4af7596fe8006353ed6a74` closed those findings but was independently rejected after generic file URIs and delimiter-starting Windows path components bypassed the classifier. It also remains historical and carries no route authority.
+
+The third pair `674b3bb88dc086f6d8d310194717ab46397c76c0` / `ca6547d271fb97c73946358dc3a4fbea1373ba53` closed those cases but was independently rejected after valid single-slash and relative `file:` URI forms bypassed its slash-count rule. It also remains historical and carries no route authority.
 
 | Evidence | Bytes | SHA-256 |
 |---|---:|---|

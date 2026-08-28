@@ -5,8 +5,8 @@ Status: local offline candidate; not merged, released, deployed, live-accepted, 
 ## Exact implementation boundary
 
 ```text
-implementation_commit = 674b3bb88dc086f6d8d310194717ab46397c76c0
-implementation_tree   = 487edab4de91af7ec46bbc73be06655f2c37a286
+implementation_commit = c64d9b8ae8593319bd4c5b6b9aa33a999ea489f1
+implementation_tree   = c0d8f33ea2a1d6ec87fdbe20b1b882da5f371745
 parent_candidate      = 8697e25fa8541a89aa2f39b294a733cf15c79bcd
 ```
 
@@ -15,6 +15,8 @@ The earlier live route bound to the clean parent candidate closed as soon as thi
 The initial a3 implementation/checkpoint pair `4a54acbdd405ee955346f112a1a45e3798850841` / `575b9b5555874067ba999b84f5176ce19dfa7853` was independently rejected. Review proved that changed source hashes would duplicate prior legacy events, recognized LaTeX words could hide paths through valid Windows filename characters, and the documented UNC/credential/private-key coverage was narrower than claimed. The exact implementation boundary above supersedes that rejected pair without rewriting it.
 
 The next implementation/checkpoint pair `dd0e36831f8b64556aa2df5ad4f6a8abdc2d3f59` / `ee8fe2815e05ab01fa4af7596fe8006353ed6a74` closed those findings but was also rejected after fresh review found generic `file:` URIs and delimiter-starting Windows path components still bypassed the obvious-marker rule. It likewise remains historical and carries no route authority.
+
+The third pair `674b3bb88dc086f6d8d310194717ab46397c76c0` / `ca6547d271fb97c73946358dc3a4fbea1373ba53` closed those cases but was rejected because the file-URI rule required at least two slashes and missed valid single-slash and relative `file:` forms. It remains historical and carries no route authority.
 
 ## Defect and repair boundary
 
@@ -44,6 +46,7 @@ RED observations reproduced before production changes:
 5. Cross-hash append replay reported three newly imported rows instead of one, and changed content under an existing legacy event ID did not fail.
 6. Valid Windows filename characters after a listed LaTeX word, Unicode/forward UNC, spaced credential labels, algorithm-prefixed private-key headers, and URI edge cases reproduced the independent review gaps.
 7. Generic `file://server/...` and `file:///...` tokens plus delimiter-starting components such as `D:\text\{secret}\file.txt` reproduced the second-review gaps.
+8. Single-slash and relative forms `file:/...` and `file:relative/...` reproduced the third-review file-scheme gap.
 
 Each RED was followed by a bounded production change and a targeted GREEN run. Credential-shaped inputs, actual drive paths, lowercase drive paths, forward-slash drive paths, file URLs, Unicode/backslash/forward/escaped UNC, LaTeX in goals, LaTeX in text inputs, append-only source growth, and conflicting legacy identity reuse have direct behavioral controls.
 
