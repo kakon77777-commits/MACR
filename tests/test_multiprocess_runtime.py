@@ -25,6 +25,7 @@ from tests.support import d_drive_tempdir
 
 ROOT = Path(__file__).resolve().parents[1]
 WRITER = ROOT / "tests" / "helpers" / "sqlite_event_writer.py"
+BOOTSTRAP_WORKER = ROOT / "tests" / "helpers" / "sqlite_bootstrap_worker.py"
 CENSUS = ROOT / "scripts" / "Test-MacrInvokerProcesses.ps1"
 
 
@@ -150,6 +151,74 @@ def _run_census(expected_count: int | None = None) -> subprocess.CompletedProces
 
 
 class MultiprocessRuntimeTests(unittest.TestCase):
+    def test_fresh_sqlite_bootstrap_is_safe_for_synchronized_processes(self) -> None:
+        with d_drive_tempdir() as temp:
+            database = temp / "dispatch.sqlite3"
+            start_signal = temp / "start.signal"
+            process_count = 32
+            processes = [
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(BOOTSTRAP_WORKER),
+                        str(database),
+                        str(start_signal),
+                        str(temp / f"ready-{index}"),
+                    ],
+                    env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                for index in range(process_count)
+            ]
+            completed: list[tuple[str, str]] = []
+            try:
+                deadline = time.monotonic() + 30
+                while (
+                    len(tuple(temp.glob("ready-*"))) < process_count
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.005)
+                self.assertEqual(
+                    len(tuple(temp.glob("ready-*"))),
+                    process_count,
+                    "all bootstrap workers must reach the synchronized start gate",
+                )
+                start_signal.touch()
+                completed = [
+                    process.communicate(timeout=45) for process in processes
+                ]
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.terminate()
+                        process.wait(timeout=15)
+
+            failures = [
+                (index, process.returncode, stdout, stderr)
+                for index, (process, (stdout, stderr)) in enumerate(
+                    zip(processes, completed)
+                )
+                if process.returncode != 0
+            ]
+            self.assertEqual(failures, [])
+
+            connection = SqliteEventStore(database).database.connect()
+            try:
+                version = connection.execute(
+                    "SELECT version FROM schema_meta WHERE component = 'runtime'"
+                ).fetchone()[0]
+                journal_mode = connection.execute(
+                    "PRAGMA journal_mode"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertEqual(version, 4)
+        self.assertEqual(journal_mode.lower(), "wal")
+
     def test_sqlite_event_store_exact_counts_across_processes(self) -> None:
         for workers in (1, 2, 3, 4, 8):
             with self.subTest(workers=workers), d_drive_tempdir() as temp:

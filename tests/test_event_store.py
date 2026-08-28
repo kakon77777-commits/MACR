@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
 import uuid
 from unittest.mock import patch
 
 from macr_runtime.errors import EventStoreConflict, StoragePolicyError
 from macr_runtime.event_store import SqliteEventStore
+from macr_runtime.runtime_db import RuntimeDatabase
 
 from tests.support import d_drive_tempdir
 
@@ -16,6 +18,45 @@ TERMINAL_ID = "33333333-3333-4333-8333-333333333333"
 
 
 class SqliteEventStoreTests(unittest.TestCase):
+    def test_wal_bootstrap_retries_transient_database_locks(self) -> None:
+        original_connect = sqlite3.connect
+        wal_attempts = 0
+
+        class LockingConnection:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, statement, *args, **kwargs):
+                nonlocal wal_attempts
+                if statement == "PRAGMA journal_mode = WAL":
+                    wal_attempts += 1
+                    if wal_attempts < 3:
+                        self.connection.close()
+                        raise sqlite3.OperationalError("database is locked")
+                return self.connection.execute(statement, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self.connection, name)
+
+        def connect_with_transient_wal_lock(*args, **kwargs):
+            return LockingConnection(original_connect(*args, **kwargs))
+
+        with d_drive_tempdir() as temp, patch(
+            "macr_runtime.runtime_db.sqlite3.connect",
+            side_effect=connect_with_transient_wal_lock,
+        ):
+            database = RuntimeDatabase(temp / "dispatch.sqlite3")
+            connection = database.connect()
+            try:
+                journal_mode = connection.execute(
+                    "PRAGMA journal_mode"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertEqual(wal_attempts, 3)
+        self.assertEqual(journal_mode.lower(), "wal")
+
     def test_one_dispatch_and_one_terminal_per_run(self) -> None:
         with d_drive_tempdir() as temp:
             store = SqliteEventStore(temp / "dispatch.sqlite3")
