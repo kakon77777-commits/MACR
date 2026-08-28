@@ -98,6 +98,47 @@ class ReturnContractCompilerTests(unittest.TestCase):
             ReturnContractState.INVALID,
         )
 
+    def test_plain_source_uses_dynamic_language_heading_without_rejecting_code(self) -> None:
+        cases = (
+            ("python", "Python:\nprint('ok')"),
+            ("rust", "Rust:\nfn main() {}"),
+            ("typescript", "TypeScript source:\nexport {};"),
+        )
+        for language, answer in cases:
+            with self.subTest(language=language):
+                task = replace(
+                    base_task(),
+                    return_contract=ReturnContract(
+                        summary=False,
+                        patch=False,
+                        evidence=False,
+                        format=ReturnFormat.PLAIN_SOURCE,
+                        language=language,
+                    ),
+                )
+                self.assertEqual(
+                    validate_return_contract(task, answer).state,
+                    ReturnContractState.INVALID,
+                )
+
+        python_task = replace(
+            base_task(),
+            return_contract=ReturnContract(
+                summary=False,
+                patch=False,
+                evidence=False,
+                format=ReturnFormat.PLAIN_SOURCE,
+                language="python",
+            ),
+        )
+        self.assertEqual(
+            validate_return_contract(
+                python_task,
+                "code: str = 'ok'\nprint(code)\n",
+            ).state,
+            ReturnContractState.VALID,
+        )
+
     def test_json_object_rejects_duplicate_keys_and_non_objects(self) -> None:
         task = replace(
             base_task(),

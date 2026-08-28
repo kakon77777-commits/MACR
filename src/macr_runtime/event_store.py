@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from .errors import EventStoreConflict
@@ -109,6 +110,73 @@ _CANDIDATE_CAPTURE_KEYS = frozenset(
         "captured_at",
     }
 )
+_OPERATIONAL_REQUIRED_KEYS = {
+    "provider.dispatch_requested": frozenset({"provider_id"}),
+    "provider.candidate_completed": frozenset({"status"}),
+}
+_OPERATIONAL_FIELD_KINDS = {
+    "provider.dispatch_requested": {
+        "provider_id": "text",
+        "task_id": "text",
+        "task_type": "text",
+        "interaction_plane": "text",
+        "origin_host": "text",
+        "origin_identifier_kind": "text",
+        "origin_native_id": "text",
+        "authority_source_kind": "text",
+        "authority_source_id": "text",
+        "authority_digest": "text",
+        "authority_revision": "integer",
+        "authority_epoch": "integer",
+        "authority_scope_sha256": "text",
+        "policy_snapshot_sha256": "text",
+        "batch_id": "optional_text",
+        "member_digest": "optional_text",
+        "relay_is_authorship": "boolean",
+        "fencing_token": "integer",
+    },
+    "provider.candidate_completed": {
+        "provider_id": "text",
+        "task_id": "text",
+        "dispatch_event_id": "text",
+        "status": "text",
+        "model": "optional_text",
+        "response_id": "optional_text",
+        "finish_reason": "optional_text",
+        "provider_state": "text",
+        "input_tokens": "optional_integer",
+        "output_tokens": "optional_integer",
+        "reasoning_tokens": "optional_integer",
+        "cached_tokens": "optional_integer",
+        "currency_cost_usd": "optional_number",
+        "cost_kind": "optional_text",
+        "pricing_basis_version": "optional_text",
+        "duration_ms": "optional_integer",
+        "input_media_count": "optional_integer",
+        "input_media_bytes": "optional_integer",
+        "output_artifact_count": "optional_integer",
+        "output_artifact_bytes": "optional_integer",
+        "billing_state": "text",
+        "capture_state": "text",
+        "candidate_capture": "optional_capture",
+        "return_contract_state": "text",
+        "return_contract_reason": "optional_text",
+        "failure_type": "optional_text",
+        "authority_digest": "text",
+        "authority_revision": "integer",
+        "authority_epoch": "integer",
+    },
+}
+_CANDIDATE_CAPTURE_FIELD_KINDS = {
+    "capture_id": "text",
+    "run_id": "text",
+    "provider_id": "text",
+    "answer_sha256": "text",
+    "answer_bytes": "integer",
+    "task_digest": "text",
+    "approval_digest": "optional_text",
+    "captured_at": "text",
+}
 
 
 def _utc_now() -> str:
@@ -119,6 +187,67 @@ def _non_empty(name: str, value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
     return value.strip()
+
+
+def _normalize_payload_key(key: str) -> str:
+    separated_acronyms = re.sub(
+        r"([A-Z]+)([A-Z][a-z])",
+        r"\1_\2",
+        key.strip(),
+    )
+    separated_words = re.sub(
+        r"(?<=[a-z0-9])(?=[A-Z])",
+        "_",
+        separated_acronyms,
+    )
+    return separated_words.lower().replace("-", "_")
+
+
+def _matches_field_kind(value: Any, kind: str) -> bool:
+    if kind == "text":
+        return isinstance(value, str) and bool(value.strip())
+    if kind == "optional_text":
+        return value is None or (isinstance(value, str) and bool(value.strip()))
+    if kind == "integer":
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    if kind == "optional_integer":
+        return value is None or (
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+        )
+    if kind == "optional_number":
+        return value is None or (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and value >= 0
+        )
+    if kind == "boolean":
+        return isinstance(value, bool)
+    if kind == "optional_capture":
+        return value is None or isinstance(value, Mapping)
+    raise AssertionError(f"unknown operational field kind: {kind}")
+
+
+def _field_kind_description(kind: str) -> str:
+    return {
+        "text": "a non-empty string",
+        "optional_text": "a non-empty string or null",
+        "integer": "a non-negative integer",
+        "optional_integer": "a non-negative integer or null",
+        "optional_number": "a finite non-negative number or null",
+        "boolean": "a boolean",
+        "optional_capture": "an object or null",
+    }[kind]
+
+
+def _contains_local_path(value: str) -> bool:
+    stripped = value.strip()
+    try:
+        if PureWindowsPath(stripped).drive:
+            return True
+    except (OSError, ValueError):
+        pass
+    return bool(_LOCAL_PATH_MARKER.search(value))
 
 
 def _uuid4(name: str, value: str) -> str:
@@ -136,11 +265,7 @@ def _validate_payload(value: Any) -> None:
         for key, child in value.items():
             if not isinstance(key, str):
                 raise ValueError("event payload keys must be strings")
-            normalized_key = re.sub(
-                r"(?<=[a-z0-9])(?=[A-Z])",
-                "_",
-                key.strip(),
-            ).lower().replace("-", "_")
+            normalized_key = _normalize_payload_key(key)
             if (
                 normalized_key in _FORBIDDEN_PAYLOAD_KEYS
                 or normalized_key.endswith(_FORBIDDEN_PAYLOAD_KEY_SUFFIXES)
@@ -154,7 +279,7 @@ def _validate_payload(value: Any) -> None:
         return
     if isinstance(value, bytes):
         raise ValueError("event payload may not contain bytes")
-    if isinstance(value, str) and _LOCAL_PATH_MARKER.search(value):
+    if isinstance(value, str) and _contains_local_path(value):
         raise ValueError("event payload contains a path-like value")
 
 
@@ -168,6 +293,15 @@ def _validate_operational_payload(
         raise ValueError(
             f"event payload key is not allowed for {event_type}: {unknown[0]}"
         )
+    missing = sorted(_OPERATIONAL_REQUIRED_KEYS[event_type] - set(payload))
+    if missing:
+        raise ValueError(
+            f"event payload is missing required key for {event_type}: {missing[0]}"
+        )
+    for key, value in payload.items():
+        kind = _OPERATIONAL_FIELD_KINDS[event_type][key]
+        if not _matches_field_kind(value, kind):
+            raise ValueError(f"{key} must be {_field_kind_description(kind)}")
     if event_type == "provider.candidate_completed":
         capture = payload.get("candidate_capture")
         if isinstance(capture, Mapping):
@@ -177,6 +311,19 @@ def _validate_operational_payload(
                     "candidate capture payload key is not allowed: "
                     f"{unknown_capture[0]}"
                 )
+            missing_capture = sorted(_CANDIDATE_CAPTURE_KEYS - set(capture))
+            if missing_capture:
+                raise ValueError(
+                    "candidate capture payload is missing required key: "
+                    f"{missing_capture[0]}"
+                )
+            for key, value in capture.items():
+                kind = _CANDIDATE_CAPTURE_FIELD_KINDS[key]
+                if not _matches_field_kind(value, kind):
+                    raise ValueError(
+                        "candidate_capture."
+                        f"{key} must be {_field_kind_description(kind)}"
+                    )
     _validate_payload(payload)
 
 

@@ -76,7 +76,7 @@ class SqliteEventStoreTests(unittest.TestCase):
                     run_id=RUN_ID,
                     terminal_event_id=str(uuid.uuid4()),
                     state="candidate_success",
-                    payload={},
+                    payload={"status": "candidate_success"},
                 )
             run = store.read_run(RUN_ID)
             events = store.read_events(run_id=RUN_ID)
@@ -102,6 +102,9 @@ class SqliteEventStoreTests(unittest.TestCase):
             "error_body",
             "localPath",
             "remoteBody",
+            "remoteHTTPBody",
+            "sourceURLPath",
+            "artifactJSONContent",
         )
         with d_drive_tempdir() as temp:
             store = SqliteEventStore(temp / "dispatch.sqlite3")
@@ -120,7 +123,9 @@ class SqliteEventStoreTests(unittest.TestCase):
     def test_event_payload_rejects_path_values_hidden_under_aliases(self) -> None:
         path_values = (
             r"D:\SECRET\task.txt",
+            r"D:SECRET\task.txt",
             r"\\private-host\share\task.txt",
+            "//private-host/share/task.txt",
         )
         with d_drive_tempdir() as temp:
             store = SqliteEventStore(temp / "dispatch.sqlite3")
@@ -178,6 +183,49 @@ class SqliteEventStoreTests(unittest.TestCase):
                         "unreviewed_metric": 1,
                     },
                 )
+            self.assertIsNone(store.read_run(RUN_ID)["terminal_event_id"])
+
+    def test_operational_events_reject_invalid_field_types(self) -> None:
+        with d_drive_tempdir() as temp:
+            store = SqliteEventStore(temp / "dispatch.sqlite3")
+            with self.assertRaisesRegex(ValueError, "provider_id must be"):
+                store.start_run(
+                    run_id=RUN_ID,
+                    dispatch_event_id=DISPATCH_ID,
+                    payload={
+                        "provider_id": {
+                            "nested": {"remoteHTTPBody": "PRIVATE"},
+                        },
+                    },
+                )
+            self.assertIsNone(store.read_run(RUN_ID))
+
+            store.start_run(
+                run_id=RUN_ID,
+                dispatch_event_id=DISPATCH_ID,
+                payload={"provider_id": "glm"},
+            )
+            invalid_terminal_values = (
+                {
+                    "status": "candidate_failure",
+                    "failure_type": {
+                        "artifactJSONContent": "PRIVATE",
+                    },
+                },
+                {
+                    "status": "candidate_failure",
+                    "candidate_capture": "arbitrary scalar metadata",
+                },
+            )
+            for payload in invalid_terminal_values:
+                with self.subTest(payload=payload):
+                    with self.assertRaisesRegex(ValueError, "must be"):
+                        store.finish_run(
+                            run_id=RUN_ID,
+                            terminal_event_id=TERMINAL_ID,
+                            state="candidate_failure",
+                            payload=payload,
+                        )
             self.assertIsNone(store.read_run(RUN_ID)["terminal_event_id"])
 
     def test_start_run_rolls_back_run_when_event_insert_fails(self) -> None:

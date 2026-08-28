@@ -28,7 +28,7 @@ _PLAIN_SOURCE_WRAPPER = re.compile(
         here(?:['’]s|\s+is)\b
         | below\s+is\b
         | the\s+following\b
-        | (?:plain\s+)?(?:source|code|typescript|javascript|c\#)\s*:
+        | (?:plain\s+)?(?:source|code)\s*:\s*(?:\r?\n|\Z)
     )"""
 )
 
@@ -96,6 +96,24 @@ def compile_worker_instruction(task: TaskContract) -> str:
     return " ".join(directives)
 
 
+def _has_plain_source_wrapper(task: TaskContract, answer: str) -> bool:
+    if _PLAIN_SOURCE_WRAPPER.search(answer):
+        return True
+    language = task.return_contract.language
+    if language is None:
+        return False
+    labels = {language, _LANGUAGE_LABELS.get(language, language)}
+    for label in labels:
+        pattern = re.compile(
+            rf"\A\s*{re.escape(label)}"
+            r"(?:\s+(?:source|code))?\s*:\s*(?:\r?\n|\Z)",
+            flags=re.IGNORECASE,
+        )
+        if pattern.search(answer):
+            return True
+    return False
+
+
 def validate_return_contract(
     task: TaskContract,
     answer: str,
@@ -124,7 +142,7 @@ def validate_return_contract(
                 answer,
                 flags=re.IGNORECASE | re.MULTILINE,
             )
-            or _PLAIN_SOURCE_WRAPPER.search(answer)
+            or _has_plain_source_wrapper(task, answer)
         )
         return ReturnContractValidation(
             (
