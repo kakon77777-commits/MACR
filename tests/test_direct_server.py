@@ -108,7 +108,7 @@ class FakeRuntime:
         self.send_count += 1
         if self.fail_message:
             raise RuntimeError(
-                r"D:\private\prompt.txt XAI_API_KEY=xai-private-should-not-leak"
+                r"D:\private\prompt.txt XAI credential private marker"
             )
         messages = self.conversations.message_items.setdefault(conversation_id, [])
         messages.extend(
