@@ -82,6 +82,8 @@ If the preserved JSONL ledger is nonempty, inspect it before the first v0.5 invo
 
 Use `--expected-count N` when an external exact count is available. Import is copy-only and idempotent. Invalid UTF-8, malformed JSON, duplicate keys, forbidden content fields, duplicate original IDs, or an expected-count mismatch make migration incomplete. Corrupt bytes are retained under `quarantine`; provider invocation remains blocked until the current source hash has a complete import record.
 
+A v0.5 live route also requires every v0.4 invoker to be retired and the preserved JSONL source to be sealed with the Windows read-only attribute before the authoritative hash/count snapshot and migration. See `docs/STORAGE_AND_MIGRATION.md`. The SQLite current-hash gate detects later drift, but it does not grant authority to unseal or rerun an old writer.
+
 ## Invocation
 
 Grok 4.6 frontier profile:

@@ -84,6 +84,19 @@ Every nonblank line is parsed with strict UTF-8, unique JSON keys, a timezone-aw
 
 When `ledger\events.jsonl` is nonempty and its current SHA-256 lacks a complete matching import record, `macr invoke` returns `legacy_migration_required` before reading the task, creating one-shot authority, acquiring a lease, dispatching, or contacting a provider. A corrupt import returns `legacy_migration_incomplete`; it never silently starts from empty history.
 
+Before any v0.5 live route, retire all legacy v0.4 invocation entry points, confirm the GLM invoker census is zero, and set the preserved JSONL source to Windows read-only. Verify the attribute before taking the hash/count snapshot used for dry-run and copy-import:
+
+```powershell
+$legacyLedger = 'D:\AI_RESIDENCE\AI_Runtime\macr-state\ledger\events.jsonl'
+$legacyItem = Get-Item -LiteralPath $legacyLedger
+$legacyItem.IsReadOnly = $true
+if (-not (Get-Item -LiteralPath $legacyLedger).IsReadOnly) {
+    throw 'Legacy ledger seal was not applied.'
+}
+```
+
+The read-only attribute prevents ordinary old append writers; it is not an ACL or cryptographic guarantee. Removing or bypassing it invalidates the route. Independently, any byte drift changes the source hash and causes the v0.5 migration gate to fail closed until the exact new source is reviewed and imported.
+
 ## Future volume migration procedure
 
 1. Freeze writes and record source/destination volume identity.
