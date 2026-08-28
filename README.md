@@ -1,8 +1,8 @@
-# MACR Runtime v0.5.0a3 — Shared Core Sensitive-Marker Repair
+# MACR Runtime v0.5.0a4 — Direct Chat UI 0.1 Alpha
 
-MACR is a migration-aware runtime for heterogeneous AI workers. Checkpoint A adds a host-neutral, cross-process-safe shared core around the existing provider adapters. Provider generation, return-contract validity, materialization, verification, and acceptance remain separate states; a provider completion never becomes accepted work automatically.
+MACR is a migration-aware runtime for heterogeneous AI workers. The v0.5.0a4 alpha keeps the host-neutral, cross-process-safe shared core and adds the first executable Direct plane: a local browser UI for full multi-turn Grok 4.6 or Qwythos conversations. Direct provider completion, private capture, conversation projection, delegated candidate generation, verification, and acceptance remain separate states.
 
-This alpha line supersedes the unaccepted v0.5.0a1 candidate after independent replay found a fresh-SQLite bootstrap race, incomplete event-payload privacy enforcement, a plain-source wrapper gap, and a non-self-contained replay command. v0.5.0a3 additionally separates obvious Windows-path detection from URI/HTTPS and a closed set of observed LaTeX control-sequence ambiguities while retaining drive, Unicode/backslash/forward UNC, credential-label, and algorithm-prefixed private-key refusal controls. It also reconciles append-only legacy source growth by logical event identity rather than duplicating the unchanged prefix under every new source hash. It does **not** implement Direct Chat, a browser UI, Codex/Claude Code host adapters, bounded fan-out, or Context Capsules.
+This alpha line preserves all a3 replay and sensitive-marker repairs. Direct Chat is a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. It does **not** implement Codex/Claude Code host adapters, bounded fan-out, Context Capsules, or the separately designed v0.6 dynamic-coordination architecture.
 
 ## Canonical D: placement
 
@@ -14,6 +14,25 @@ OLLAMA_MODELS     = D:\Ai\work together\LocalModels\models
 ```
 
 `CODEX_HOME_TARGET` is inactive metadata for a separately governed future migration. This runtime does not move the active Codex installation, login, sessions, or credentials.
+
+## Direct Chat quick start
+
+Install or refresh the Windows Desktop shortcut:
+
+```powershell
+Set-Location 'D:\Ai\work together\MACR\.worktrees\macr-v0.5-direct-chat-ui'
+.\scripts\install-direct-chat-shortcut.ps1
+```
+
+Then open **MACR Direct Chat (Alpha)** from the Desktop. The shortcut contains no provider key or bootstrap token. It launches a hidden D-drive PowerShell entry point, loads the existing xAI credential helper only into the child process, starts one `127.0.0.1` server on an OS-assigned port, and opens the default browser. A second launch opens the existing instance instead of starting another server.
+
+Local startup smoke without model generation:
+
+```powershell
+.\scripts\macr.ps1 direct-chat --smoke
+```
+
+The UI exposes only `grok` (`grok-4.6`) and `ollama_qwythos`. A blank system-prompt field produces no system message; nonblank content stays visible and is sent exactly once. Responses appear only after the provider completes. Conversation history, search, archive/restore, settings snapshots, cost metadata, and candidate captures remain on D:. See `docs/DIRECT_CHAT.md` for the manual two-provider acceptance run.
 
 ## Provider profiles
 
@@ -161,8 +180,10 @@ Only validated JPEG/PNG bytes become artifacts. Paths, prompts, answers, source 
 
 ## Current limits
 
-- No Direct Chat runtime/UI, host adapter, automatic router, fan-out scheduler, Context Capsule, verifier decision, or acceptance transition.
-- Checkpoint A keeps the accounting `soft_warning` state distinct from existing task/provider hard budget gates. Provider adapters retain v0.4 task-budget behavior; the operator-managed warn-only profile is reserved for the Direct/settings checkpoint.
+- Direct Chat is an alpha candidate. Offline and local service gates pass, but one real multi-turn Grok conversation and one real multi-turn Qwythos conversation remain operator acceptance gates.
+- Transport-level cancellation and explicit late-result recovery are not exposed in Direct UI 0.1. There is no fake cancel control; these are required before a beta label.
+- No host adapter, automatic router, fan-out scheduler, Context Capsule, verifier decision, or acceptance transition.
+- Direct `operator_managed` calls are warn-only and require accounting. Privacy, credential, legacy-migration, current authority, route, and lease failures remain hard pre-network gates.
 - No provider-side hard USD cap; actual Grok cost is checked after completion and an overrun becomes `candidate_failure`.
 - No Grok search, code execution, files, images, or server-side tools.
 - No Ollama tools, vision, embeddings, model pulling, or service startup.

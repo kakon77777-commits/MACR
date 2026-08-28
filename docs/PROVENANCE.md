@@ -134,4 +134,36 @@ The reviewed canonical candidate and master implementation plan were copied byte
 | `docs/superpowers/specs/2026-08-28-macr-v0.6-dynamic-coordination-design.md` | 22,219 | `96F80327174335997AADDEFC8214E4116765604D9DD3F2C7F71742287AD3B67C` |
 | `docs/superpowers/plans/2026-08-28-macr-v0.6-dynamic-coordination.md` | 50,717 | `44267DB22C74124A41F1797FCE6B1E6C86B82285E18E8F324BE0E7D1B02FD172` |
 
-This intake is documentation-only. MACR remains version `0.5.0a3`; the original a3 checkpoint commit/tree remains an immutable ancestor. The intake itself did not create provider, discovery, automation, migration, merge, release, or deployment authority. The bounded live route described above was activated separately under Neo's direct clarification and completed 74-event reconciliation; v0.6 implementation remains paused while the MSSP batch uses the frozen a3 runtime.
+This intake was documentation-only. At intake time MACR remained version `0.5.0a3`; the original a3 checkpoint commit/tree remains an immutable ancestor. The later a4 Direct Chat supplement below does not revise, rename, or implement the v0.6 plan. The intake itself did not create provider, discovery, automation, migration, merge, release, or deployment authority. The bounded live route described above was activated separately under Neo's direct clarification and completed 74-event reconciliation.
+
+## v0.5.0a4 Direct Chat UI 0.1 alpha candidate
+
+Neo explicitly authorized completing the previously approved Direct Chat design before v0.6. The version boundary is two-level:
+
+```text
+MACR package/runtime = 0.5.0a4
+Direct browser/API   = 0.1 alpha
+future coordination = v0.6 (unchanged and not implemented here)
+```
+
+The a4 work was isolated from the frozen MSSP a3 route:
+
+```text
+base_commit          = 42ea69479b4cc02c41fda9f0f6746c764cf9d2fa
+base_tree            = 605084f538c36435e3e23a04f91c2cefd8ef8260
+branch               = feature/macr-v0.5-direct-chat-ui
+worktree             = D:\Ai\work together\MACR\.worktrees\macr-v0.5-direct-chat-ui
+implementation_commit = 94bc7b5220d47bf08b768b07d453902ec323612b
+implementation_tree   = 88fa8d248c25fd391c93e712873603450fb28001
+```
+
+| Repository artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `docs/superpowers/specs/2026-08-27-macr-v0.5-direct-chat-design.md` | 32,493 | `EED4BDF417EDE5A989A40DE4597FD92BC6B536A00EF5ACA9FA8A4C69795A66AF` |
+| `docs/superpowers/plans/2026-08-29-macr-v0.5-direct-chat-ui-v0.1.md` | 25,642 | `918A4349917BC4CD64789679EDBDFD16B9CD020DDF89B75F78ECC37B1CD57A12` |
+
+The implementation adds immutable Direct contracts, versioned settings, complete plaintext conversation persistence, exact Grok/Qwythos native adapters, standing current-epoch operator authority, fenced sequential admission, private answer capture, accounting, an authenticated loopback API, packaged offline UI assets, a cross-process single-instance launcher, and a Windows shortcut installer. `DirectRuntime` does not accept a `TaskContract`, call `MacrRuntime.invoke()`, or compile a worker prompt.
+
+The first complete repository gate after implementation ran 298 tests with zero failures and two pre-existing Windows symbolic-link capability skips. It also completed the parameterized multi-process SQLite gates, content/credential scan, zero-invoker census, and offline doctor at version `0.5.0a4`. No Grok or Qwythos generation occurred in that gate. A separate local smoke started the server on `127.0.0.1`, fetched the packaged UI, exchanged the one-time bootstrap, and stopped without provider generation.
+
+This checkpoint remains an alpha candidate until the operator performs one bounded complete multi-turn Grok Direct conversation and one complete multi-turn Qwythos Direct conversation, including D-drive reload and accounting inspection. Transport-level cancellation and explicit late-result recovery are openly absent and remain beta gates. No merge, release, deployment, publication, v0.6 implementation, host-adapter authority, named resident identity, or delegated acceptance follows from this candidate.

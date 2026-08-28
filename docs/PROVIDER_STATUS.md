@@ -1,13 +1,13 @@
 # Provider status
 
-Updated: 2026-08-28
+Updated: 2026-08-29
 
 | Provider ID | Required model/route | Credential | Billing | Runtime state |
 |---|---|---|---:|---|
 | `minimax` | operator-selected compatible model | `MINIMAX_API_KEY` | allowed | adapter implemented; account configuration may be absent |
-| `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | adapter implemented; live v0.2 acceptance pending |
+| `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | delegated + Direct adapters implemented; Direct live acceptance pending |
 | `grok_standard` | `grok-4.3` | `XAI_API_KEY` | allowed | adapter implemented; manual profile only |
-| `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | adapter implemented; live MACR acceptance pending |
+| `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | delegated + Direct adapters implemented; Direct live acceptance pending |
 | `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
 | `google_image` | `gemini-3.1-flash-image`, one 1K output | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
 | `glm_flash_worker` | `glm-5.3-flash`, reasoning max | provider-late fixed `D:\KEY\GLM.txt` | allowed | native pre-validation observation adapter; prior v0.4 live candidate evidence retained |
@@ -16,13 +16,13 @@ Updated: 2026-08-28
 | `google_lyria` | `lyria-3-clip-preview` | not loaded | unavailable | disabled; no music adapter |
 | `claude_subscription` | approved subscription client not selected | subscription login | API forbidden | disabled |
 
-## Checkpoint A shared execution status
+## Shared execution and Direct alpha status
 
-All callable profiles enter the v0.5.0a3 CLI through a one-shot current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Existing providers other than GLM currently receive a compatibility observation derived from their normalized `ProviderResult`; GLM observes safe response fields and raw answer bytes before protocol validation.
+Delegated callable profiles enter the v0.5.0a4 CLI through a one-shot current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Direct Grok/Qwythos turns use a separate `DirectRuntime` contract with standing local-operator authority, the same fenced provider admission and accounting core, and provider-native full-history payloads without worker instructions.
 
-Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. No provider was called while building or verifying Checkpoint A. Direct Chat, Codex/Claude Code host adapters, automatic routing, bounded fan-out, and Context Capsules remain unavailable.
+Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. No provider generation was called while building or verifying the a4 UI. Direct Chat is locally executable; Codex/Claude Code host adapters, automatic routing, bounded fan-out, and Context Capsules remain unavailable.
 
-Accounting's `soft_warning` state remains distinct from each provider adapter's existing hard task-budget gate. Checkpoint A preserves the prior task-budget behavior; the operator-managed warn-only profile is not activated until the separate Direct/settings checkpoint.
+Accounting's `soft_warning` state remains distinct from each delegated provider adapter's hard task-budget gate. The Direct local `operator_managed` profile is now active for newly created Direct conversations and is warn-only; exact settings are pinned per conversation.
 
 ## Grok policy
 

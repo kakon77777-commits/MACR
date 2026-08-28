@@ -1,4 +1,27 @@
-# MACR v0.5.0a3 Shared Core architecture
+# MACR v0.5.0a4 Shared Core + Direct Chat architecture
+
+```text
+Loopback browser (127.0.0.1, authenticated cookie)
+        |
+        v
+Direct Web API + Direct Conversation Store
+        |
+        v
+DirectRuntime -- current authority -- fenced provider lease
+        |                                   |
+        +--> GrokDirectAdapter              +--> SQLite events/accounting
+        +--> QwythosDirectAdapter           +--> private Candidate Vault
+        |
+        v
+complete non-streaming response -> atomic assistant message -> safe text projection
+
+Delegated host / CLI
+        |
+        v
+TaskContract -> MacrRuntime -> candidate-only worker path
+```
+
+The Direct and delegation planes share configuration, credential custody, transport, observation, authority, lease, candidate, event, and accounting primitives. They do not share their public request contract. `DirectRuntime` never creates a `TaskContract`, never calls `MacrRuntime.invoke()`, and never imports the worker-instruction compiler. Direct history therefore contains only the operator-visible system prompt, user messages, and prior assistant messages.
 
 ```text
 Codex or another primary host
@@ -44,7 +67,21 @@ one SQLite terminal event + accounting outbox
 materialization / verification / acceptance (not implemented)
 ```
 
-Checkpoint A is a shared-core checkpoint only. It does not contain Direct Chat, a browser service, Codex or Claude Code host adapters, a fan-out scheduler, or Context Capsules.
+The a3 Checkpoint A shared core remains the immutable base. The a4 alpha implements Direct runtime Checkpoint B and the minimum testable local UI/launcher path from Checkpoint C. Codex or Claude Code host adapters, a fan-out scheduler, Context Capsules, transport-level Direct cancellation, and late-result recovery remain absent.
+
+## Direct conversation boundary
+
+- Direct provider IDs are closed to exact `grok`/`grok-4.6` and exact `ollama_qwythos`/Qwythos-9B-v2 Q4_K_M.
+- Provider/model, system-prompt hash, settings profile/version, policy hash, plaintext-encryption marker, dataset role, and training eligibility are immutable conversation metadata.
+- Grok Direct records are `archive_only`; Qwythos Direct records are `eval_only`; both are `training_eligible=false`. The Qwythos installed model digest is pinned at conversation creation and its canonical weights are never modified.
+- Complete history is sent without automatic summary, compaction, truncation, routing, fallback, or retry. A local context estimate warns or refuses before provider use without dropping earlier turns.
+- Raw answer bytes enter the private Candidate Vault before a successful assistant message is committed. Rejected protocol observations retain safe usage/cost/finish/model evidence without entering conversation history.
+
+## Loopback Web boundary
+
+The server is Python standard library plus packaged vanilla HTML/CSS/JavaScript. It binds exactly to `127.0.0.1:0`, rejects non-loopback Host/Origin values, has exact bounded JSON routes, emits no CORS allowance, and loads no CDN, remote font, analytics, or third-party asset. A random bootstrap token travels in the URL fragment, is exchanged once for an HttpOnly SameSite=Strict cookie, and is invalidated. Model text is assigned through DOM `textContent`; it is never interpreted as provider-supplied HTML.
+
+The on-demand Windows launcher holds a cross-process file lock, writes a content-free D-drive instance descriptor, and opens or reuses one server. Default idle shutdown is 30 minutes. Active requests and unsettled accounting prevent shutdown. The Desktop link contains only the D-drive launcher path; xAI credentials remain child-process environment only.
 
 ## Execution-state separation
 
@@ -146,7 +183,7 @@ Dispatch and terminal payloads enforce required keys, reviewed field types, and 
 
 The legacy `ledger\events.jsonl` is immutable input evidence. Import is copy-only and idempotent. Corrupt or forbidden lines are retained byte-for-byte in quarantine and make the source incomplete; the CLI refuses provider invocation until the current nonempty source hash has a complete import record.
 
-Accounting separates estimated/provider-reported/zero-local/unknown billing state from candidate status. Its `soft_warning` state is distinct from the existing task/provider hard budget gates. Checkpoint A preserves that existing enforcement; activating the local operator-managed warn-only profile belongs to the later Direct/settings checkpoint.
+Accounting separates estimated/provider-reported/zero-local/unknown billing state from candidate status. Its `soft_warning` state is distinct from delegated task/provider hard budget gates. Direct `operator_managed` settings activate warn-only accounting without weakening credential, privacy, route, legacy, authority, or lease gates.
 
 ## Speaker identity boundary
 
@@ -164,6 +201,6 @@ runtime role != authorship identity
 generation != verification != acceptance
 ```
 
-Every provider completion is a candidate. MACR v0.5.0a3 records provider, capture, return-contract, materialization, verification, and acceptance states independently; this checkpoint still implements no verifier decision or accepted-result transition.
+Every delegated provider completion remains a candidate. MACR v0.5.0a4 records provider, capture, return-contract, materialization, verification, and acceptance states independently; Direct projection into its private conversation store does not create a delegated verification or accepted-result transition.
 
 `PLAIN_SOURCE` is a conservative wrapper-format guard: it rejects Markdown fences, evidence/warning sections, common leading prose wrappers, and headings derived from the task's declared language. A generic `Code:`/`Source:` heading is rejected only when the colon ends the line, avoiding false rejection of source such as Python `code: str = 'ok'`. It does not prove that arbitrary source compiles. `JSON_OBJECT` validates one semantic object with unique keys; whitespace, final newline, and member order are not significant. Byte-exact JSON belongs under `EXACT_TEXT`.

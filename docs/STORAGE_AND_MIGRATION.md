@@ -1,6 +1,6 @@
 # Storage and migration contract
 
-Status: active at MACR v0.5.0a3 Shared Core Sensitive-Marker Repair
+Status: active at MACR v0.5.0a4 Direct Chat UI 0.1 alpha
 
 Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `D_RESIDENCE_CANONICAL`, `SECRETS_EXTERNAL`
 
@@ -54,8 +54,10 @@ D:\AI_RESIDENCE\AI_Runtime\macr-state\
   artifacts\                    validated provider artifacts
   cache\                        rebuildable cache
   test-tmp\                     bounded disposable verification state
-  direct\                       reserved; Direct runtime is not implemented
-  settings\                     reserved; settings runtime is not implemented
+  direct\conversations.sqlite3 exact plaintext Direct conversation history
+  direct\instance.json          content-free running-instance descriptor
+  direct\instance.lock          cross-process launcher lock
+  settings\settings.sqlite3     append-only versioned Direct settings profiles
 ```
 
 SQLite event and accounting databases contain bounded operational metadata, not prompts, candidate bytes, credentials, local input paths, or remote response bodies. Candidate files are create-once and referenced publicly by byte count and SHA-256 only. A transformed materialization cannot claim verbatim provenance.
