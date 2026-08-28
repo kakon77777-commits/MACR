@@ -89,11 +89,13 @@ The a1 checkpoint document and external reviewer evidence remain historical arti
 Field observation showed that the GLM obvious-sensitive heuristic confused HTTPS and LaTeX control sequences with Windows drive paths. Subsequent route evidence also exposed append-only legacy growth after a completed migration. The repair is bounded to the classifier, logical cross-hash legacy reconciliation, their behavioral tests, active alpha version labels, and checkpoint documentation. It does not adopt v0.6 work.
 
 ```text
-implementation_commit = dd0e36831f8b64556aa2df5ad4f6a8abdc2d3f59
-implementation_tree   = 242658eaa718e41ea3f043ec76ac7c1c6c22838a
+implementation_commit = 674b3bb88dc086f6d8d310194717ab46397c76c0
+implementation_tree   = 487edab4de91af7ec46bbc73be06655f2c37a286
 ```
 
 The initial a3 implementation/checkpoint pair `4a54acbdd405ee955346f112a1a45e3798850841` / `575b9b5555874067ba999b84f5176ce19dfa7853` was independently rejected after reproducing cross-hash duplicate imports and additional classifier underblocking. It remains historical and carries no route authority.
+
+The second pair `dd0e36831f8b64556aa2df5ad4f6a8abdc2d3f59` / `ee8fe2815e05ab01fa4af7596fe8006353ed6a74` closed those findings but was independently rejected after generic file URIs and delimiter-starting Windows path components bypassed the classifier. It also remains historical and carries no route authority.
 
 | Evidence | Bytes | SHA-256 |
 |---|---:|---|
