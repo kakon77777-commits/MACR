@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest import mock
 
 from macr_runtime.candidate_vault import CandidateVault
 from macr_runtime.errors import CandidateConflict, StoragePolicyError
@@ -229,6 +230,34 @@ class CandidateVaultTests(unittest.TestCase):
                     confirmation="DELETE",
                 )
             self.assertEqual(vault.read(capture.capture_id), b"private")
+
+    def test_direct_purge_ignores_transient_empty_directory_lock(self) -> None:
+        with d_drive_tempdir() as temp:
+            vault = CandidateVault(
+                temp / "candidates",
+                temp / "dispatch.sqlite3",
+            )
+            capture = vault.capture(
+                "ollama_qwythos",
+                RUN_ID,
+                b"private",
+                task_digest="a" * 64,
+                approval_digest=None,
+            )
+            target = vault.root / capture.relative_path
+
+            with mock.patch(
+                "macr_runtime.candidate_vault.Path.rmdir",
+                side_effect=PermissionError("directory temporarily locked"),
+            ):
+                removed = vault.purge_direct_run(
+                    "ollama_qwythos",
+                    RUN_ID,
+                    confirmation="DELETE",
+                )
+
+            self.assertTrue(removed)
+            self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":

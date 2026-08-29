@@ -317,10 +317,14 @@ class CandidateVault:
         target.unlink()
         run_directory = target.parent
         provider_directory = run_directory.parent
-        if run_directory != self.root and not any(run_directory.iterdir()):
-            run_directory.rmdir()
-        if provider_directory != self.root and not any(provider_directory.iterdir()):
-            provider_directory.rmdir()
+        for directory in (run_directory, provider_directory):
+            try:
+                if directory != self.root and not any(directory.iterdir()):
+                    directory.rmdir()
+            except OSError:
+                # Candidate bytes are already gone. Empty-directory cleanup is
+                # cosmetic and may be delayed by Windows scanners/handles.
+                pass
         return True
 
     def materialize_verbatim(
