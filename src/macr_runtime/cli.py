@@ -30,6 +30,7 @@ from .evidence_import import EvidenceImporter
 from .execution import DispatchContext, DispatchOrigin, InteractionPlane
 from .legacy_ledger import LegacyLedgerImporter
 from .model_passport import ModelPassportProjector
+from .model_token_store import ModelTokenPolicyStore
 from .observatory import ModelObservatory
 from .observatory_db import ObservatoryDatabase
 from .discovery.openrouter import (
@@ -111,7 +112,15 @@ def _glm_preflight(
         task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
         task = TaskContract.from_dict(task_document)
         validate_task_consistency(task)
-        provider = GlmFlashWorkerProvider(config, environ=os.environ)
+        token_store = ModelTokenPolicyStore(layout.model_token_policy_db_path)
+        provider = GlmFlashWorkerProvider(
+            config,
+            environ=os.environ,
+            token_policy=token_store.effective_policy(
+                config.id,
+                config.model or "",
+            ),
+        )
         metadata = (
             provider.approval_metadata(task)
             if show_required_digest
@@ -170,10 +179,15 @@ def _glm_approve(
         task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
         task = TaskContract.from_dict(task_document)
         validate_task_consistency(task)
+        token_store = ModelTokenPolicyStore(layout.model_token_policy_db_path)
         provider = GlmFlashWorkerProvider(
             config,
             environ=os.environ,
             key_source=key_source,
+            token_policy=token_store.effective_policy(
+                config.id,
+                config.model or "",
+            ),
         )
         metadata = provider.approval_metadata(task)
         if task.delegation_approval_sha256 != metadata["required_approval_sha256"]:
@@ -740,9 +754,10 @@ def _cli_policy_snapshot_sha256(
     *,
     allow_network: bool,
     allow_local: bool,
+    model_token_policy_digest: str | None,
 ) -> str:
     document = {
-        "schema": "macr_cli_one_shot_v1",
+        "schema": "macr_cli_one_shot_v2",
         "provider_id": provider_id,
         "connection_scope": provider_scope.value,
         "interaction_plane": InteractionPlane.DELEGATION.value,
@@ -751,6 +766,8 @@ def _cli_policy_snapshot_sha256(
         "max_cost_usd": task.constraints.max_cost_usd,
         "max_latency_s": task.constraints.max_latency_s,
         "max_output_tokens": task.constraints.max_output_tokens,
+        "max_context_tokens": task.constraints.max_context_tokens,
+        "model_token_policy_digest": model_token_policy_digest,
         "allow_network": allow_network,
         "allow_local": allow_local,
     }
@@ -794,6 +811,11 @@ def _invoke(
         )
     layout.ensure_state_tree()
     services = RuntimeServices.from_layout(layout)
+    registry = ProviderRegistry.from_configs(
+        configs,
+        token_policy_store=services.token_policies,
+    )
+    provider = registry.get(provider_id)
     if not _legacy_migration_complete(layout, services):
         print(
             json.dumps(
@@ -813,6 +835,11 @@ def _invoke(
     task_document = json.loads(Path(task_path).read_text(encoding="utf-8"))
     task = TaskContract.from_dict(task_document)
     validate_task_consistency(task)
+    model_token_policy = (
+        registry.token_policy(provider_id, store=services.token_policies)
+        if registry.requires_model_token_policy(provider_id)
+        else None
+    )
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     member_digest = task.delegation_approval_sha256
@@ -838,6 +865,16 @@ def _invoke(
             task,
             allow_network=allow_network,
             allow_local=allow_local,
+            model_token_policy_digest=(
+                model_token_policy.policy_digest
+                if model_token_policy is not None
+                else None
+            ),
+        ),
+        model_token_policy_digest=(
+            model_token_policy.policy_digest
+            if model_token_policy is not None
+            else None
         ),
         member_digest=member_digest,
     )

@@ -4,7 +4,8 @@ from collections.abc import Iterable
 from typing import Any, Mapping
 
 from .config import ProviderConfig
-from .errors import ConfigurationError, ProviderUnavailableError
+from .errors import ConfigurationError, ProviderPolicyError, ProviderUnavailableError
+from .model_token_store import ModelTokenPolicyStore
 from .providers.base import BaseProvider
 from .providers.disabled import DisabledProvider
 from .providers.grok import GrokResponsesProvider
@@ -14,6 +15,18 @@ from .providers.google_image import GoogleImageProvider
 from .providers.minimax import MiniMaxProvider
 from .providers.ollama import OllamaChatProvider
 from .providers.http_json import JsonTransport
+from .token_policy import ModelTokenPolicy, ModelTokenPolicyResolver
+
+
+_MODEL_TOKEN_POLICY_KINDS = frozenset(
+    {
+        "minimax_openai_compatible",
+        "grok_responses",
+        "zai_glm_worker",
+        "ollama_local_chat",
+        "google_vertex_gemini",
+    }
+)
 
 
 class ProviderRegistry:
@@ -21,6 +34,7 @@ class ProviderRegistry:
         self._providers = {provider.provider_id: provider for provider in providers}
         if not self._providers:
             raise ConfigurationError("provider registry must not be empty")
+        self._token_policy_resolver = ModelTokenPolicyResolver.builtins_only()
 
     @classmethod
     def from_configs(
@@ -30,6 +44,7 @@ class ProviderRegistry:
         environ: Mapping[str, str] | None = None,
         transports: Mapping[str, JsonTransport] | None = None,
         key_sources: Mapping[str, Any] | None = None,
+        token_policy_store: ModelTokenPolicyStore | None = None,
     ) -> "ProviderRegistry":
         transport_map = {} if transports is None else dict(transports)
         key_source_map = {} if key_sources is None else dict(key_sources)
@@ -52,12 +67,22 @@ class ProviderRegistry:
                     )
                 )
             elif config.kind == "zai_glm_worker":
+                if config.model is None:
+                    raise ConfigurationError(
+                        "GLM worker requires an exact configured model"
+                    )
+                token_policy = (
+                    token_policy_store.effective_policy(config.id, config.model)
+                    if token_policy_store is not None
+                    else None
+                )
                 providers.append(
                     GlmFlashWorkerProvider(
                         config,
                         environ=environ,
                         transport=transport_map.get(config.id),
                         key_source=key_source_map.get(config.id),
+                        token_policy=token_policy,
                     )
                 )
             elif config.kind == "ollama_local_chat":
@@ -98,9 +123,51 @@ class ProviderRegistry:
 
     def requested_model(self, provider_id: str) -> str | None:
         provider = self.get(provider_id)
+        direct_model = getattr(provider, "model", None)
+        if isinstance(direct_model, str) and direct_model.strip():
+            return direct_model.strip()
         config = getattr(provider, "config", None)
         model = getattr(config, "model", None)
-        return model if isinstance(model, str) and model.strip() else None
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+        environ = getattr(provider, "environ", None)
+        if isinstance(config, ProviderConfig) and isinstance(environ, Mapping):
+            try:
+                return config.resolve_model(environ)
+            except ConfigurationError:
+                return None
+        return None
+
+    def token_policy(
+        self,
+        provider_id: str,
+        *,
+        store: ModelTokenPolicyStore | None = None,
+    ) -> ModelTokenPolicy:
+        provider = self.get(provider_id)
+        explicit = getattr(provider, "token_policy", None)
+        if (
+            isinstance(explicit, ModelTokenPolicy)
+            and getattr(provider, "token_policy_is_explicit", False)
+        ):
+            return explicit
+        model = self.requested_model(provider_id)
+        if model is None:
+            raise ProviderPolicyError(
+                "provider exact model is unavailable for token policy"
+            )
+        if store is not None:
+            return store.effective_policy(provider_id, model)
+        if isinstance(explicit, ModelTokenPolicy):
+            return explicit
+        return self._token_policy_resolver.resolve(provider_id, model)
+
+    def requires_model_token_policy(self, provider_id: str) -> bool:
+        provider = self.get(provider_id)
+        config = getattr(provider, "config", None)
+        if isinstance(config, ProviderConfig):
+            return config.kind in _MODEL_TOKEN_POLICY_KINDS
+        return self.requested_model(provider_id) is not None
 
     def execution_profile(self, provider_id: str) -> dict[str, object]:
         provider = self.get(provider_id)

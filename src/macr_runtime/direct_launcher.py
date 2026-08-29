@@ -19,8 +19,8 @@ from .direct_runtime import DirectRuntime, issue_operator_direct_authority
 from .direct_server import DirectChatServer, create_direct_server
 from .direct_settings import DirectSettingsStore
 from .direct_store import DirectConversationStore
-from .model_token_store import ModelTokenPolicyStore
 from .errors import LegacyLedgerError, StoragePolicyError
+from .event_store import SqliteEventStore
 from .runtime import RuntimeServices
 from .storage import StorageLayout
 
@@ -95,14 +95,14 @@ def _legacy_source_sha256(path: Path) -> str:
 
 def _legacy_migration_complete(
     layout: StorageLayout,
-    services: RuntimeServices,
+    events: SqliteEventStore,
 ) -> bool:
     source = layout.ledger_path
     if not source.is_file() or source.stat().st_size == 0:
         return True
     source_sha256 = _legacy_source_sha256(source)
     source_bytes = source.stat().st_size
-    connection = services.events.database.connect()
+    connection = events.database.connect()
     try:
         row = connection.execute(
             """SELECT source_bytes, complete
@@ -127,11 +127,12 @@ def build_direct_application(
     if not isinstance(layout, StorageLayout):
         raise ValueError("layout must be StorageLayout")
     layout.ensure_state_tree()
-    services = RuntimeServices.from_layout(layout)
-    if not _legacy_migration_complete(layout, services):
+    events = SqliteEventStore(layout.runtime_db_path)
+    if not _legacy_migration_complete(layout, events):
         raise LegacyLedgerError(
             "Direct Chat requires complete legacy migration before startup"
         )
+    services = RuntimeServices.from_layout(layout)
     source_config = (
         Path(config_path)
         if config_path is not None
@@ -145,7 +146,6 @@ def build_direct_application(
     settings = DirectSettingsStore(layout.settings_db_path)
     settings.ensure_operator_managed()
     conversations = DirectConversationStore(layout.direct_db_path)
-    token_policies = ModelTokenPolicyStore(layout.model_token_policy_db_path)
     authority = issue_operator_direct_authority(services)
     runtime = DirectRuntime(
         registry,
@@ -153,7 +153,7 @@ def build_direct_application(
         conversations,
         settings,
         authority,
-        token_policies=token_policies,
+        token_policies=services.token_policies,
     )
     server = create_direct_server(runtime)
     return DirectApplication(

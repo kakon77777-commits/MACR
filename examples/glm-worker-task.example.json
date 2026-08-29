@@ -4,7 +4,7 @@
   "task_type": "provider_conformance",
   "delegable": true,
   "delegation_class": "non_sensitive_routine",
-  "delegation_approval_sha256": "b352475a0fcfc8f63d7cb0a65844467742b7a7bd1480f6528ed91bddf11dbdc3",
+  "delegation_approval_sha256": "7074cbaa8b52ab3ab45719a17125f812c26b9ea33cc4529daadf27f7cc67a6f3",
   "workspace": {
     "repo": "current",
     "write_scope": []
@@ -13,7 +13,8 @@
   "constraints": {
     "max_cost_usd": 0.01,
     "max_latency_s": 180,
-    "max_output_tokens": 512,
+    "max_output_tokens": 16384,
+    "max_context_tokens": 512000,
     "internet": true,
     "privacy": "public"
   },

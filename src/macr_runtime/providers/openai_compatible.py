@@ -159,6 +159,7 @@ class OpenAICompatibleProvider(BaseProvider):
         api_key, base_url, model = self._resolved()
         payload = {
             "model": model,
+            "max_completion_tokens": task.constraints.max_output_tokens,
             "messages": [
                 {
                     "role": "system",

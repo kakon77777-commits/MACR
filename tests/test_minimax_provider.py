@@ -83,6 +83,10 @@ class MiniMaxProviderTests(unittest.TestCase):
         call = transport.calls[0]
         self.assertEqual(call["url"], "https://example.invalid/v1/chat/completions")
         self.assertEqual(call["payload"]["model"], "test-model")
+        self.assertEqual(
+            call["payload"]["max_completion_tokens"],
+            cloud_task().constraints.max_output_tokens,
+        )
         self.assertEqual(call["headers"]["Authorization"], "Bearer test-key")
         self.assertNotIn("test-key", str(result.to_dict()))
 

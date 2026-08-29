@@ -27,6 +27,7 @@ from macr_runtime.providers.glm import (
     GlmFixedKeySource,
     GlmFlashWorkerProvider as _GlmFlashWorkerProvider,
 )
+from macr_runtime.token_policy import ModelTokenPolicyResolver, t1_glm_live_policy
 from tests.support import d_drive_tempdir
 
 
@@ -141,7 +142,11 @@ def glm_config() -> ProviderConfig:
     )
 
 
-def _approval_digest(task: TaskContract) -> str:
+def _approval_digest(task: TaskContract, *, token_policy=None) -> str:
+    policy = token_policy or ModelTokenPolicyResolver.builtins_only().resolve(
+        "glm_flash_worker",
+        "glm-5.3-flash",
+    )
     envelope = {
         "goal": task.goal,
         "delegable": task.delegable,
@@ -151,6 +156,8 @@ def _approval_digest(task: TaskContract) -> str:
         "return_contract": task.return_contract.to_dict(),
         "policy_clauses": task.policy_clauses.to_dict(),
         "max_output_tokens": task.constraints.max_output_tokens,
+        "max_context_tokens": task.constraints.max_context_tokens,
+        "model_token_policy_digest": policy.policy_digest,
     }
     user_text = json.dumps(
         envelope,
@@ -179,7 +186,7 @@ def _approval_digest(task: TaskContract) -> str:
         "stream": False,
     }
     manifest = {
-        "approval_schema": 1,
+        "approval_schema": 2,
         "provider_id": "glm_flash_worker",
         "endpoint": "https://api.z.ai/api/paas/v4/chat/completions",
         "model": "glm-5.3-flash",
@@ -189,6 +196,8 @@ def _approval_digest(task: TaskContract) -> str:
         "privacy": task.constraints.privacy.value,
         "max_cost_usd": task.constraints.max_cost_usd,
         "max_output_tokens": task.constraints.max_output_tokens,
+        "max_context_tokens": task.constraints.max_context_tokens,
+        "model_token_policy_digest": policy.policy_digest,
         "request_payload": request_payload,
     }
     encoded = json.dumps(
@@ -935,8 +944,80 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         self.assertEqual(metadata["required_approval_sha256"], _approval_digest(task))
         self.assertEqual(metadata["provider_id"], "glm_flash_worker")
         self.assertEqual(metadata["model"], "glm-5.3-flash")
+        self.assertEqual(
+            metadata["model_token_policy_digest"],
+            ModelTokenPolicyResolver.builtins_only()
+            .resolve("glm_flash_worker", "glm-5.3-flash")
+            .policy_digest,
+        )
+        self.assertEqual(metadata["hard_context_tokens"], 512_000)
         self.assertGreater(metadata["request_bytes"], 0)
         self.assertGreater(metadata["conservative_cost_ceiling_usd"], 0)
+
+    def test_policy_change_invalidates_existing_approval_before_key_access(self):
+        ordinary = ModelTokenPolicyResolver.builtins_only().resolve(
+            "glm_flash_worker",
+            "glm-5.3-flash",
+        )
+        task = delegated_task()
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=ExplodingKeySource(),
+            approval_store=AllowingApprovalStore(),
+            token_policy=t1_glm_live_policy(),
+        )
+        self.assertEqual(
+            task.delegation_approval_sha256,
+            _approval_digest(task, token_policy=ordinary),
+        )
+        with self.assertRaisesRegex(ProviderPolicyError, "approval digest"):
+            provider.invoke(task)
+
+    def test_t1_policy_refuses_large_output_before_credential_access(self):
+        key_source = ExplodingKeySource()
+        task = replace(
+            delegated_task(max_cost_usd=0.02),
+            constraints=replace(
+                delegated_task(max_cost_usd=0.02).constraints,
+                max_output_tokens=16_384,
+                max_context_tokens=128_000,
+            ),
+            delegation_approval_sha256=None,
+        )
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=key_source,
+            approval_store=AllowingApprovalStore(),
+            token_policy=t1_glm_live_policy(),
+        )
+        with self.assertRaisesRegex(ProviderPolicyError, "output.*token policy"):
+            provider.approval_metadata(task)
+        self.assertEqual(key_source.calls, 0)
+
+    def test_ordinary_glm_policy_accepts_expanded_external_envelope_offline(self):
+        base_task = delegated_task(max_cost_usd=0.02)
+        task = replace(
+            base_task,
+            constraints=replace(
+                base_task.constraints,
+                max_output_tokens=16_384,
+                max_context_tokens=512_000,
+            ),
+            delegation_approval_sha256=None,
+        )
+        metadata = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+        ).approval_metadata(task)
+
+        self.assertEqual(metadata["max_output_tokens"], 65_536)
+        self.assertEqual(metadata["hard_context_tokens"], 512_000)
+        self.assertEqual(len(metadata["required_approval_sha256"]), 64)
 
 
 if __name__ == "__main__":

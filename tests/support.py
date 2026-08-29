@@ -14,6 +14,7 @@ from macr_runtime.candidate_vault import CandidateVault
 from macr_runtime.dispatch import AdmissionGate, DispatcherLeaseStore
 from macr_runtime.event_store import SqliteEventStore
 from macr_runtime.runtime import RuntimeServices
+from macr_runtime.model_token_store import ModelTokenPolicyStore
 
 
 DEFAULT_TEST_ROOT = Path(r"D:\AI_RESIDENCE\AI_Runtime\macr-state\test-tmp")
@@ -32,6 +33,9 @@ def build_test_services(state_root: Path) -> RuntimeServices:
         admission=AdmissionGate(authorities, leases),
         accounting=AccountingStore(accounting_database),
         vault=CandidateVault(state_root / "candidates", runtime_database),
+        token_policies=ModelTokenPolicyStore(
+            state_root / "settings" / "model-token-policies.sqlite3"
+        ),
     )
 
 

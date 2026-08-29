@@ -219,7 +219,8 @@ class WorkspaceSpec:
 class TaskConstraints:
     max_cost_usd: float = 0.0
     max_latency_s: float = 300.0
-    max_output_tokens: int = 1024
+    max_output_tokens: int = 8192
+    max_context_tokens: int | None = None
     internet: bool = False
     privacy: PrivacyLevel = PrivacyLevel.LOCAL_ONLY
 
@@ -238,10 +239,19 @@ class TaskConstraints:
             self.max_output_tokens, int
         ):
             raise ValueError("constraints.max_output_tokens must be an integer")
-        if not 1 <= self.max_output_tokens <= 16384:
+        if not 1 <= self.max_output_tokens <= 65536:
             raise ValueError(
-                "constraints.max_output_tokens must be between 1 and 16384"
+                "constraints.max_output_tokens must be between 1 and 65536"
             )
+        if self.max_context_tokens is not None:
+            if (
+                isinstance(self.max_context_tokens, bool)
+                or not isinstance(self.max_context_tokens, int)
+                or not 1 <= self.max_context_tokens <= 1_048_576
+            ):
+                raise ValueError(
+                    "constraints.max_context_tokens must be between 1 and 1048576"
+                )
         _boolean("constraints.internet", self.internet)
         if not isinstance(self.privacy, PrivacyLevel):
             raise ValueError("constraints.privacy must be a PrivacyLevel")
@@ -252,7 +262,8 @@ class TaskConstraints:
         return cls(
             max_cost_usd=data.get("max_cost_usd", 0.0),
             max_latency_s=data.get("max_latency_s", 300.0),
-            max_output_tokens=data.get("max_output_tokens", 1024),
+            max_output_tokens=data.get("max_output_tokens", 8192),
+            max_context_tokens=data.get("max_context_tokens"),
             internet=data.get("internet", False),
             privacy=PrivacyLevel(str(data.get("privacy", PrivacyLevel.LOCAL_ONLY.value))),
         )
@@ -262,6 +273,7 @@ class TaskConstraints:
             "max_cost_usd": self.max_cost_usd,
             "max_latency_s": self.max_latency_s,
             "max_output_tokens": self.max_output_tokens,
+            "max_context_tokens": self.max_context_tokens,
             "internet": self.internet,
             "privacy": self.privacy.value,
         }

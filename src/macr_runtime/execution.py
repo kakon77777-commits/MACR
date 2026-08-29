@@ -181,6 +181,7 @@ class DispatchContext:
     plan_revision: int | None = None
     role_slot_id: str | None = None
     route_id: str | None = None
+    model_token_policy_digest: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_id", _uuid4("run_id", self.run_id))
@@ -230,6 +231,15 @@ class DispatchContext:
                 self,
                 "route_id",
                 _digest("route_id", self.route_id),
+            )
+        if self.model_token_policy_digest is not None:
+            object.__setattr__(
+                self,
+                "model_token_policy_digest",
+                _digest(
+                    "model_token_policy_digest",
+                    self.model_token_policy_digest,
+                ),
             )
 
 

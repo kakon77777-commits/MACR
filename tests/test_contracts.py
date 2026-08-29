@@ -202,8 +202,29 @@ class TaskContractTests(unittest.TestCase):
         self.assertEqual(task.constraints.max_output_tokens, 64)
         self.assertEqual(task.to_dict()["constraints"]["max_output_tokens"], 64)
 
+    def test_external_token_defaults_context_and_ceiling_round_trip(self) -> None:
+        defaults = TaskConstraints()
+        self.assertEqual(defaults.max_output_tokens, 8_192)
+        self.assertIsNone(defaults.max_context_tokens)
+        expanded = TaskConstraints(
+            max_output_tokens=65_536,
+            max_context_tokens=512_000,
+        )
+        self.assertEqual(expanded.max_output_tokens, 65_536)
+        self.assertEqual(expanded.max_context_tokens, 512_000)
+        self.assertEqual(
+            TaskConstraints.from_dict(expanded.to_dict()),
+            expanded,
+        )
+        for value in (True, 0, -1, 1_048_577):
+            with self.subTest(context=value), self.assertRaisesRegex(
+                ValueError,
+                "max_context_tokens",
+            ):
+                TaskConstraints(max_context_tokens=value)
+
     def test_rejects_invalid_output_token_bounds(self) -> None:
-        for value in (True, "64", 0, 16385):
+        for value in (True, "64", 0, 65_537):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "max_output_tokens"):
                     TaskConstraints(max_output_tokens=value)

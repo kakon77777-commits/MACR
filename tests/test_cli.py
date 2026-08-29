@@ -39,6 +39,8 @@ from macr_runtime.contracts import (
 from macr_runtime.config import load_provider_configs
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.glm_approval import GlmApprovalStore
+from macr_runtime.model_token_store import ModelTokenPolicyStore
+from macr_runtime.token_policy import ModelTokenOverride
 from tests.support import d_drive_tempdir, write_fake_google_credential
 from tests.test_coordination import make_plan
 
@@ -578,6 +580,7 @@ class DoctorTests(unittest.TestCase):
             without_key = {
                 key: value for key, value in os.environ.items() if key != "ZAI_API_KEY"
             }
+            without_key["MACR_STATE_ROOT"] = str(temp)
             with patch.dict(os.environ, without_key, clear=True):
                 with contextlib.redirect_stdout(output):
                     status = _glm_preflight(
@@ -616,17 +619,69 @@ class DoctorTests(unittest.TestCase):
                 encoding="utf-8",
             )
             output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                status = _glm_preflight(
-                    str(task_path),
-                    str(ROOT / "config" / "providers.json"),
-                    show_required_digest=False,
-                )
+            environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_preflight(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        show_required_digest=False,
+                    )
 
         document = json.loads(output.getvalue())
         self.assertEqual(status, 4)
         self.assertEqual(document["status"], "approval_invalid")
         self.assertNotIn("PUBLIC STALE BODY", output.getvalue())
+
+    def test_glm_preflight_applies_active_exact_model_override(self) -> None:
+        with d_drive_tempdir() as temp:
+            store = ModelTokenPolicyStore(temp / "settings" / "model-token-policies.sqlite3")
+            base = store.effective_policy("glm_flash_worker", "glm-5.3-flash")
+            store.save_override(
+                ModelTokenOverride(
+                    provider_id=base.provider_id,
+                    model_id=base.model_id,
+                    revision=1,
+                    context_warning_tokens=100_000,
+                    hard_context_tokens=128_000,
+                    default_output_tokens=8_192,
+                    max_output_tokens=8_192,
+                    base_policy_digest=base.policy_digest,
+                ),
+                activate=True,
+            )
+            task = TaskContract(
+                task_id="glm-preflight-model-policy",
+                goal="PUBLIC POLICY BODY",
+                task_type="delegated_routine",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.02,
+                    max_latency_s=30,
+                    max_output_tokens=16_384,
+                    max_context_tokens=128_000,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_preflight(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        show_required_digest=True,
+                    )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 4)
+        self.assertEqual(document["failure_type"], "ProviderPolicyError")
+        self.assertNotIn("PUBLIC POLICY BODY", output.getvalue())
 
     def test_glm_approved_preflight_output_remains_content_free(self) -> None:
         with d_drive_tempdir() as temp:

@@ -10,6 +10,8 @@
   "constraints": {
     "max_cost_usd": 0.01,
     "max_latency_s": 30,
+    "max_output_tokens": 2048,
+    "max_context_tokens": 180000,
     "internet": true,
     "privacy": "public"
   },

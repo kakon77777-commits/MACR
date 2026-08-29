@@ -45,12 +45,14 @@ class ObservedProvider(BaseProvider):
         status: ResultStatus = ResultStatus.CANDIDATE_SUCCESS,
         finish_reason: str = "stop",
         cost_usd: float | None = 0.000008,
+        model: str | None = None,
     ) -> None:
         self.provider_id = provider_id
         self.answer = answer
         self.status = status
         self.finish_reason = finish_reason
         self.cost_usd = cost_usd
+        self.model = model
         self.calls = 0
 
     def health(self) -> ProviderHealth:
@@ -155,6 +157,123 @@ def issue_context(services, provider_id: str, task: TaskContract) -> DispatchCon
 
 
 class RuntimeV05Tests(unittest.TestCase):
+    def test_model_token_policy_refuses_before_authority_or_provider(self) -> None:
+        provider = ObservedProvider(
+            "minimax",
+            answer="candidate",
+            model="MiniMax-M2.7",
+        )
+        task = delegated_task(task_id="token-policy-refusal")
+        task = TaskContract.from_dict(
+            {
+                **task.to_dict(),
+                "constraints": {
+                    **task.constraints.to_dict(),
+                    "max_output_tokens": 2_049,
+                    "max_context_tokens": 180_000,
+                },
+            }
+        )
+        missing = AuthorizationReference(
+            source_kind="missing",
+            source_id="missing",
+            digest="b" * 64,
+            revision=1,
+            epoch=0,
+            scope=json.dumps({"missing": True}),
+        )
+        context = DispatchContext(
+            run_id=str(uuid.uuid4()),
+            plane=InteractionPlane.DELEGATION,
+            origin=DispatchOrigin("test", "process_id", "1234"),
+            authorization=missing,
+            policy_snapshot_sha256="a" * 64,
+        )
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            result = MacrRuntime(ProviderRegistry((provider,)), services).invoke(
+                provider.provider_id,
+                task,
+                context,
+            )
+            events = services.events.read_events(run_id=context.run_id)
+
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(result.provider_meta["failure_type"], "ProviderPolicyError")
+        self.assertEqual(result.provider_meta["failure_stage"], "token_policy")
+        self.assertEqual(provider.calls, 0)
+        self.assertEqual(events, ())
+
+    def test_dispatch_event_binds_exact_model_token_policy_digest(self) -> None:
+        provider = ObservedProvider(
+            "grok",
+            answer="candidate",
+            model="grok-4.6",
+        )
+        task = delegated_task(task_id="token-policy-evidence")
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            context = issue_context(services, provider.provider_id, task)
+            result = MacrRuntime(ProviderRegistry((provider,)), services).invoke(
+                provider.provider_id,
+                task,
+                context,
+            )
+            dispatch = services.events.read_events(run_id=context.run_id)[0]
+            policy = services.token_policies.effective_policy(
+                "grok",
+                "grok-4.6",
+            )
+
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_SUCCESS)
+        self.assertEqual(
+            dispatch["payload"]["model_token_policy_digest"],
+            policy.policy_digest,
+        )
+
+    def test_qwythos_output_and_grok_context_are_model_local_fail_closed(self) -> None:
+        cases = (
+            (
+                ObservedProvider(
+                    "ollama_qwythos",
+                    answer="candidate",
+                    model="hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M",
+                ),
+                4_097,
+                8_192,
+            ),
+            (
+                ObservedProvider("grok", answer="candidate", model="grok-4.6"),
+                256,
+                400_001,
+            ),
+        )
+        for provider, output_tokens, context_tokens in cases:
+            with self.subTest(provider=provider.provider_id):
+                task = delegated_task(task_id=f"{provider.provider_id}-token-refusal")
+                task = TaskContract.from_dict(
+                    {
+                        **task.to_dict(),
+                        "constraints": {
+                            **task.constraints.to_dict(),
+                            "max_output_tokens": output_tokens,
+                            "max_context_tokens": context_tokens,
+                        },
+                    }
+                )
+                with d_drive_tempdir() as state_root:
+                    services = build_test_services(state_root)
+                    context = issue_context(services, provider.provider_id, task)
+                    result = MacrRuntime(
+                        ProviderRegistry((provider,)),
+                        services,
+                    ).invoke(provider.provider_id, task, context)
+                    events = services.events.read_events(run_id=context.run_id)
+
+                self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
+                self.assertEqual(result.provider_meta["failure_stage"], "token_policy")
+                self.assertEqual(provider.calls, 0)
+                self.assertEqual(events, ())
     def test_non_stop_run_is_accounted_captured_and_terminal_once(self) -> None:
         provider = ObservedProvider(
             "glm_flash_worker",

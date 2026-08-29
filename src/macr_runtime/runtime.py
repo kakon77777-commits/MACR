@@ -13,7 +13,7 @@ from .authority import DispatchAuthorityStore
 from .candidate_vault import CandidateCapture, CandidateVault
 from .contracts import ProviderResult, ResultStatus, TaskContract
 from .dispatch import AdmissionGate, DispatcherLeaseStore
-from .errors import MacrError
+from .errors import MacrError, ProviderPolicyError
 from .event_store import SqliteEventStore
 from .execution import (
     DispatchContext,
@@ -21,6 +21,7 @@ from .execution import (
     RawProviderObservation,
     ReturnContractState,
 )
+from .model_token_store import ModelTokenPolicyStore
 from .registry import ProviderRegistry
 from .return_contracts import validate_return_contract
 from .storage import StorageLayout
@@ -35,6 +36,7 @@ class RuntimeServices:
     admission: AdmissionGate
     accounting: AccountingStore
     vault: CandidateVault
+    token_policies: ModelTokenPolicyStore
 
     @classmethod
     def from_layout(cls, layout: StorageLayout) -> "RuntimeServices":
@@ -50,6 +52,7 @@ class RuntimeServices:
             admission=AdmissionGate(authorities, leases),
             accounting=AccountingStore(layout.accounting_db_path),
             vault=CandidateVault(layout.candidate_root, layout.runtime_db_path),
+            token_policies=ModelTokenPolicyStore(layout.model_token_policy_db_path),
         )
 
 
@@ -137,6 +140,23 @@ def _post_dispatch_failure(
     )
 
 
+def _token_policy_failure(
+    provider_id: str,
+    task: TaskContract,
+    exc: ProviderPolicyError,
+) -> ProviderResult:
+    return ProviderResult(
+        task_id=task.task_id,
+        status=ResultStatus.CANDIDATE_FAILURE,
+        warnings=("Provider model token policy refused the task.",),
+        provider_meta={
+            "provider": provider_id,
+            "failure_type": type(exc).__name__,
+            "failure_stage": "token_policy",
+        },
+    )
+
+
 class MacrRuntime:
     def __init__(
         self,
@@ -160,6 +180,33 @@ class MacrRuntime:
         if not isinstance(context, DispatchContext):
             raise ValueError("context must be a DispatchContext")
         provider = self.registry.get(provider_id)
+        try:
+            if self.registry.requires_model_token_policy(provider_id):
+                token_policy = self.registry.token_policy(
+                    provider_id,
+                    store=self.services.token_policies,
+                )
+                if (
+                    task.constraints.max_output_tokens
+                    > token_policy.max_output_tokens
+                ):
+                    raise ProviderPolicyError(
+                        "task output exceeds exact model token policy"
+                    )
+                requested_context = task.constraints.max_context_tokens
+                if (
+                    requested_context is not None
+                    and requested_context > token_policy.hard_context_tokens
+                ):
+                    raise ProviderPolicyError(
+                        "task context exceeds exact model token policy"
+                    )
+                context = replace(
+                    context,
+                    model_token_policy_digest=token_policy.policy_digest,
+                )
+        except ProviderPolicyError as exc:
+            return _token_policy_failure(provider_id, task, exc)
         resource_key = dispatch_resource_key(provider_id, task)
         ttl_seconds = max(
             1,
@@ -325,6 +372,7 @@ class MacrRuntime:
                 context.authorization.scope.encode("utf-8")
             ).hexdigest(),
             "policy_snapshot_sha256": context.policy_snapshot_sha256,
+            "model_token_policy_digest": context.model_token_policy_digest,
             "batch_id": context.batch_id,
             "member_digest": context.member_digest,
             "relay_is_authorship": context.relay_is_authorship,

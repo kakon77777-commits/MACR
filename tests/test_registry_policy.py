@@ -4,7 +4,10 @@ from pathlib import Path
 from macr_runtime.config import load_provider_configs
 from macr_runtime.contracts import TaskContract
 from macr_runtime.errors import ProviderPolicyError
+from macr_runtime.model_token_store import ModelTokenPolicyStore
+from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.registry import ProviderRegistry
+from macr_runtime.token_policy import ModelTokenOverride, t1_glm_live_policy
 from tests.support import d_drive_tempdir, write_fake_google_credential
 
 
@@ -42,6 +45,14 @@ class RegistryPolicyTests(unittest.TestCase):
         ollama_health = self.registry.get("ollama_qwythos").health()
         self.assertTrue(ollama_health.ready)
         self.assertEqual(ollama_health.status, "configured_offline")
+        self.assertEqual(
+            self.registry.token_policy("grok").hard_context_tokens,
+            400_000,
+        )
+        self.assertEqual(
+            self.registry.token_policy("ollama_qwythos").max_output_tokens,
+            4_096,
+        )
 
     def test_claude_api_route_is_not_available(self) -> None:
         provider = self.registry.get("claude_subscription")
@@ -61,6 +72,54 @@ class RegistryPolicyTests(unittest.TestCase):
         self.assertTrue(health.ready)
         self.assertEqual(health.status, "configured_offline")
         self.assertEqual(provider.config.model, "glm-5.3-flash")
+
+    def test_glm_adapter_receives_exact_active_model_override(self) -> None:
+        configs = load_provider_configs(ROOT / "config" / "providers.json")
+        with d_drive_tempdir() as root:
+            store = ModelTokenPolicyStore(root / "model-token-policies.sqlite3")
+            base = store.effective_policy("glm_flash_worker", "glm-5.3-flash")
+            store.save_override(
+                ModelTokenOverride(
+                    provider_id=base.provider_id,
+                    model_id=base.model_id,
+                    revision=1,
+                    context_warning_tokens=100_000,
+                    hard_context_tokens=128_000,
+                    default_output_tokens=8_192,
+                    max_output_tokens=8_192,
+                    base_policy_digest=base.policy_digest,
+                ),
+                activate=True,
+            )
+            registry = ProviderRegistry.from_configs(
+                configs,
+                environ={"MACR_STATE_ROOT": str(root)},
+                key_sources={"glm_flash_worker": StaticKeySource()},
+                token_policy_store=store,
+            )
+
+        provider = registry.get("glm_flash_worker")
+        self.assertEqual(provider.token_policy.max_output_tokens, 8_192)
+        self.assertEqual(provider.token_policy.policy_source, "operator_override:1")
+
+    def test_explicit_t1_policy_wins_over_ordinary_store_policy(self) -> None:
+        configs = load_provider_configs(ROOT / "config" / "providers.json")
+        config = next(item for item in configs if item.id == "glm_flash_worker")
+        with d_drive_tempdir() as root:
+            store = ModelTokenPolicyStore(root / "model-token-policies.sqlite3")
+            provider = GlmFlashWorkerProvider(
+                config,
+                environ={"MACR_STATE_ROOT": str(root)},
+                key_source=StaticKeySource(),
+                token_policy=t1_glm_live_policy(),
+            )
+            effective = ProviderRegistry((provider,)).token_policy(
+                "glm_flash_worker",
+                store=store,
+            )
+
+        self.assertEqual(effective.policy_source, "t1_live_preset")
+        self.assertEqual(effective.max_output_tokens, 8_192)
 
     def test_google_gemini_is_configured_offline(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")
@@ -98,6 +157,7 @@ class RegistryPolicyTests(unittest.TestCase):
             health = registry.get("google_image").health()
             self.assertTrue(health.ready)
             self.assertEqual(health.status, "configured_offline")
+            self.assertFalse(registry.requires_model_token_policy("google_image"))
             for provider_id in (
                 "google_veo_fast",
                 "google_tts",

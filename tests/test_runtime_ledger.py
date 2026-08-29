@@ -240,7 +240,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             environ={
                 "TEST_KEY": "test-key",
                 "TEST_BASE": "https://example.invalid/v1",
-                "TEST_MODEL": "test-model",
+                "TEST_MODEL": "MiniMax-M2.7",
             },
             transports={"minimax": transport},
         )
@@ -260,6 +260,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                     constraints=TaskConstraints(
                         max_cost_usd=0.01,
                         max_latency_s=5,
+                        max_output_tokens=2_048,
                         internet=True,
                         privacy=PrivacyLevel.PUBLIC,
                     ),
@@ -332,7 +333,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             environ={
                 "TEST_KEY": "test-key",
                 "TEST_BASE": "https://example.invalid/v1",
-                "TEST_MODEL": "test-model",
+                "TEST_MODEL": "MiniMax-M2.7",
             },
             transports={"minimax": ExplodingTransport()},
         )
@@ -349,6 +350,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                     constraints=TaskConstraints(
                         max_cost_usd=0.01,
                         max_latency_s=5,
+                        max_output_tokens=2_048,
                         internet=True,
                         privacy=PrivacyLevel.PUBLIC,
                     ),

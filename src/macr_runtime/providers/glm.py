@@ -32,6 +32,7 @@ from ..execution import (
 )
 from ..glm_approval import GlmApprovalStore
 from ..task_preflight import validate_task_consistency
+from ..token_policy import ModelTokenPolicy, ModelTokenPolicyResolver
 from .base import BaseProvider, ProviderHealth
 from .common import compile_worker_instruction
 from .http_json import JsonTransport, UrllibJsonTransport
@@ -306,6 +307,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         environ: Mapping[str, str] | None = None,
         key_source: GlmFixedKeySource | None = None,
         approval_store: Any | None = None,
+        token_policy: ModelTokenPolicy | None = None,
     ) -> None:
         if config.kind != "zai_glm_worker":
             raise ConfigurationError(
@@ -348,6 +350,22 @@ class GlmFlashWorkerProvider(BaseProvider):
                 r"D:\AI_RESIDENCE\AI_Runtime\macr-state",
             )
         )
+        self.token_policy_is_explicit = token_policy is not None
+        self.token_policy = token_policy or (
+            ModelTokenPolicyResolver.builtins_only().resolve(
+                self.provider_id,
+                _FIXED_MODEL,
+            )
+        )
+        if (
+            self.token_policy.provider_id != self.provider_id
+            or self.token_policy.model_id != _FIXED_MODEL
+            or self.token_policy.connection_scope
+            != self.connection_scope.value
+        ):
+            raise ConfigurationError(
+                "GLM token policy must match the fixed provider, model, and scope"
+            )
 
     def _api_key(self) -> str:
         value = self.key_source.load()
@@ -425,6 +443,18 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM worker requires exactly text_generation capability"
             )
+        if task.constraints.max_output_tokens > self.token_policy.max_output_tokens:
+            raise ProviderPolicyError(
+                "GLM task output exceeds exact model token policy"
+            )
+        if (
+            task.constraints.max_context_tokens is not None
+            and task.constraints.max_context_tokens
+            > self.token_policy.hard_context_tokens
+        ):
+            raise ProviderPolicyError(
+                "GLM task context exceeds exact model token policy"
+            )
 
     def _delegation_envelope(self, task: TaskContract) -> dict[str, Any]:
         inputs = _validated_text_inputs(task)
@@ -444,6 +474,8 @@ class GlmFlashWorkerProvider(BaseProvider):
             "return_contract": task.return_contract.to_dict(),
             "policy_clauses": task.policy_clauses.to_dict(),
             "max_output_tokens": task.constraints.max_output_tokens,
+            "max_context_tokens": task.constraints.max_context_tokens,
+            "model_token_policy_digest": self.token_policy.policy_digest,
         }
 
     def _check_conservative_budget(
@@ -495,7 +527,7 @@ class GlmFlashWorkerProvider(BaseProvider):
             "stream": False,
         }
         approval_manifest = {
-            "approval_schema": 1,
+            "approval_schema": 2,
             "provider_id": "glm_flash_worker",
             "endpoint": endpoint,
             "model": _FIXED_MODEL,
@@ -505,6 +537,8 @@ class GlmFlashWorkerProvider(BaseProvider):
             "privacy": task.constraints.privacy.value,
             "max_cost_usd": task.constraints.max_cost_usd,
             "max_output_tokens": task.constraints.max_output_tokens,
+            "max_context_tokens": task.constraints.max_context_tokens,
+            "model_token_policy_digest": self.token_policy.policy_digest,
             "request_payload": request_payload,
         }
         approval_sha256 = hashlib.sha256(
@@ -530,6 +564,9 @@ class GlmFlashWorkerProvider(BaseProvider):
             "model": _FIXED_MODEL,
             "endpoint": prepared["endpoint"],
             "delegation_class": task.delegation_class.value,
+            "model_token_policy_digest": self.token_policy.policy_digest,
+            "hard_context_tokens": self.token_policy.hard_context_tokens,
+            "max_output_tokens": self.token_policy.max_output_tokens,
             "required_approval_sha256": prepared["approval_sha256"],
             "request_bytes": prepared["request_bytes"],
             "conservative_cost_ceiling_usd": prepared["cost_ceiling"],

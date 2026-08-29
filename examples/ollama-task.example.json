@@ -11,6 +11,7 @@
     "max_cost_usd": 0,
     "max_latency_s": 240,
     "max_output_tokens": 64,
+    "max_context_tokens": 8192,
     "internet": false,
     "privacy": "local_only"
   },
