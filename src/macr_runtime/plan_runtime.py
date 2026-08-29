@@ -7,6 +7,12 @@ from typing import Protocol
 
 from .accounting import CostClass
 from .canonical import sha256_id
+from .coordinator_contract import (
+    CoordinatorConstraints,
+    CoordinatorProposal,
+    PlanRevisionProposal,
+    compile_coordinator_proposal,
+)
 from .contracts import ResultStatus, TaskContract
 from .coordination import CoordinationPlan, PlanExecutionMode, TopologyId
 from .errors import MacrError
@@ -142,6 +148,27 @@ class PlanRuntime:
         self.registry = registry
         self.services = services
         self.verifier = verifier
+
+    def prepare_coordinator_revision(
+        self,
+        parent_plan: CoordinationPlan,
+        proposal: CoordinatorProposal,
+        constraints: CoordinatorConstraints,
+    ) -> PlanRevisionProposal:
+        """Prepare a host-authorizable T2 proposal without issuing authority."""
+
+        if not isinstance(parent_plan, CoordinationPlan):
+            raise ValueError("parent_plan must be a CoordinationPlan")
+        if (
+            constraints.parent_plan_digest != parent_plan.plan_digest
+            or constraints.parent_plan_revision != parent_plan.plan_revision
+        ):
+            from .errors import CoordinatorPolicyError
+
+            raise CoordinatorPolicyError(
+                "coordinator constraints do not bind the exact parent plan"
+            )
+        return compile_coordinator_proposal(proposal, constraints)
 
     def execute(
         self,

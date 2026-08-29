@@ -8,6 +8,12 @@ from enum import Enum
 from typing import Callable, Iterable
 
 from .canonical import aware_iso8601, sha256_id
+from .coordinator_contract import (
+    CoordinatorConstraints,
+    CoordinatorProposal,
+    PlanRevisionProposal,
+    compile_coordinator_proposal as _compile_coordinator_proposal,
+)
 from .contracts import PrivacyLevel
 from .coordination import (
     BudgetEvaluation,
@@ -439,6 +445,15 @@ class DynamicCoordinationPlanner:
             fallback_rules=(),
             tie_break_rules=_TIE_BREAK_RULES,
         )
+
+    def compile_coordinator_proposal(
+        self,
+        proposal: CoordinatorProposal,
+        constraints: CoordinatorConstraints,
+    ) -> PlanRevisionProposal:
+        """Compile a constrained T2 revision proposal without runtime effects."""
+
+        return _compile_coordinator_proposal(proposal, constraints)
 
     def revise_for_failure(
         self,

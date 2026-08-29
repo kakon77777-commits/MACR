@@ -56,3 +56,7 @@ class DirectStoreConflict(MacrError):
 
 class ObservatoryConflict(MacrError):
     """An observatory record or private snapshot conflicts with append-only state."""
+
+
+class CoordinatorPolicyError(MacrError):
+    """A coordinator proposal exceeds its host-defined planning constraints."""
