@@ -397,6 +397,47 @@ class BatchAuthorityStore:
             )
         return reference
 
+    def revoke(self, reference: BatchAuthorityReference) -> bool:
+        if not isinstance(reference, BatchAuthorityReference):
+            raise DispatchAuthorizationError(
+                "batch authorization reference is invalid"
+            )
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM batch_authorities WHERE authority_id = ?",
+                (reference.authority_id,),
+            ).fetchone()
+            if row is None:
+                raise DispatchAuthorizationError(
+                    "batch authorization record is missing"
+                )
+            if (
+                row["body_sha256"] != reference.digest
+                or row["revision"] != reference.revision
+                or row["plan_digest"] != reference.plan_digest
+            ):
+                raise DispatchAuthorizationError(
+                    "batch authorization digest is invalid"
+                )
+            changed = 0
+            if row["revoked_at"] is None:
+                changed = connection.execute(
+                    """
+                    UPDATE batch_authorities SET revoked_at = ?
+                    WHERE authority_id = ? AND revoked_at IS NULL
+                    """,
+                    (self._current_time().isoformat(), reference.authority_id),
+                ).rowcount
+            connection.commit()
+            return changed == 1
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
 
 __all__ = [
     "BatchAuthorityReference",

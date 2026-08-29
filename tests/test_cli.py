@@ -10,7 +10,7 @@ import shutil
 import sqlite3
 import unittest
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +28,7 @@ from macr_runtime.cli import (
     _plan_shadow,
     _plan_show,
     _queue_status,
+    _t1_stage,
 )
 from macr_runtime.contracts import (
     DelegationClass,
@@ -43,10 +44,13 @@ from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.scheduler import PlanQueue, QueueMemberState
-from macr_runtime.token_policy import ModelTokenOverride
+from macr_runtime.t1_manifest import T1ExecutionManifest
+from macr_runtime.token_policy import ModelTokenOverride, t1_glm_live_policy
 from tests.support import d_drive_tempdir, write_fake_google_credential
 from tests.test_coordination import make_plan
+from tests.test_glm_provider import FakeTransport, success_document
 from tests.test_scheduler import Clock, _authorize, _member
+from tests.test_t1_dispatcher import approved_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +96,60 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_t1_stage_cli_is_content_free_and_performs_no_provider_call(self) -> None:
+        with d_drive_tempdir() as state_root:
+            transport = FakeTransport(success_document())
+            provider = GlmFlashWorkerProvider(
+                next(
+                    item
+                    for item in load_provider_configs(
+                        ROOT / "config" / "providers.json"
+                    )
+                    if item.id == "glm_flash_worker"
+                ),
+                transport=transport,
+                environ={"MACR_STATE_ROOT": str(state_root)},
+                key_source=StaticKeySource(),
+                token_policy=t1_glm_live_policy(),
+            )
+            source = approved_manifest(provider)
+            subject = T1ExecutionManifest.create(
+                plan_digest=source.plan_digest,
+                members=source.members,
+                aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
+                campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=10)
+                ).isoformat(),
+                authorized_dispatchers=source.authorized_dispatchers,
+            )
+            manifest_path = state_root / "t1-private-manifest.json"
+            manifest_path.write_text(
+                json.dumps(subject.to_dict()),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(state_root)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _t1_stage(
+                        str(manifest_path),
+                        str(ROOT / "config" / "providers.json"),
+                        dispatcher_ids=subject.authorized_dispatchers,
+                        expires_in_minutes=30,
+                    )
+            queue = PlanQueue(state_root / "runtime" / "dispatch.sqlite3")
+            counts = queue.state_counts()
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(document["status"], "t1_staged")
+        self.assertEqual(counts["queued"], 3)
+        self.assertFalse(document["network_activity"])
+        self.assertNotIn("T1_MEMBER_", output.getvalue())
+        self.assertNotIn(str(state_root), output.getvalue())
+        self.assertEqual(transport.posts, [])
+
     def test_queue_status_lists_global_reconciliation_content_free(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)

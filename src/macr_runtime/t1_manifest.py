@@ -581,6 +581,27 @@ class T1AuthorityBundle:
             aware_iso8601("expires_at", self.expires_at),
         )
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "manifest_digest": self.manifest_digest,
+            "batch_authority": {
+                "authority_id": self.batch_authority.authority_id,
+                "digest": self.batch_authority.digest,
+                "revision": self.batch_authority.revision,
+                "plan_digest": self.batch_authority.plan_digest,
+            },
+            "dispatch_authority": {
+                "source_kind": self.dispatch_authority.source_kind,
+                "source_id": self.dispatch_authority.source_id,
+                "digest": self.dispatch_authority.digest,
+                "revision": self.dispatch_authority.revision,
+                "epoch": self.dispatch_authority.epoch,
+                "scope": self.dispatch_authority.scope,
+            },
+            "member_ids": list(self.member_ids),
+            "expires_at": self.expires_at,
+        }
+
 
 def _reject_duplicate_keys(pairs):
     document = {}

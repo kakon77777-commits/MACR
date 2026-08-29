@@ -280,6 +280,48 @@ class DispatchAuthorityStore:
         finally:
             connection.close()
 
+    def revoke(self, reference: AuthorizationReference) -> bool:
+        if not isinstance(reference, AuthorizationReference):
+            raise DispatchAuthorizationError(
+                "dispatch authorization reference is invalid"
+            )
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT * FROM dispatch_authorities
+                WHERE source_kind = ? AND source_id = ?
+                  AND revision = ? AND epoch = ?
+                """,
+                (
+                    reference.source_kind,
+                    reference.source_id,
+                    reference.revision,
+                    reference.epoch,
+                ),
+            ).fetchone()
+            if row is None or row["body_sha256"] != reference.digest:
+                raise DispatchAuthorizationError(
+                    "dispatch authorization digest is invalid"
+                )
+            changed = 0
+            if row["revoked_at"] is None:
+                changed = connection.execute(
+                    """
+                    UPDATE dispatch_authorities SET revoked_at = ?
+                    WHERE authority_id = ? AND revoked_at IS NULL
+                    """,
+                    (self._current_time().isoformat(), row["authority_id"]),
+                ).rowcount
+            connection.commit()
+            return changed == 1
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def verify(
         self,
         reference: AuthorizationReference,

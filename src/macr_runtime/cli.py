@@ -42,7 +42,10 @@ from .providers.glm import GlmFlashWorkerProvider
 from .runtime import MacrRuntime, RuntimeServices
 from .scheduler import PlanQueue, QueueMemberRecord, QueueMemberState
 from .storage import StorageLayout
+from .t1_dispatcher import T1Dispatcher
+from .t1_manifest import load_t1_manifest
 from .task_preflight import validate_task_consistency
+from .token_policy import t1_glm_live_policy
 
 
 def _default_config(layout: StorageLayout) -> Path:
@@ -135,6 +138,65 @@ def _queue_status(
                 "selected_state": selected_state.value,
                 "counts": queue.state_counts(),
                 "members": [_public_queue_member(item) for item in members],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _t1_stage(
+    manifest_path: str,
+    config_path: str | None,
+    *,
+    dispatcher_ids: Sequence[str],
+    expires_in_minutes: int,
+) -> int:
+    if (
+        isinstance(expires_in_minutes, bool)
+        or not isinstance(expires_in_minutes, int)
+        or not 1 <= expires_in_minutes <= 1_440
+    ):
+        raise ValueError("expires-in-minutes must be between 1 and 1440")
+    layout = StorageLayout.from_environment()
+    layout.ensure_state_tree()
+    services = RuntimeServices.from_layout(layout)
+    if not _legacy_migration_complete(layout, services):
+        raise ValueError("T1 staging requires complete legacy migration")
+    path = Path(config_path) if config_path else _default_config(layout)
+    config = next(
+        item
+        for item in load_provider_configs(path)
+        if item.id == "glm_flash_worker"
+    )
+    provider = GlmFlashWorkerProvider(
+        config,
+        environ=os.environ,
+        token_policy=t1_glm_live_policy(),
+    )
+    manifest = load_t1_manifest(manifest_path)
+    now = datetime.now(timezone.utc)
+    manifest_expiry = datetime.fromisoformat(manifest.expires_at).astimezone(
+        timezone.utc
+    )
+    if manifest_expiry > now + timedelta(minutes=expires_in_minutes):
+        raise ValueError("T1 manifest expiry exceeds the operator staging window")
+    bundle = T1Dispatcher(
+        ProviderRegistry((provider,)),
+        services,
+    ).stage(
+        manifest,
+        tuple(dispatcher_ids),
+        manifest.expires_at,
+    )
+    print(
+        json.dumps(
+            {
+                "status": "t1_staged",
+                "network_activity": False,
+                "provider_call_performed": False,
+                "authority_bundle": bundle.to_dict(),
             },
             ensure_ascii=False,
             indent=2,
@@ -978,6 +1040,24 @@ def build_parser() -> argparse.ArgumentParser:
     queue_status.add_argument("--limit", type=int, default=100)
     queue_status.add_argument("--after-member-id")
 
+    t1_stage = sub.add_parser(
+        "t1-stage",
+        help="stage one exact three-member T1 manifest without provider calls",
+    )
+    t1_stage.add_argument("manifest")
+    t1_stage.add_argument("--config", help="provider configuration JSON path")
+    t1_stage.add_argument(
+        "--dispatcher-id",
+        action="append",
+        required=True,
+        dest="dispatcher_ids",
+    )
+    t1_stage.add_argument(
+        "--expires-in-minutes",
+        type=int,
+        default=30,
+    )
+
     evidence_inspect = sub.add_parser(
         "evidence-inspect",
         help="inspect a reviewed external evidence manifest without writing state",
@@ -1129,6 +1209,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.state,
             limit=args.limit,
             after_member_id=args.after_member_id,
+        )
+    if args.command == "t1-stage":
+        return _t1_stage(
+            args.manifest,
+            args.config,
+            dispatcher_ids=args.dispatcher_ids,
+            expires_in_minutes=args.expires_in_minutes,
         )
     if args.command == "evidence-inspect":
         return _evidence_inspect(args.manifest)
