@@ -247,3 +247,5 @@ T1 staging requires a strict three-member manifest, three existing GLM host appr
 The original concurrent census RED remains evidence; it is not erased by later quiet-window GREEN controls. The predicate was not weakened. Updated verifiers coordinate through the named `MACR_V06_QUIET_CENSUS` mutex and require five zero samples before and after the full gate. Arbitrary external processes remain outside mutex control.
 
 The `v0.6.0a0` tag and release decision remain immutable historical evidence. v0.6.0a1 is offline-only until a later exact clean checkpoint and explicit Neo live authorization. No live provider call occurred during this repair.
+
+The first exact clean a1 checkpoint subject was commit `74e81ae5133dd9e9e34fdfc11dae341a10310b2a` / tree `26a232ae138be7dd7f7f21bd4fb62c9d4951711c`. Two complete `verify-v06.ps1` runs each passed 482 tests with two existing platform capability skips plus 127 targeted tests, five pre/post quiet samples, network false, provider generation false, and byte-identical summary digest `6f93542eac54462bebb03fab8e504c411298d5e01a8c0d0103d28a39e3bd9c24`. This is offline verification, not live acceptance or route activation.

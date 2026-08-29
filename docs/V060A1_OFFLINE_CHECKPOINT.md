@@ -16,7 +16,35 @@ implementation tree   f71550e11c760c76a991ac393a3d425b2620cd03
 version               0.6.0a1
 ```
 
-The exact clean documentation/gate subject and two summary digests are appended only after the clean gate is run. The implementation commit above is already immutable and contains all product code through quiet-census admission.
+The exact clean documentation/gate subject is:
+
+```text
+candidate commit        74e81ae5133dd9e9e34fdfc11dae341a10310b2a
+candidate tree          26a232ae138be7dd7f7f21bd4fb62c9d4951711c
+worktree before/after   clean
+complete gate runs      2
+complete tests/run      482 passed, 2 platform capability skips
+targeted tests/run      127 passed
+summary digest/run      6f93542eac54462bebb03fab8e504c411298d5e01a8c0d0103d28a39e3bd9c24
+network activity        false
+provider generation     false
+quiet census            5 zero samples before + 5 after each run
+```
+
+Both complete `verify-v06.ps1` runs exited 0 and emitted byte-identical `V06_SUMMARY` JSON. Identity fields remained the same because both runs used the same clean commit/tree. The implementation commit above remains the last product-code commit before version/documentation work.
+
+Additional deterministic evidence from the summary:
+
+```text
+runtime/observatory/accounting schemas  6 / 2 / 2
+Direct conversation schema              2
+model-token policy schema/count         1 / 7
+model-token policy set digest           8046258902d867e70e7015fed2b68dc92334796ad4d0319b5d1a21da3f6f4247
+T1 live-policy digest                   1164ee2bb62fffbd42fa5ffbfa3b7344fd825cae4c506dabff4afa30c59b48d6
+three-process complete path             3
+SQLite bootstrap processes              32
+queue-only historical matrix            1 / 2 / 3 / 4 / 8
+```
 
 ## Retained evidence, not rewritten
 
