@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from .token_policy import ModelTokenPolicy
+
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _GROK_MODEL = "grok-4.6"
@@ -257,17 +259,32 @@ class DirectRunSettings:
 
 def canonical_policy_snapshot(
     settings: DirectRunSettings,
+    model_token_policy: ModelTokenPolicy | None = None,
 ) -> tuple[str, str]:
     if not isinstance(settings, DirectRunSettings):
         raise ValueError("settings must be DirectRunSettings")
+    if model_token_policy is not None and not isinstance(
+        model_token_policy,
+        ModelTokenPolicy,
+    ):
+        raise ValueError("model_token_policy must be a ModelTokenPolicy")
     document = {
-        "schema": "macr_direct_policy_v1",
+        "schema": (
+            "macr_direct_policy_v2"
+            if model_token_policy is not None
+            else "macr_direct_policy_v1"
+        ),
         "paid_call_confirmation": "never",
         "multi_turn": "full",
         "automatic_retry": False,
         "accounting": "required",
         **settings.to_dict(),
     }
+    if model_token_policy is not None:
+        document["model_token_policy"] = model_token_policy.to_dict()
+        document["model_token_policy_sha256"] = (
+            model_token_policy.policy_digest
+        )
     encoded = json.dumps(
         document,
         ensure_ascii=False,
@@ -288,6 +305,8 @@ class DirectConversationSpec:
     settings_profile_name: str
     settings_profile_version: int
     policy_snapshot_sha256: str
+    model_token_policy_json: str | None
+    model_token_policy_sha256: str | None
     encryption: str
     dataset_role: str
     training_eligible: bool
@@ -302,6 +321,7 @@ class DirectConversationSpec:
         system_prompt: str,
         settings: DirectRunSettings,
         model_digest: str | None = None,
+        model_token_policy: ModelTokenPolicy | None = None,
     ) -> "DirectConversationSpec":
         provider = DirectProviderId(provider_id)
         requested_model = _bounded_text("model", model, maximum=512)
@@ -329,7 +349,28 @@ class DirectConversationSpec:
                 )
         elif model_digest is not None:
             raise ValueError("Grok model_digest must be omitted")
-        _, policy_digest = canonical_policy_snapshot(settings)
+        token_json: str | None = None
+        token_digest: str | None = None
+        if model_token_policy is not None:
+            if (
+                model_token_policy.provider_id != provider.value
+                or model_token_policy.model_id != requested_model
+            ):
+                raise ValueError(
+                    "model token policy must match Direct provider/model"
+                )
+            token_json = json.dumps(
+                model_token_policy.to_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            token_digest = model_token_policy.policy_digest
+        _, policy_digest = canonical_policy_snapshot(
+            settings,
+            model_token_policy,
+        )
         return cls(
             provider_id=provider,
             model=requested_model,
@@ -341,6 +382,8 @@ class DirectConversationSpec:
             settings_profile_name=settings.profile_name,
             settings_profile_version=settings.profile_version,
             policy_snapshot_sha256=policy_digest,
+            model_token_policy_json=token_json,
+            model_token_policy_sha256=token_digest,
             encryption="none",
             dataset_role=(
                 "archive_only"

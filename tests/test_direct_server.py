@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 from macr_runtime.direct_contracts import DirectTurnResult
 from macr_runtime.direct_server import create_direct_server
 from macr_runtime.direct_settings import DirectSettingsStore
+from macr_runtime.model_token_store import ModelTokenPolicyStore
+from macr_runtime.token_policy import ModelTokenPolicyResolver
 from tests.support import d_drive_tempdir
 
 
@@ -163,6 +165,9 @@ class DirectServerTests(unittest.TestCase):
         settings = DirectSettingsStore(self.root / "settings.sqlite3")
         settings.ensure_operator_managed()
         self.runtime = FakeRuntime(settings)
+        self.runtime.token_policies = ModelTokenPolicyStore(
+            self.root / "model-token-policies.sqlite3"
+        )
         self.server = create_direct_server(self.runtime)
         self.thread = threading.Thread(
             target=self.server.serve_forever,
@@ -428,6 +433,60 @@ class DirectServerTests(unittest.TestCase):
         self.assertEqual(response.status, 413)
         connection.close()
         self.assertEqual(self.runtime.send_count, before)
+
+    def test_model_token_policy_endpoint_is_exact_and_model_local(self) -> None:
+        cookie, _ = self.authenticate()
+        listed = self.request(
+            "GET",
+            "/api/v0.1/model-token-policies",
+            cookie=cookie,
+            origin=False,
+        )[2]
+        self.assertEqual(len(listed["policies"]), 7)
+        base = ModelTokenPolicyResolver.builtins_only().resolve(
+            "grok",
+            "grok-4.6",
+        )
+        body = {
+            "override": {
+                "provider_id": "grok",
+                "model_id": "grok-4.6",
+                "revision": 2,
+                "context_warning_tokens": 200_000,
+                "hard_context_tokens": 450_000,
+                "default_output_tokens": 40_000,
+                "max_output_tokens": 48_000,
+                "base_policy_digest": base.policy_digest,
+            },
+            "activate": True,
+        }
+        status, _, saved = self.request(
+            "PUT",
+            "/api/v0.1/model-token-policies",
+            cookie=cookie,
+            body=body,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["policy"]["max_output_tokens"], 48_000)
+        policies = self.request(
+            "GET",
+            "/api/v0.1/model-token-policies",
+            cookie=cookie,
+            origin=False,
+        )[2]["policies"]
+        by_provider = {item["provider_id"]: item for item in policies}
+        self.assertEqual(by_provider["grok"]["max_output_tokens"], 48_000)
+        self.assertEqual(by_provider["ollama_qwythos"]["max_output_tokens"], 4_096)
+        self.assertNotIn("body_json", json.dumps(policies))
+        self.assertEqual(
+            self.request(
+                "PUT",
+                "/api/v0.1/model-token-policies",
+                cookie=cookie,
+                body={**body, "unknown": True},
+            )[0],
+            400,
+        )
 
     def test_internal_errors_are_sanitized(self) -> None:
         cookie, _ = self.authenticate()

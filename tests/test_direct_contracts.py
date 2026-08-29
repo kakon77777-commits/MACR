@@ -10,6 +10,7 @@ from macr_runtime.direct_contracts import (
     DirectTurnResult,
     canonical_policy_snapshot,
 )
+from macr_runtime.token_policy import ModelTokenPolicyResolver
 
 
 QWYTHOS_MODEL = "hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M"
@@ -32,6 +33,43 @@ def operator_settings() -> DirectRunSettings:
 
 
 class DirectContractTests(unittest.TestCase):
+    def test_conversation_policy_snapshot_binds_exact_model_token_policy(self) -> None:
+        settings = operator_settings()
+        policy = ModelTokenPolicyResolver.builtins_only().resolve(
+            "grok",
+            "grok-4.6",
+        )
+        spec = DirectConversationSpec.create(
+            provider_id="grok",
+            model="grok-4.6",
+            system_prompt="",
+            settings=settings,
+            model_token_policy=policy,
+        )
+
+        self.assertEqual(spec.model_token_policy_sha256, policy.policy_digest)
+        self.assertIn('"provider_id":"grok"', spec.model_token_policy_json)
+        self.assertNotEqual(
+            spec.policy_snapshot_sha256,
+            DirectConversationSpec.create(
+                provider_id="grok",
+                model="grok-4.6",
+                system_prompt="",
+                settings=settings,
+            ).policy_snapshot_sha256,
+        )
+        with self.assertRaisesRegex(ValueError, "match"):
+            DirectConversationSpec.create(
+                provider_id="grok",
+                model="grok-4.6",
+                system_prompt="",
+                settings=settings,
+                model_token_policy=ModelTokenPolicyResolver.builtins_only().resolve(
+                    "ollama_qwythos",
+                    QWYTHOS_MODEL,
+                ),
+            )
+
     def test_direct_provider_ids_are_closed_to_grok_and_qwythos(self) -> None:
         self.assertEqual(DirectProviderId("grok"), DirectProviderId.GROK)
         self.assertEqual(

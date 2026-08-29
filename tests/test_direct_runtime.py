@@ -15,6 +15,8 @@ from macr_runtime.direct_settings import DirectSettingsStore
 from macr_runtime.direct_store import DirectConversationStore
 from macr_runtime.errors import DirectStoreConflict
 from macr_runtime.execution import ProviderState, ProviderUsage, RawProviderObservation
+from macr_runtime.model_token_store import ModelTokenPolicyStore
+from macr_runtime.token_policy import ModelTokenOverride, ModelTokenPolicyResolver
 from tests.support import build_test_services, d_drive_tempdir
 
 
@@ -125,6 +127,9 @@ class DirectRuntimeTests(unittest.TestCase):
         conversations = DirectConversationStore(
             root / "direct" / "conversations.sqlite3"
         )
+        token_policies = ModelTokenPolicyStore(
+            root / "settings" / "model-token-policies.sqlite3"
+        )
         authority = issue_operator_direct_authority(services)
         runtime = DirectRuntime(
             FakeRegistry(grok, qwythos),
@@ -132,8 +137,75 @@ class DirectRuntimeTests(unittest.TestCase):
             conversations,
             settings,
             authority,
+            token_policies=token_policies,
         )
         return runtime, services, conversations, settings, grok, qwythos
+
+    def test_model_override_is_local_and_existing_conversation_stays_pinned(self) -> None:
+        with d_drive_tempdir() as root:
+            runtime, _, conversations, _, grok, qwythos = self.build_runtime(root)
+            old_grok = runtime.create_conversation(
+                "grok",
+                conversation_id="00000000-0000-4000-8000-000000000701",
+            )
+            local = runtime.create_conversation(
+                "ollama_qwythos",
+                conversation_id="00000000-0000-4000-8000-000000000702",
+            )
+            base = ModelTokenPolicyResolver.builtins_only().resolve(
+                "grok",
+                "grok-4.6",
+            )
+            runtime.token_policies.save_override(
+                ModelTokenOverride(
+                    provider_id="grok",
+                    model_id="grok-4.6",
+                    revision=2,
+                    context_warning_tokens=200_000,
+                    hard_context_tokens=450_000,
+                    default_output_tokens=40_000,
+                    max_output_tokens=48_000,
+                    base_policy_digest=base.policy_digest,
+                ),
+                activate=True,
+            )
+            new_grok = runtime.create_conversation(
+                "grok",
+                conversation_id="00000000-0000-4000-8000-000000000703",
+            )
+
+            runtime.send_message(
+                old_grok["conversation_id"],
+                "old",
+                origin_native_id="browser-old",
+            )
+            runtime.send_message(
+                new_grok["conversation_id"],
+                "new",
+                origin_native_id="browser-new",
+            )
+            runtime.send_message(
+                local["conversation_id"],
+                "local",
+                origin_native_id="browser-local",
+            )
+            reopened = DirectConversationStore(
+                root / "direct" / "conversations.sqlite3"
+            )
+            reopened_old = reopened.get(old_grok["conversation_id"])
+
+        self.assertNotEqual(
+            old_grok["model_token_policy_sha256"],
+            new_grok["model_token_policy_sha256"],
+        )
+        self.assertEqual(grok.calls[-2][1].max_output_tokens, 32_768)
+        self.assertEqual(grok.calls[-1][1].max_output_tokens, 40_000)
+        self.assertEqual(qwythos.calls[-1][1].max_output_tokens, 4_096)
+        self.assertEqual(qwythos.calls[-1][1].hard_context_tokens, 8_192)
+        self.assertEqual(
+            reopened_old["model_token_policy_sha256"],
+            old_grok["model_token_policy_sha256"],
+        )
 
     def test_operator_authority_is_exact_to_direct_grok_and_qwythos(self) -> None:
         with d_drive_tempdir() as root:
@@ -343,11 +415,25 @@ class DirectRuntimeTests(unittest.TestCase):
                 current,
                 profile_name="tiny-context",
                 profile_version=1,
-                max_output_tokens=4,
-                context_warning_tokens=6,
-                hard_context_tokens=12,
             )
             settings_store.save_profile(constrained, activate=True)
+            local_base = ModelTokenPolicyResolver.builtins_only().resolve(
+                "ollama_qwythos",
+                QWYTHOS_MODEL,
+            )
+            runtime.token_policies.save_override(
+                ModelTokenOverride(
+                    provider_id="ollama_qwythos",
+                    model_id=QWYTHOS_MODEL,
+                    revision=2,
+                    context_warning_tokens=6,
+                    hard_context_tokens=12,
+                    default_output_tokens=4,
+                    max_output_tokens=4,
+                    base_policy_digest=local_base.policy_digest,
+                ),
+                activate=True,
+            )
             conversation = runtime.create_conversation(
                 "ollama_qwythos",
                 conversation_id="00000000-0000-4000-8000-000000000151",

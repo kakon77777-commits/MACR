@@ -19,6 +19,7 @@ from .direct_runtime import DirectRuntime, issue_operator_direct_authority
 from .direct_server import DirectChatServer, create_direct_server
 from .direct_settings import DirectSettingsStore
 from .direct_store import DirectConversationStore
+from .model_token_store import ModelTokenPolicyStore
 from .errors import LegacyLedgerError, StoragePolicyError
 from .runtime import RuntimeServices
 from .storage import StorageLayout
@@ -144,6 +145,7 @@ def build_direct_application(
     settings = DirectSettingsStore(layout.settings_db_path)
     settings.ensure_operator_managed()
     conversations = DirectConversationStore(layout.direct_db_path)
+    token_policies = ModelTokenPolicyStore(layout.model_token_policy_db_path)
     authority = issue_operator_direct_authority(services)
     runtime = DirectRuntime(
         registry,
@@ -151,6 +153,7 @@ def build_direct_application(
         conversations,
         settings,
         authority,
+        token_policies=token_policies,
     )
     server = create_direct_server(runtime)
     return DirectApplication(

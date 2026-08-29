@@ -63,7 +63,7 @@ class DirectDeletionRecord:
 
 
 class DirectConversationStore:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(
         self,
@@ -107,6 +107,8 @@ class DirectConversationStore:
                     settings_profile_name TEXT NOT NULL,
                     settings_profile_version INTEGER NOT NULL,
                     policy_snapshot_sha256 TEXT NOT NULL,
+                    model_token_policy_json TEXT,
+                    model_token_policy_sha256 TEXT,
                     encryption TEXT NOT NULL,
                     dataset_role TEXT NOT NULL,
                     training_eligible INTEGER NOT NULL,
@@ -158,6 +160,26 @@ class DirectConversationStore:
                     "INSERT INTO direct_schema_meta(component, version) VALUES ('direct_conversations', ?)",
                     (self.SCHEMA_VERSION,),
                 )
+            elif row["version"] == 1:
+                columns = {
+                    item["name"]
+                    for item in connection.execute(
+                        "PRAGMA table_info(conversations)"
+                    ).fetchall()
+                }
+                if "model_token_policy_json" not in columns:
+                    connection.execute(
+                        "ALTER TABLE conversations ADD COLUMN model_token_policy_json TEXT"
+                    )
+                if "model_token_policy_sha256" not in columns:
+                    connection.execute(
+                        "ALTER TABLE conversations ADD COLUMN model_token_policy_sha256 TEXT"
+                    )
+                connection.execute(
+                    """UPDATE direct_schema_meta SET version = ?
+                    WHERE component = 'direct_conversations'""",
+                    (self.SCHEMA_VERSION,),
+                )
             elif row["version"] != self.SCHEMA_VERSION:
                 raise DirectStoreConflict(
                     "Direct conversation schema version is unsupported"
@@ -184,6 +206,10 @@ class DirectConversationStore:
             "settings_profile_name": row["settings_profile_name"],
             "settings_profile_version": row["settings_profile_version"],
             "policy_snapshot_sha256": row["policy_snapshot_sha256"],
+            "model_token_policy_json": row["model_token_policy_json"],
+            "model_token_policy_sha256": row[
+                "model_token_policy_sha256"
+            ],
             "encryption": row["encryption"],
             "dataset_role": row["dataset_role"],
             "training_eligible": bool(row["training_eligible"]),
@@ -249,10 +275,11 @@ class DirectConversationStore:
                     created_at, last_active_at, system_prompt,
                     system_prompt_sha256, settings_profile_name,
                     settings_profile_version, policy_snapshot_sha256,
+                    model_token_policy_json, model_token_policy_sha256,
                     encryption, dataset_role, training_eligible,
                     provider_improvement_preference, archived,
                     last_context_estimate, context_warning
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 0)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 0)""",
                 (
                     identity,
                     normalized_title,
@@ -266,6 +293,8 @@ class DirectConversationStore:
                     spec.settings_profile_name,
                     spec.settings_profile_version,
                     spec.policy_snapshot_sha256,
+                    spec.model_token_policy_json,
+                    spec.model_token_policy_sha256,
                     spec.encryption,
                     spec.dataset_role,
                     int(spec.training_eligible),

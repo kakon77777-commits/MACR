@@ -5,6 +5,7 @@ import json
 import math
 import threading
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -28,6 +29,8 @@ from .execution import (
     RawProviderObservation,
 )
 from .runtime import RuntimeServices
+from .model_token_store import ModelTokenPolicyStore
+from .token_policy import ModelTokenPolicy, ModelTokenPolicyResolver
 
 
 _DIRECT_TASK_TYPE = "direct_chat"
@@ -89,6 +92,8 @@ class DirectRuntime:
         conversations: DirectConversationStore,
         settings: DirectSettingsStore,
         authority: AuthorizationReference,
+        *,
+        token_policies: ModelTokenPolicyStore | None = None,
     ) -> None:
         if not isinstance(services, RuntimeServices):
             raise ValueError("services must be RuntimeServices")
@@ -105,6 +110,8 @@ class DirectRuntime:
         self.conversations = conversations
         self.settings = settings
         self.authority = authority
+        self.token_policies = token_policies
+        self._builtin_token_policies = ModelTokenPolicyResolver.builtins_only()
         self._conversation_locks_guard = threading.Lock()
         self._conversation_locks: dict[str, threading.RLock] = {}
 
@@ -128,12 +135,18 @@ class DirectRuntime:
         adapter = self.registry.get(provider_id)
         identity = adapter.model_identity()
         settings = self.settings.active_profile()
+        token_policy = (
+            self.token_policies.effective_policy(provider_id, identity["model"])
+            if self.token_policies is not None
+            else self._builtin_token_policies.resolve(provider_id, identity["model"])
+        )
         spec = DirectConversationSpec.create(
             provider_id=provider_id,
             model=identity["model"],
             model_digest=identity.get("model_digest"),
             system_prompt=system_prompt,
             settings=settings,
+            model_token_policy=token_policy,
         )
         return self.conversations.create(
             spec,
@@ -235,6 +248,27 @@ class DirectRuntime:
             conversation["settings_profile_name"],
             conversation["settings_profile_version"],
         )
+        token_json = conversation.get("model_token_policy_json")
+        token_digest = conversation.get("model_token_policy_sha256")
+        if token_json is not None or token_digest is not None:
+            try:
+                token_policy = ModelTokenPolicy.from_dict(json.loads(token_json))
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise MacrError(
+                    "Direct model token policy snapshot is invalid"
+                ) from exc
+            if (
+                token_policy.policy_digest != token_digest
+                or token_policy.provider_id != conversation["provider_id"]
+                or token_policy.model_id != conversation["model"]
+            ):
+                raise MacrError("Direct model token policy snapshot is invalid")
+            settings = replace(
+                settings,
+                max_output_tokens=token_policy.default_output_tokens,
+                context_warning_tokens=token_policy.context_warning_tokens,
+                hard_context_tokens=token_policy.hard_context_tokens,
+            )
         run = run_id or str(uuid.uuid4())
         user = self.conversations.append_user(
             conversation_id,

@@ -28,8 +28,9 @@ def layout_for(state_root: Path) -> StorageLayout:
 class DirectLauncherTests(unittest.TestCase):
     def test_builds_local_application_without_provider_call(self) -> None:
         with d_drive_tempdir() as state_root:
+            layout = layout_for(state_root)
             application = build_direct_application(
-                layout_for(state_root),
+                layout,
                 environ={"XAI_API_KEY": "xai-test-only"},
             )
             try:
@@ -38,6 +39,10 @@ class DirectLauncherTests(unittest.TestCase):
                 self.assertEqual(
                     application.settings.active_profile().profile_name,
                     "operator_managed",
+                )
+                self.assertEqual(
+                    application.runtime.token_policies.path,
+                    layout.model_token_policy_db_path,
                 )
                 self.assertEqual(application.conversations.list(), ())
                 self.assertEqual(application.registry.provider_ids(), ("grok", "ollama_qwythos"))
@@ -59,6 +64,7 @@ class DirectLauncherTests(unittest.TestCase):
                 )
             self.assertFalse(layout.direct_db_path.exists())
             self.assertFalse(layout.settings_db_path.exists())
+            self.assertFalse(layout.model_token_policy_db_path.exists())
 
     def test_instance_lease_has_one_cross_handle_holder_and_recovers(self) -> None:
         with d_drive_tempdir() as state_root:

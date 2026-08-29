@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import unittest
 
 from macr_runtime.direct_contracts import DirectConversationSpec
@@ -35,6 +36,36 @@ def private_spec() -> DirectConversationSpec:
 
 
 class DirectConversationStoreTests(unittest.TestCase):
+    def test_schema_one_migrates_additively_and_preserves_legacy_snapshot(self) -> None:
+        with d_drive_tempdir() as root:
+            path = root / "conversations.sqlite3"
+            store = DirectConversationStore(path)
+            store.create(qwythos_spec(), conversation_id=CONVERSATION_ID)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE direct_schema_meta SET version = 1 WHERE component = 'direct_conversations'"
+            )
+            connection.execute(
+                "ALTER TABLE conversations DROP COLUMN model_token_policy_json"
+            )
+            connection.execute(
+                "ALTER TABLE conversations DROP COLUMN model_token_policy_sha256"
+            )
+            connection.commit()
+            connection.close()
+
+            migrated = DirectConversationStore(path)
+            row = migrated.get(CONVERSATION_ID)
+            connection = sqlite3.connect(path)
+            version = connection.execute(
+                "SELECT version FROM direct_schema_meta WHERE component = 'direct_conversations'"
+            ).fetchone()[0]
+            connection.close()
+
+        self.assertEqual(version, 2)
+        self.assertIsNone(row["model_token_policy_json"])
+        self.assertIsNone(row["model_token_policy_sha256"])
+
     def test_create_pins_identity_and_exact_private_metadata(self) -> None:
         with d_drive_tempdir() as root:
             store = DirectConversationStore(root / "conversations.sqlite3")

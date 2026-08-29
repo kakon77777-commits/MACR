@@ -105,6 +105,12 @@ class DirectUiTests(unittest.TestCase):
                 "message-input",
                 "generation-state",
                 "settings-panel",
+                "setting-token-model",
+                "setting-token-default-output",
+                "setting-token-max-output",
+                "setting-token-warning",
+                "setting-token-hard-context",
+                "save-model-token-policy",
                 "accounting-panel",
                 "delete-conversation",
             }.issubset(ids)
@@ -135,6 +141,8 @@ class DirectUiTests(unittest.TestCase):
         self.assertIn("textContent", javascript)
         self.assertNotIn("EventSource", javascript)
         self.assertNotIn("WebSocket", javascript)
+        self.assertIn('/model-token-policies', javascript)
+        self.assertIn("saveModelTokenPolicy", javascript)
 
     def test_failed_turn_projection_is_visible_and_preserves_input(self) -> None:
         logic = ROOT / "src" / "macr_runtime" / "direct_ui" / "result_logic.js"

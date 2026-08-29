@@ -102,18 +102,15 @@
             <input id="setting-profile-name" value="custom">
             <label for="setting-profile-version">版本</label>
             <input id="setting-profile-version" type="number" min="1" max="1000000" value="1">
-            <label for="setting-max-output">最大輸出 tokens</label>
-            <input id="setting-max-output" type="number" min="1" max="131072">
+            <input id="setting-max-output" type="hidden">
             <label for="setting-timeout">逾時秒數</label>
             <input id="setting-timeout" type="number" min="1" max="3600" step="1">
             <label for="setting-temperature">Temperature</label>
             <input id="setting-temperature" type="number" min="0" max="2" step="0.1">
             <label for="setting-top-p">Top P</label>
             <input id="setting-top-p" type="number" min="0.01" max="1" step="0.01">
-            <label for="setting-warning">Context 警告</label>
-            <input id="setting-warning" type="number" min="1">
-            <label for="setting-hard-context">Context 上限</label>
-            <input id="setting-hard-context" type="number" min="2">
+            <input id="setting-warning" type="hidden">
+            <input id="setting-hard-context" type="hidden">
             <label for="setting-soft-budget">單次軟預算 USD</label>
             <input id="setting-soft-budget" type="number" min="0" step="0.001" placeholder="空白＝只記帳">
             <label for="setting-improvement">Provider improvement</label>
@@ -124,6 +121,24 @@
             </select>
           </div>
           <button id="save-settings" class="primary-button" type="button">另存並啟用新版本</button>
+        </section>
+
+        <section aria-labelledby="model-token-heading">
+          <h3 id="model-token-heading">模型局部 Token Policy</h3>
+          <p class="provider-meta">Context 與輸出只套用到所選 provider/model；既有對話保留建立時快照。</p>
+          <div class="settings-grid">
+            <label for="setting-token-model">Provider / Model</label>
+            <select id="setting-token-model"></select>
+            <label for="setting-token-default-output">預設輸出 tokens</label>
+            <input id="setting-token-default-output" type="number" min="1" max="131072">
+            <label for="setting-token-max-output">最大輸出 tokens</label>
+            <input id="setting-token-max-output" type="number" min="1" max="131072">
+            <label for="setting-token-warning">Context 警告</label>
+            <input id="setting-token-warning" type="number" min="1">
+            <label for="setting-token-hard-context">Context 上限</label>
+            <input id="setting-token-hard-context" type="number" min="2">
+          </div>
+          <button id="save-model-token-policy" class="primary-button" type="button">儲存並啟用此模型版本</button>
         </section>
 
         <section aria-labelledby="accounting-heading">

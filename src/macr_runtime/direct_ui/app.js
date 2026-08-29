@@ -12,6 +12,7 @@ const state = {
   conversations: [],
   currentConversation: null,
   settings: null,
+  tokenPolicies: [],
   generating: false,
   elapsedTimer: null,
   toastTimer: null,
@@ -331,6 +332,65 @@ async function loadSettings() {
   applySettings(data.active);
 }
 
+function tokenPolicyKey(policy) {
+  return JSON.stringify([policy.provider_id, policy.model_id]);
+}
+
+function selectedTokenPolicy() {
+  const key = element("setting-token-model").value;
+  return state.tokenPolicies.find((item) => tokenPolicyKey(item) === key) || null;
+}
+
+function applyModelTokenPolicy(policy) {
+  if (!policy) return;
+  element("setting-token-default-output").value = String(policy.default_output_tokens);
+  element("setting-token-max-output").value = String(policy.max_output_tokens);
+  element("setting-token-warning").value = String(policy.context_warning_tokens);
+  element("setting-token-hard-context").value = String(policy.hard_context_tokens);
+}
+
+async function loadModelTokenPolicies() {
+  const data = await request("/model-token-policies");
+  state.tokenPolicies = data.policies;
+  const selector = element("setting-token-model");
+  const previous = selector.value;
+  selector.replaceChildren();
+  for (const policy of state.tokenPolicies) {
+    const option = node("option", "", `${policy.provider_id} · ${policy.model_id}`);
+    option.value = tokenPolicyKey(policy);
+    selector.append(option);
+  }
+  if (state.tokenPolicies.some((item) => tokenPolicyKey(item) === previous)) {
+    selector.value = previous;
+  }
+  applyModelTokenPolicy(selectedTokenPolicy());
+}
+
+async function saveModelTokenPolicy() {
+  const current = selectedTokenPolicy();
+  if (!current) throw new Error("model_token_policy_missing");
+  const source = String(current.policy_source || "");
+  const currentRevision = source.startsWith("operator_override:")
+    ? Number(source.split(":")[1])
+    : 0;
+  const override = {
+    provider_id: current.provider_id,
+    model_id: current.model_id,
+    revision: currentRevision + 1,
+    context_warning_tokens: numericValue("setting-token-warning"),
+    hard_context_tokens: numericValue("setting-token-hard-context"),
+    default_output_tokens: numericValue("setting-token-default-output"),
+    max_output_tokens: numericValue("setting-token-max-output"),
+    base_policy_digest: current.base_policy_digest,
+  };
+  await request("/model-token-policies", {
+    method: "PUT",
+    body: { override, activate: true },
+  });
+  await loadModelTokenPolicies();
+  showToast("模型局部 Token Policy 已新增版本並啟用；既有對話快照不變。");
+}
+
 function numericValue(id) {
   return Number(element(id).value);
 }
@@ -383,6 +443,8 @@ function bindEvents() {
   element("toggle-settings").addEventListener("click", () => toggleSettings());
   element("close-settings").addEventListener("click", () => toggleSettings(false));
   element("save-settings").addEventListener("click", () => saveSettings().catch(handleError));
+  element("setting-token-model").addEventListener("change", () => applyModelTokenPolicy(selectedTokenPolicy()));
+  element("save-model-token-policy").addEventListener("click", () => saveModelTokenPolicy().catch(handleError));
   element("message-form").addEventListener("submit", (event) => {
     event.preventDefault();
     sendMessage().catch(handleError);
@@ -408,6 +470,7 @@ async function start() {
       loadProviders(),
       loadConversations(),
       loadSettings(),
+      loadModelTokenPolicies(),
       loadAccounting(),
     ]);
     setConnection("僅本機", "good");

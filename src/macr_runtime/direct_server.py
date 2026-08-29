@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from .direct_contracts import DirectRunSettings
+from .token_policy import ModelTokenOverride
 from .direct_ui import read_asset
 from .errors import DirectStoreConflict, MacrError
 
@@ -499,6 +500,64 @@ def _handler_class(state: _DirectServerState):
                         activate=document["activate"],
                     )
                     self._send_json(200, {"settings": settings.to_dict()})
+                    return
+                raise _HttpFailure(405, "method_not_allowed")
+
+            if path == f"{_API_PREFIX}/model-token-policies":
+                if query:
+                    raise _HttpFailure(400, "invalid_query")
+                if self.command == "GET":
+                    self._send_json(
+                        200,
+                        {
+                            "policies": [
+                                item.to_dict()
+                                | {
+                                    "policy_digest": item.policy_digest,
+                                    "base_policy_digest": (
+                                        runtime.token_policies.resolver.resolve(
+                                            item.provider_id,
+                                            item.model_id,
+                                        ).policy_digest
+                                    ),
+                                }
+                                for item in runtime.token_policies.list_effective()
+                            ]
+                        },
+                    )
+                    return
+                if self.command == "PUT":
+                    document = self._json_body()
+                    self._exact_keys(
+                        document,
+                        required={"override", "activate"},
+                    )
+                    if not isinstance(document["activate"], bool):
+                        raise _HttpFailure(400, "invalid_request_fields")
+                    try:
+                        override = ModelTokenOverride.from_dict(
+                            document["override"]
+                        )
+                        runtime.token_policies.save_override(
+                            override,
+                            activate=document["activate"],
+                        )
+                        policy = runtime.token_policies.effective_policy(
+                            override.provider_id,
+                            override.model_id,
+                        )
+                    except (TypeError, ValueError, MacrError) as exc:
+                        raise _HttpFailure(
+                            400,
+                            "invalid_model_token_policy",
+                        ) from exc
+                    self._send_json(
+                        200,
+                        {
+                            "policy": policy.to_dict()
+                            | {"policy_digest": policy.policy_digest}
+                        },
+                    )
                     return
                 raise _HttpFailure(405, "method_not_allowed")
 
