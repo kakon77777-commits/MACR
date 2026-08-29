@@ -59,6 +59,15 @@ from .coordination import (
     TopologyId,
 )
 from .verification_graph import VerifierGraph, VerifierNode
+from .planner import (
+    DynamicCoordinationPlanner,
+    EligibilityDecision,
+    ExclusionReason,
+    PlanningCandidate,
+    PlanningError,
+    PlanningInput,
+    PlanningState,
+)
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -96,12 +105,15 @@ __all__ = [
     "DirectProviderId",
     "DirectRunSettings",
     "DirectTurnResult",
+    "DynamicCoordinationPlanner",
     "EolNormalization",
     "EolScope",
     "ExecutionRouteIdentity",
     "EvidenceImporter",
+    "EligibilityDecision",
     "EligibleCandidate",
     "ExcludedCandidate",
+    "ExclusionReason",
     "FallbackMode",
     "FallbackRule",
     "IdentityStatus",
@@ -122,6 +134,10 @@ __all__ = [
     "ModelPassportProjector",
     "OperatorPolicyProfile",
     "PlanExecutionMode",
+    "PlanningCandidate",
+    "PlanningError",
+    "PlanningInput",
+    "PlanningState",
     "ObservatoryDatabase",
     "MaterializationState",
     "PrivacyLevel",

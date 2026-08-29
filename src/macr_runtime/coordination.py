@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
-from .canonical import sha256_id
+from .canonical import aware_iso8601, sha256_id
 from .verification_graph import VerifierGraph
 
 
@@ -398,6 +398,7 @@ class FallbackRule:
 class CoordinationPlan:
     plan_id: str
     plan_revision: int
+    planned_at: str
     planner_version: str
     topology_id: TopologyId
     execution_mode: PlanExecutionMode
@@ -428,6 +429,11 @@ class CoordinationPlan:
             or self.plan_revision < 1
         ):
             raise ValueError("plan_revision must be a positive integer")
+        object.__setattr__(
+            self,
+            "planned_at",
+            aware_iso8601("planned_at", self.planned_at),
+        )
         object.__setattr__(
             self,
             "planner_version",
@@ -570,6 +576,7 @@ class CoordinationPlan:
     def canonical_plan(self) -> dict[str, object]:
         return {
             "plan_revision": self.plan_revision,
+            "planned_at": self.planned_at,
             "planner_version": self.planner_version,
             "topology_id": self.topology_id.value,
             "execution_mode": self.execution_mode.value,

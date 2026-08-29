@@ -97,6 +97,7 @@ def make_plan(
     return CoordinationPlan.create(
         plan_id=plan_id,
         plan_revision=revision,
+        planned_at="2026-08-29T00:00:00+00:00",
         planner_version="shadow-planner-v1",
         topology_id=TopologyId.T0_DIRECT_VERIFIED,
         execution_mode=PlanExecutionMode.SHADOW_ONLY,
@@ -163,6 +164,13 @@ class CoordinationPlanTests(unittest.TestCase):
             dataclasses.replace(
                 first,
                 qualification_snapshot_id="e" * 64,
+            ).plan_digest,
+        )
+        self.assertNotEqual(
+            first.plan_digest,
+            dataclasses.replace(
+                first,
+                planned_at="2026-08-30T00:00:00+00:00",
             ).plan_digest,
         )
 
