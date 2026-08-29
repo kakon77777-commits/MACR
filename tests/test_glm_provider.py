@@ -833,6 +833,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             r"Analyze \{x\in D:\neg C_k(x)\}.",
             r"Analyze D:\quad y^2=x^3+x^2+8x-16.",
             r"Analyze \mathsf D:\text{domain}.",
+            r"Analyze $\forall B:\neg R(A,B)$ and $\{x\in D:\neg C_k(x)\}$.",
             r"Analyze \\min\\{u>s:\\delta_u<\\delta_s\\}.",
             r"Analyze \\forall B:\\neg R(A,B).",
         ):

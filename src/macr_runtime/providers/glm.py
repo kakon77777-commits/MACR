@@ -118,6 +118,12 @@ def _has_path_like_continuation(value: str, start: int) -> bool:
         and suffix[after_separator] in {"\\", "/"}
     ):
         after_separator += 1
+    if after_separator < len(suffix) and suffix[after_separator] in "{[(":
+        trimmed = component.rstrip()
+        if trimmed.endswith((".", ";")) or (
+            trimmed.endswith("$") and trimmed.count("$") >= 2
+        ):
+            return False
     if after_separator < len(suffix) and suffix[after_separator] in "}])":
         remainder = suffix[after_separator + 1 :]
         if "\\" not in remainder and "/" not in remainder:
@@ -125,7 +131,7 @@ def _has_path_like_continuation(value: str, start: int) -> bool:
     return not any(character in _WINDOWS_COMPONENT_FORBIDDEN for character in component)
 
 
-def _contains_obvious_sensitive_marker(value: str) -> bool:
+def contains_obvious_sensitive_marker(value: str) -> bool:
     if _OBVIOUS_CREDENTIAL_MARKER.search(value):
         return True
     if _FILE_URI.search(value):
@@ -458,8 +464,8 @@ class GlmFlashWorkerProvider(BaseProvider):
 
     def _delegation_envelope(self, task: TaskContract) -> dict[str, Any]:
         inputs = _validated_text_inputs(task)
-        if _contains_obvious_sensitive_marker(task.goal) or any(
-            _contains_obvious_sensitive_marker(item["content"])
+        if contains_obvious_sensitive_marker(task.goal) or any(
+            contains_obvious_sensitive_marker(item["content"])
             for item in inputs
         ):
             raise ProviderPolicyError(
