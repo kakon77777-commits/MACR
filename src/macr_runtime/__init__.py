@@ -20,6 +20,13 @@ from .contracts import (
 from .runtime import MacrRuntime, RuntimeServices
 from .storage import StorageLayout
 from .canonical import aware_iso8601, canonical_json_bytes, sha256_id
+from .model_identity import (
+    ExecutionRouteIdentity,
+    IdentityStatus,
+    ModelSubject,
+    QualificationKey,
+    RoleDefinition,
+)
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -53,6 +60,8 @@ __all__ = [
     "DirectTurnResult",
     "EolNormalization",
     "EolScope",
+    "ExecutionRouteIdentity",
+    "IdentityStatus",
     "ImportMode",
     "AcceptanceState",
     "AuthorizationReference",
@@ -61,16 +70,19 @@ __all__ = [
     "DispatchOrigin",
     "InteractionPlane",
     "MacrRuntime",
+    "ModelSubject",
     "MaterializationState",
     "PrivacyLevel",
     "ProviderExecution",
     "ProviderResult",
+    "QualificationKey",
     "ProviderState",
     "ProviderUsage",
     "RawProviderObservation",
     "ResultStatus",
     "ReturnContract",
     "ReturnFormat",
+    "RoleDefinition",
     "RequiredImport",
     "ReturnContractState",
     "RuntimeServices",
