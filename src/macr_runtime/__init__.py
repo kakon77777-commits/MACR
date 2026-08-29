@@ -68,6 +68,12 @@ from .planner import (
     PlanningInput,
     PlanningState,
 )
+from .route_resolution import (
+    ExecutionProviderResolver,
+    ExecutionRouteProposal,
+    ExecutionRouteSnapshot,
+    RouteResolutionPolicy,
+)
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -109,6 +115,9 @@ __all__ = [
     "EolNormalization",
     "EolScope",
     "ExecutionRouteIdentity",
+    "ExecutionProviderResolver",
+    "ExecutionRouteProposal",
+    "ExecutionRouteSnapshot",
     "EvidenceImporter",
     "EligibilityDecision",
     "EligibleCandidate",
@@ -159,6 +168,7 @@ __all__ = [
     "ReturnFormat",
     "RoleDefinition",
     "RoleSlot",
+    "RouteResolutionPolicy",
     "RequiredImport",
     "ReturnContractState",
     "RuntimeServices",

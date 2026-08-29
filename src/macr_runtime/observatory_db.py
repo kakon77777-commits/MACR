@@ -91,6 +91,22 @@ _EXPECTED_COLUMNS = {
         "source_id",
         "invalidated_at",
     ),
+    "coordination_plans": (
+        "plan_digest",
+        "plan_id",
+        "plan_revision",
+        "planned_at",
+        "canonical_json",
+        "persisted_at",
+    ),
+    "shadow_comparisons": (
+        "comparison_id",
+        "plan_digest",
+        "baseline_route_id",
+        "proposed_route_id",
+        "canonical_json",
+        "observed_at",
+    ),
 }
 
 
@@ -296,10 +312,30 @@ class QualificationInvalidationRecord:
     invalidated_at: str
 
 
+@dataclass(frozen=True)
+class CoordinationPlanRecord:
+    plan_digest: str
+    plan_id: str
+    plan_revision: int
+    planned_at: str
+    canonical_json: str
+    persisted_at: str
+
+
+@dataclass(frozen=True)
+class ShadowComparisonRecord:
+    comparison_id: str
+    plan_digest: str
+    baseline_route_id: str
+    proposed_route_id: str
+    canonical_json: str
+    observed_at: str
+
+
 class ObservatoryDatabase:
     """Append-only evidence store with create-once private source snapshots."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
     _BOOTSTRAP_TIMEOUT_S = 30.0
     _BOOTSTRAP_RETRY_INTERVAL_S = 0.01
 
@@ -386,7 +422,7 @@ class ObservatoryDatabase:
         try:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute("PRAGMA user_version").fetchone()[0]
-            if current not in {0, self.SCHEMA_VERSION}:
+            if current not in {0, 1, self.SCHEMA_VERSION}:
                 raise ObservatoryConflict(
                     "observatory database schema version is unsupported"
                 )
@@ -444,6 +480,23 @@ class ObservatoryDatabase:
                     reason_code TEXT NOT NULL,
                     source_id TEXT NOT NULL,
                     invalidated_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS coordination_plans(
+                    plan_digest TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    plan_revision INTEGER NOT NULL,
+                    planned_at TEXT NOT NULL,
+                    canonical_json TEXT NOT NULL UNIQUE,
+                    persisted_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS shadow_comparisons(
+                    comparison_id TEXT PRIMARY KEY,
+                    plan_digest TEXT NOT NULL
+                        REFERENCES coordination_plans(plan_digest),
+                    baseline_route_id TEXT NOT NULL,
+                    proposed_route_id TEXT NOT NULL,
+                    canonical_json TEXT NOT NULL,
+                    observed_at TEXT NOT NULL
                 )""",
             )
             for statement in statements:
@@ -970,6 +1023,210 @@ class ObservatoryDatabase:
     def qualification_decision_count(self) -> int:
         return self._table_count("qualification_decisions")
 
+    def append_coordination_plan(
+        self,
+        plan: object,
+        *,
+        persisted_at: str,
+    ) -> CoordinationPlanRecord:
+        record = self._coordination_plan_record(plan, persisted_at)
+        connection = self.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            persisted = self._append_plan_connection(connection, record)
+            connection.commit()
+            return persisted
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ObservatoryConflict(
+                "coordination plan conflicts with append-only state"
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _coordination_plan_record(
+        plan: object,
+        persisted_at: str,
+    ) -> CoordinationPlanRecord:
+        from .coordination import CoordinationPlan
+
+        if not isinstance(plan, CoordinationPlan):
+            raise ValueError("plan must be a CoordinationPlan")
+        return CoordinationPlanRecord(
+            plan_digest=plan.plan_digest,
+            plan_id=plan.plan_id,
+            plan_revision=plan.plan_revision,
+            planned_at=plan.planned_at,
+            canonical_json=canonical_json_bytes(
+                plan.canonical_plan()
+            ).decode("utf-8"),
+            persisted_at=aware_iso8601("persisted_at", persisted_at),
+        )
+
+    @staticmethod
+    def _append_plan_connection(
+        connection: sqlite3.Connection,
+        record: CoordinationPlanRecord,
+    ) -> CoordinationPlanRecord:
+        existing = connection.execute(
+            "SELECT * FROM coordination_plans WHERE plan_digest = ?",
+            (record.plan_digest,),
+        ).fetchone()
+        if existing is None:
+            connection.execute(
+                "INSERT INTO coordination_plans("
+                "plan_digest, plan_id, plan_revision, planned_at, "
+                "canonical_json, persisted_at"
+                ") VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    record.plan_digest,
+                    record.plan_id,
+                    record.plan_revision,
+                    record.planned_at,
+                    record.canonical_json,
+                    record.persisted_at,
+                ),
+            )
+            return record
+        if existing["canonical_json"] != record.canonical_json:
+            raise ObservatoryConflict(
+                "plan_digest conflicts with canonical plan"
+            )
+        return CoordinationPlanRecord(**dict(existing))
+
+    def read_coordination_plan(
+        self,
+        plan_digest: str,
+    ) -> CoordinationPlanRecord | None:
+        plan_digest = _digest("plan_digest", plan_digest)
+        row = self._read_one(
+            "coordination_plans",
+            "plan_digest",
+            plan_digest,
+        )
+        return CoordinationPlanRecord(**dict(row)) if row is not None else None
+
+    def append_shadow_comparison(
+        self,
+        *,
+        plan_digest: str,
+        baseline_route_id: str,
+        proposed_route_id: str,
+        observed_at: str,
+        metadata: Mapping[str, Any],
+    ) -> ShadowComparisonRecord:
+        record = self._shadow_comparison_record(
+            plan_digest=plan_digest,
+            baseline_route_id=baseline_route_id,
+            proposed_route_id=proposed_route_id,
+            observed_at=observed_at,
+            metadata=metadata,
+        )
+        self._append_row(
+            "shadow_comparisons",
+            "comparison_id",
+            record.comparison_id,
+            record.__dict__,
+        )
+        return record
+
+    @staticmethod
+    def _shadow_comparison_record(
+        *,
+        plan_digest: str,
+        baseline_route_id: str,
+        proposed_route_id: str,
+        observed_at: str,
+        metadata: Mapping[str, Any],
+    ) -> ShadowComparisonRecord:
+        identity = {
+            "plan_digest": _digest("plan_digest", plan_digest),
+            "baseline_route_id": _digest(
+                "baseline_route_id",
+                baseline_route_id,
+            ),
+            "proposed_route_id": _digest(
+                "proposed_route_id",
+                proposed_route_id,
+            ),
+            "canonical_json": _canonical_payload(metadata),
+            "observed_at": aware_iso8601("observed_at", observed_at),
+        }
+        comparison_id = sha256_id("shadow_comparison_v1", identity)
+        record = ShadowComparisonRecord(
+            comparison_id=comparison_id,
+            **identity,
+        )
+        return record
+
+    def append_shadow_plan(
+        self,
+        plan: object,
+        *,
+        baseline_route_id: str,
+        persisted_at: str,
+        metadata: Mapping[str, Any],
+    ) -> tuple[CoordinationPlanRecord, ShadowComparisonRecord]:
+        from .coordination import CoordinationPlan
+
+        if not isinstance(plan, CoordinationPlan):
+            raise ValueError("plan must be a CoordinationPlan")
+        if len(plan.bindings) != 1:
+            raise ValueError("shadow plan comparison requires one binding")
+        plan_record = self._coordination_plan_record(plan, persisted_at)
+        comparison = self._shadow_comparison_record(
+            plan_digest=plan.plan_digest,
+            baseline_route_id=baseline_route_id,
+            proposed_route_id=plan.bindings[0].route_id,
+            observed_at=persisted_at,
+            metadata=metadata,
+        )
+        connection = self.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            persisted_plan = self._append_plan_connection(
+                connection,
+                plan_record,
+            )
+            self._append_row_connection(
+                connection,
+                "shadow_comparisons",
+                "comparison_id",
+                comparison.comparison_id,
+                comparison.__dict__,
+            )
+            connection.commit()
+            return persisted_plan, comparison
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ObservatoryConflict(
+                "shadow plan comparison conflicts with append-only state"
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def read_shadow_comparisons(
+        self,
+        plan_digest: str,
+    ) -> tuple[ShadowComparisonRecord, ...]:
+        rows = self._read_many(
+            "shadow_comparisons",
+            "plan_digest",
+            _digest("plan_digest", plan_digest),
+            "observed_at, comparison_id",
+        )
+        return tuple(ShadowComparisonRecord(**dict(row)) for row in rows)
+
+    def coordination_plan_count(self) -> int:
+        return self._table_count("coordination_plans")
+
     def read_qualification_decisions(
         self,
         qualification_key: str,
@@ -1126,6 +1383,7 @@ class ObservatoryDatabase:
 
 
 __all__ = [
+    "CoordinationPlanRecord",
     "EvidenceRecord",
     "ExecutionRouteRecord",
     "ModelSubjectRecord",
@@ -1135,4 +1393,5 @@ __all__ = [
     "QualificationDecisionRecord",
     "QualificationInvalidationRecord",
     "SnapshotRecord",
+    "ShadowComparisonRecord",
 ]

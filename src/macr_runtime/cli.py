@@ -11,13 +11,24 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .authority import AuthorityScope
-from .config import ConnectionScope, load_provider_configs
+from .coordination import CoordinationPlan, PlanExecutionMode
+from .config import (
+    ConnectionScope,
+    load_discovery_configs,
+    load_provider_configs,
+)
 from .contracts import ResultStatus, TaskContract
 from .errors import MacrError
 from .evidence_import import EvidenceImporter
 from .execution import DispatchContext, DispatchOrigin, InteractionPlane
 from .legacy_ledger import LegacyLedgerImporter
+from .model_passport import ModelPassportProjector
+from .observatory import ModelObservatory
 from .observatory_db import ObservatoryDatabase
+from .discovery.openrouter import (
+    OpenRouterModelNormalizer,
+    OpenRouterWebDiscoveryProvider,
+)
 from .registry import ProviderRegistry
 from .providers.glm import GlmFlashWorkerProvider
 from .runtime import MacrRuntime, RuntimeServices
@@ -38,6 +49,7 @@ def _doctor(
     layout = StorageLayout.from_environment()
     path = Path(config_path) if config_path else _default_config(layout)
     configs = load_provider_configs(path)
+    discovery_configs = load_discovery_configs(path)
     registry = ProviderRegistry.from_configs(configs, key_sources=key_sources)
     report = {
         "runtime": "macr-runtime",
@@ -46,6 +58,9 @@ def _doctor(
         "storage": layout.describe(),
         "providers": list(registry.health()),
         "provider_environment": [item.public_summary(os.environ) for item in configs],
+        "discovery_environment": [
+            item.public_summary() for item in discovery_configs
+        ],
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
     enabled_provider_ids = {item.id for item in configs if item.enabled}
@@ -380,6 +395,250 @@ def _evidence_import(manifest_path: str, expected_digest: str) -> int:
     return 0
 
 
+def _model_observe(
+    snapshot_path: str,
+    expected_digest: str,
+    observed_at: str,
+) -> int:
+    try:
+        source = Path(snapshot_path)
+        if source.stat().st_size > 64 * 1024 * 1024:
+            raise ValueError("model snapshot exceeds 64 MiB")
+        raw = source.read_bytes()
+        provider = OpenRouterWebDiscoveryProvider(
+            raw,
+            observed_at=observed_at,
+            expected_sha256=expected_digest,
+        )
+        layout = StorageLayout.from_environment()
+        store = ObservatoryDatabase(
+            layout.observatory_db_path,
+            layout.observatory_snapshot_root,
+        )
+        report = ModelObservatory(
+            store,
+            OpenRouterModelNormalizer(),
+        ).ingest(provider, provider.default_query())
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "model_observation_failed",
+                    "failure_type": type(exc).__name__,
+                    "detail": (
+                        "Model observation failed; source path and raw catalog "
+                        "content omitted."
+                    ),
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "model_observation_complete",
+                **report.to_dict(),
+                "network_activity": False,
+                "execution_provider_created": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _model_passport(subject_id: str, as_of: str) -> int:
+    try:
+        layout = StorageLayout.from_environment()
+        store = ObservatoryDatabase(
+            layout.observatory_db_path,
+            layout.observatory_snapshot_root,
+        )
+        passport = ModelPassportProjector(store).build(subject_id, as_of)
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "model_passport_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "model_passport_complete",
+                "passport": passport.to_dict(),
+                "network_activity": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _plan_shadow(
+    plan_path: str,
+    baseline_route_id: str,
+    persisted_at: str,
+) -> int:
+    try:
+        document = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+        plan = CoordinationPlan.from_dict(document)
+        if plan.execution_mode is not PlanExecutionMode.SHADOW_ONLY:
+            raise ValueError("plan-shadow accepts only shadow_only plans")
+        layout = StorageLayout.from_environment()
+        store = ObservatoryDatabase(
+            layout.observatory_db_path,
+            layout.observatory_snapshot_root,
+        )
+        record, comparison = store.append_shadow_plan(
+            plan,
+            baseline_route_id=baseline_route_id,
+            persisted_at=persisted_at,
+            metadata={
+                "comparison_kind": "shadow_route_proposal",
+                "plan_revision": plan.plan_revision,
+                "execution_mode": plan.execution_mode.value,
+            },
+        )
+    except (
+        OSError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+        ValueError,
+        MacrError,
+    ) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "shadow_plan_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "dispatch_performed": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "shadow_plan_persisted",
+                "plan_digest": record.plan_digest,
+                "plan_revision": record.plan_revision,
+                "comparison_id": comparison.comparison_id,
+                "baseline_route_id": comparison.baseline_route_id,
+                "proposed_route_id": comparison.proposed_route_id,
+                "network_activity": False,
+                "dispatch_performed": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _plan_show(plan_digest: str) -> int:
+    try:
+        layout = StorageLayout.from_environment()
+        store = ObservatoryDatabase(
+            layout.observatory_db_path,
+            layout.observatory_snapshot_root,
+        )
+        record = store.read_coordination_plan(plan_digest)
+        if record is None:
+            raise ValueError("plan does not exist")
+        canonical = json.loads(record.canonical_json)
+    except (OSError, json.JSONDecodeError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "plan_show_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "plan_show_complete",
+                "plan_id": record.plan_id,
+                "plan_digest": record.plan_digest,
+                "canonical_plan": canonical,
+                "network_activity": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _plan_diff(left_digest: str, right_digest: str) -> int:
+    try:
+        layout = StorageLayout.from_environment()
+        store = ObservatoryDatabase(
+            layout.observatory_db_path,
+            layout.observatory_snapshot_root,
+        )
+        left = store.read_coordination_plan(left_digest)
+        right = store.read_coordination_plan(right_digest)
+        if left is None or right is None:
+            raise ValueError("both plans must exist")
+        left_value = json.loads(left.canonical_json)
+        right_value = json.loads(right.canonical_json)
+        changed_fields = sorted(
+            key
+            for key in set(left_value) | set(right_value)
+            if left_value.get(key) != right_value.get(key)
+        )
+    except (OSError, json.JSONDecodeError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "plan_diff_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "plan_diff_complete",
+                "left_plan_digest": left.plan_digest,
+                "right_plan_digest": right.plan_digest,
+                "identical": not changed_fields,
+                "changed_fields": changed_fields,
+                "network_activity": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def _cli_policy_snapshot_sha256(
     provider_id: str,
     provider_scope: ConnectionScope,
@@ -545,6 +804,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="required SHA-256 of the exact manifest bytes",
     )
 
+    model_observe = sub.add_parser(
+        "model-observe",
+        help="ingest one operator-supplied exact-hash OpenRouter snapshot offline",
+    )
+    model_observe.add_argument("snapshot")
+    model_observe.add_argument("--expected-digest", required=True)
+    model_observe.add_argument("--observed-at", required=True)
+
+    model_passport = sub.add_parser(
+        "model-passport",
+        help="rebuild one content-free Model Passport projection",
+    )
+    model_passport.add_argument("subject_id")
+    model_passport.add_argument("--as-of", required=True)
+
+    plan_shadow = sub.add_parser(
+        "plan-shadow",
+        help="validate and persist one canonical shadow-only plan",
+    )
+    plan_shadow.add_argument("plan")
+    plan_shadow.add_argument("--baseline-route-id", required=True)
+    plan_shadow.add_argument("--persisted-at", required=True)
+
+    plan_show = sub.add_parser("plan-show", help="show one persisted canonical plan")
+    plan_show.add_argument("plan_digest")
+
+    plan_diff = sub.add_parser("plan-diff", help="diff two persisted plan revisions")
+    plan_diff.add_argument("left_plan_digest")
+    plan_diff.add_argument("right_plan_digest")
+
     glm_preflight = sub.add_parser(
         "glm-preflight",
         help="validate GLM delegation policy and exact-envelope approval without loading a key",
@@ -634,6 +923,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _evidence_inspect(args.manifest)
     if args.command == "evidence-import":
         return _evidence_import(args.manifest, args.expected_digest)
+    if args.command == "model-observe":
+        return _model_observe(
+            args.snapshot,
+            args.expected_digest,
+            args.observed_at,
+        )
+    if args.command == "model-passport":
+        return _model_passport(args.subject_id, args.as_of)
+    if args.command == "plan-shadow":
+        return _plan_shadow(
+            args.plan,
+            args.baseline_route_id,
+            args.persisted_at,
+        )
+    if args.command == "plan-show":
+        return _plan_show(args.plan_digest)
+    if args.command == "plan-diff":
+        return _plan_diff(
+            args.left_plan_digest,
+            args.right_plan_digest,
+        )
     if args.command == "glm-preflight":
         return _glm_preflight(
             args.task_path,

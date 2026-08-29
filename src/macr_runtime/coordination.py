@@ -5,7 +5,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 from .canonical import aware_iso8601, sha256_id
 from .verification_graph import VerifierGraph
@@ -565,6 +565,161 @@ class CoordinationPlan:
     @classmethod
     def create(cls, **values) -> "CoordinationPlan":
         return cls(**values)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "CoordinationPlan":
+        if not isinstance(data, Mapping):
+            raise ValueError("coordination plan must be an object")
+        graph_data = data.get("verifier_graph")
+        if not isinstance(graph_data, Mapping):
+            raise ValueError("coordination plan verifier_graph must be an object")
+        raw_nodes = graph_data.get("nodes")
+        if not isinstance(raw_nodes, list):
+            raise ValueError("coordination plan verifier nodes must be an array")
+        if any(not isinstance(item, Mapping) for item in raw_nodes):
+            raise ValueError("coordination plan verifier node is invalid")
+        from .verification_graph import VerifierNode
+
+        graph = VerifierGraph(
+            nodes=tuple(
+                VerifierNode(
+                    node_id=item["node_id"],
+                    tool=item["tool"],
+                    version=item["version"],
+                    input_digests=tuple(item["input_digests"]),
+                    depends_on=tuple(item.get("depends_on", ())),
+                    config_digest=item.get("config_digest"),
+                    required=item.get("required", True),
+                )
+                for item in raw_nodes
+            ),
+            graph_digest=graph_data["graph_digest"],
+        )
+        if len(graph.nodes) != len(raw_nodes):
+            raise ValueError("coordination plan verifier node is invalid")
+        raw_roles = data.get("roles")
+        raw_bindings = data.get("bindings")
+        raw_eligible = data.get("eligible_candidates")
+        raw_excluded = data.get("excluded_candidates")
+        raw_fallback = data.get("fallback_rules")
+        if any(
+            not isinstance(value, list)
+            for value in (
+                raw_roles,
+                raw_bindings,
+                raw_eligible,
+                raw_excluded,
+                raw_fallback,
+            )
+        ):
+            raise ValueError("coordination plan record arrays are invalid")
+        if any(
+            not isinstance(item, Mapping)
+            for values in (
+                raw_roles,
+                raw_bindings,
+                raw_eligible,
+                raw_excluded,
+                raw_fallback,
+            )
+            for item in values
+        ):
+            raise ValueError("coordination plan nested record is invalid")
+        roles = tuple(
+            RoleSlot(
+                slot_id=item["slot_id"],
+                role_definition_digest=item["role_definition_digest"],
+                authority=tuple(item["authority"]),
+                context_capsule_ids=tuple(item["context_capsule_ids"]),
+                verifier_graph_digest=item["verifier_graph_digest"],
+                required=item.get("required", True),
+            )
+            for item in raw_roles
+        )
+        bindings = tuple(
+            ModelBinding(
+                slot_id=item["slot_id"],
+                model_subject_id=item["model_subject_id"],
+                route_id=item["route_id"],
+                qualification_key=item["qualification_key"],
+                parameter_profile_digest=item["parameter_profile_digest"],
+                context_capsule_ids=tuple(item["context_capsule_ids"]),
+            )
+            for item in raw_bindings
+        )
+        eligible = tuple(
+            EligibleCandidate(
+                model_subject_id=item["model_subject_id"],
+                route_id=item["route_id"],
+                qualification_key=item["qualification_key"],
+                verified_utility_lower_bound=item[
+                    "verified_utility_lower_bound"
+                ],
+                expected_total_cost_usd=item["expected_total_cost_usd"],
+                expected_latency_ms=item["expected_latency_ms"],
+                evidence_freshness_epoch=item["evidence_freshness_epoch"],
+            )
+            for item in raw_eligible
+        )
+        excluded = tuple(
+            ExcludedCandidate(
+                model_subject_id=item["model_subject_id"],
+                route_id=item["route_id"],
+                reason_code=item["reason_code"],
+                reason_evidence_digest=item["reason_evidence_digest"],
+            )
+            for item in raw_excluded
+        )
+        budget_data = data.get("budget_evaluation")
+        if not isinstance(budget_data, Mapping):
+            raise ValueError("coordination plan budget_evaluation is invalid")
+        fallback = tuple(
+            FallbackRule(
+                reason_code=item["reason_code"],
+                from_route_id=item["from_route_id"],
+                to_route_id=item.get("to_route_id"),
+            )
+            for item in raw_fallback
+        )
+        plan = cls(
+            plan_id=data["plan_id"],
+            plan_revision=data["plan_revision"],
+            planned_at=data["planned_at"],
+            planner_version=data["planner_version"],
+            topology_id=TopologyId(data["topology_id"]),
+            execution_mode=PlanExecutionMode(data["execution_mode"]),
+            task_digest=data["task_digest"],
+            roles=roles,
+            bindings=bindings,
+            context_capsule_ids=tuple(data["context_capsule_ids"]),
+            verifier_graph=graph,
+            policy_snapshot_ids=tuple(data["policy_snapshot_ids"]),
+            evidence_snapshot_ids=tuple(data["evidence_snapshot_ids"]),
+            qualification_snapshot_id=data["qualification_snapshot_id"],
+            route_snapshot_id=data["route_snapshot_id"],
+            availability_snapshot_id=data["availability_snapshot_id"],
+            pricing_snapshot_id=data["pricing_snapshot_id"],
+            topology_registry_digest=data["topology_registry_digest"],
+            eligible_candidates=eligible,
+            excluded_candidates=excluded,
+            budget_evaluation=BudgetEvaluation(
+                budget_mode=budget_data["budget_mode"],
+                estimated_total_cost_usd=budget_data[
+                    "estimated_total_cost_usd"
+                ],
+                warning_threshold_usd=budget_data.get(
+                    "warning_threshold_usd"
+                ),
+                warning_triggered=budget_data["warning_triggered"],
+            ),
+            fallback_rules=fallback,
+            tie_break_rules=tuple(data["tie_break_rules"]),
+            acceptance_authority=data.get("acceptance_authority", "host_only"),
+        )
+        supplied_digest = data.get("plan_digest")
+        if supplied_digest is not None and supplied_digest != plan.plan_digest:
+            raise ValueError("coordination plan digest does not match document")
+        return plan
 
     @property
     def plan_digest(self) -> str:

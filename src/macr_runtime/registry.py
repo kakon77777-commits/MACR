@@ -102,6 +102,24 @@ class ProviderRegistry:
         model = getattr(config, "model", None)
         return model if isinstance(model, str) and model.strip() else None
 
+    def execution_profile(self, provider_id: str) -> dict[str, object]:
+        provider = self.get(provider_id)
+        config = getattr(provider, "config", None)
+        if not isinstance(config, ProviderConfig):
+            raise ProviderUnavailableError(
+                f"provider has no static execution profile: {provider_id}"
+            )
+        return {
+            "provider_id": config.id,
+            "kind": config.kind,
+            "enabled": config.enabled,
+            "api_usage_allowed": config.api_usage_allowed,
+            "connection_scope": config.connection_scope.value,
+            "base_url": config.base_url,
+            "endpoint_path": config.endpoint_path,
+            "model": config.model,
+        }
+
     def health(self) -> tuple[dict[str, object], ...]:
         return tuple(
             self._providers[key].health().to_dict() for key in sorted(self._providers)

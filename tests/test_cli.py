@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import io
 import json
@@ -20,6 +21,11 @@ from macr_runtime.cli import (
     _glm_preflight,
     _invoke,
     _migrate_ledger,
+    _model_observe,
+    _model_passport,
+    _plan_diff,
+    _plan_shadow,
+    _plan_show,
 )
 from macr_runtime.contracts import (
     DelegationClass,
@@ -34,6 +40,7 @@ from macr_runtime.config import load_provider_configs
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.glm_approval import GlmApprovalStore
 from tests.support import d_drive_tempdir, write_fake_google_credential
+from tests.test_coordination import make_plan
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +86,167 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_model_observe_and_passport_use_operator_snapshot_without_network(self) -> None:
+        source = (
+            ROOT
+            / "tests"
+            / "fixtures"
+            / "openrouter-models-2026-08-28.json"
+        )
+        expected = hashlib.sha256(source.read_bytes()).hexdigest()
+        observe_output = io.StringIO()
+        passport_output = io.StringIO()
+        with d_drive_tempdir() as state_root:
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+                "CODEX_HOME_TARGET": (
+                    r"D:\AI_RESIDENCE\AI_Runtime\codex-home"
+                ),
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(observe_output):
+                    observe_status = _model_observe(
+                        str(source),
+                        expected,
+                        "2026-08-29T00:00:00+00:00",
+                    )
+                observed = json.loads(observe_output.getvalue())
+                with contextlib.redirect_stdout(passport_output):
+                    passport_status = _model_passport(
+                        observed["subject_ids"][0],
+                        "2026-08-29T00:00:00+00:00",
+                    )
+            runtime_exists = (
+                state_root / "runtime" / "dispatch.sqlite3"
+            ).exists()
+
+        passport = json.loads(passport_output.getvalue())
+        self.assertEqual(observe_status, 0)
+        self.assertEqual(passport_status, 0)
+        self.assertEqual(observed["status"], "model_observation_complete")
+        self.assertFalse(observed["network_activity"])
+        self.assertFalse(observed["execution_provider_created"])
+        self.assertEqual(passport["status"], "model_passport_complete")
+        self.assertFalse(passport["network_activity"])
+        self.assertFalse(runtime_exists)
+        self.assertNotIn("description", passport_output.getvalue().lower())
+
+    def test_plan_shadow_show_and_diff_persist_only_observatory_records(self) -> None:
+        first = make_plan()
+        second = dataclasses.replace(
+            first,
+            plan_revision=2,
+            planned_at="2026-08-30T00:00:00+00:00",
+        )
+        with d_drive_tempdir() as state_root:
+            first_path = state_root / "plan-one.json"
+            second_path = state_root / "plan-two.json"
+            first_path.write_text(json.dumps(first.to_dict()), encoding="utf-8")
+            second_path.write_text(json.dumps(second.to_dict()), encoding="utf-8")
+            outputs = [io.StringIO() for _ in range(5)]
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+                "CODEX_HOME_TARGET": (
+                    r"D:\AI_RESIDENCE\AI_Runtime\codex-home"
+                ),
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(outputs[0]):
+                    first_status = _plan_shadow(
+                        str(first_path),
+                        "d" * 64,
+                        "2026-08-29T01:00:00+00:00",
+                    )
+                with contextlib.redirect_stdout(outputs[1]):
+                    second_status = _plan_shadow(
+                        str(second_path),
+                        "d" * 64,
+                        "2026-08-30T01:00:00+00:00",
+                    )
+                with contextlib.redirect_stdout(outputs[2]):
+                    show_status = _plan_show(first.plan_digest)
+                with contextlib.redirect_stdout(outputs[3]):
+                    diff_status = _plan_diff(
+                        first.plan_digest,
+                        second.plan_digest,
+                    )
+                with contextlib.redirect_stdout(outputs[4]):
+                    same_status = _plan_diff(
+                        first.plan_digest,
+                        first.plan_digest,
+                    )
+            connection = sqlite3.connect(
+                state_root / "observatory" / "observatory.sqlite3"
+            )
+            plan_count = connection.execute(
+                "SELECT COUNT(*) FROM coordination_plans"
+            ).fetchone()[0]
+            comparison_count = connection.execute(
+                "SELECT COUNT(*) FROM shadow_comparisons"
+            ).fetchone()[0]
+            connection.close()
+            runtime_exists = (
+                state_root / "runtime" / "dispatch.sqlite3"
+            ).exists()
+
+        statuses = (
+            first_status,
+            second_status,
+            show_status,
+            diff_status,
+            same_status,
+        )
+        documents = [json.loads(item.getvalue()) for item in outputs]
+        self.assertEqual(statuses, (0, 0, 0, 0, 0))
+        self.assertEqual(plan_count, 2)
+        self.assertEqual(comparison_count, 2)
+        self.assertFalse(runtime_exists)
+        self.assertFalse(documents[0]["dispatch_performed"])
+        self.assertFalse(documents[1]["network_activity"])
+        self.assertEqual(documents[2]["plan_digest"], first.plan_digest)
+        self.assertIn("plan_revision", documents[3]["changed_fields"])
+        self.assertFalse(documents[3]["identical"])
+        self.assertTrue(documents[4]["identical"])
+        self.assertNotIn(str(state_root), "".join(item.getvalue() for item in outputs))
+
+    def test_plan_shadow_invalid_comparison_rolls_back_plan_record(self) -> None:
+        plan = make_plan()
+        with d_drive_tempdir() as state_root:
+            plan_path = state_root / "plan.json"
+            plan_path.write_text(json.dumps(plan.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+                "CODEX_HOME_TARGET": (
+                    r"D:\AI_RESIDENCE\AI_Runtime\codex-home"
+                ),
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _plan_shadow(
+                        str(plan_path),
+                        "not-a-digest",
+                        "2026-08-29T01:00:00+00:00",
+                    )
+            connection = sqlite3.connect(
+                state_root / "observatory" / "observatory.sqlite3"
+            )
+            counts = tuple(
+                connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("coordination_plans", "shadow_comparisons")
+            )
+            connection.close()
+
+        self.assertEqual(status, 4)
+        self.assertEqual(counts, (0, 0))
+        self.assertEqual(json.loads(output.getvalue())["status"], "shadow_plan_failed")
+
     def test_evidence_inspect_and_import_are_offline_content_free(self) -> None:
         source_manifest = (
             ROOT / "tests" / "fixtures" / "glm-a3-evidence-manifest.json"

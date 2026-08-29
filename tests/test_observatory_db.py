@@ -63,7 +63,7 @@ def make_route(subject: ModelSubject) -> ExecutionRouteIdentity:
 
 
 class ObservatoryDatabaseTests(unittest.TestCase):
-    def test_schema_has_exact_v1_tables_and_wal(self) -> None:
+    def test_schema_has_exact_current_tables_and_wal(self) -> None:
         expected = {
             "source_snapshots",
             "model_subjects",
@@ -72,6 +72,8 @@ class ObservatoryDatabaseTests(unittest.TestCase):
             "evidence_items",
             "qualification_decisions",
             "qualification_invalidations",
+            "coordination_plans",
+            "shadow_comparisons",
         }
         with d_drive_tempdir() as temp:
             store = ObservatoryDatabase(
@@ -92,8 +94,37 @@ class ObservatoryDatabaseTests(unittest.TestCase):
                 connection.close()
 
         self.assertEqual(tables, expected)
-        self.assertEqual(version, 1)
+        self.assertEqual(version, 2)
         self.assertEqual(journal.lower(), "wal")
+
+    def test_schema_one_upgrades_additively_to_shadow_plan_schema(self) -> None:
+        with d_drive_tempdir() as temp:
+            database = temp / "observatory.sqlite3"
+            snapshots = temp / "snapshots"
+            store = ObservatoryDatabase(database, snapshots)
+            connection = store.connect()
+            try:
+                connection.execute("DROP TABLE shadow_comparisons")
+                connection.execute("DROP TABLE coordination_plans")
+                connection.execute("PRAGMA user_version = 1")
+            finally:
+                connection.close()
+            upgraded = ObservatoryDatabase(database, snapshots)
+            connection = upgraded.connect()
+            try:
+                version = connection.execute("PRAGMA user_version").fetchone()[0]
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+            finally:
+                connection.close()
+
+        self.assertEqual(version, 2)
+        self.assertIn("coordination_plans", tables)
+        self.assertIn("shadow_comparisons", tables)
 
     def test_snapshot_is_create_once_and_raw_payload_is_private(self) -> None:
         raw = b'{"data":["SECRET_RAW_BODY"]}'
