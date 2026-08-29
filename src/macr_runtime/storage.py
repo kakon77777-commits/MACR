@@ -107,6 +107,10 @@ class StorageLayout:
         return self.settings_root / "settings.sqlite3"
 
     @property
+    def model_token_policy_db_path(self) -> Path:
+        return self.settings_root / "model-token-policies.sqlite3"
+
+    @property
     def direct_instance_path(self) -> Path:
         return self.direct_root / "instance.json"
 
