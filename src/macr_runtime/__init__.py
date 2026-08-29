@@ -36,6 +36,7 @@ from .planning_contracts import (
     OperatorPolicyProfile,
 )
 from .observatory_db import ObservatoryDatabase
+from .observatory import IngestReport, ModelObservatory
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -76,6 +77,7 @@ __all__ = [
     "ExecutionRouteIdentity",
     "FallbackMode",
     "IdentityStatus",
+    "IngestReport",
     "ImportMode",
     "AcceptanceState",
     "AuthorizationReference",
@@ -85,6 +87,7 @@ __all__ = [
     "InteractionPlane",
     "MacrRuntime",
     "ModelSubject",
+    "ModelObservatory",
     "OperatorPolicyProfile",
     "ObservatoryDatabase",
     "MaterializationState",

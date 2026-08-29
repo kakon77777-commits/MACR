@@ -8,7 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from .canonical import aware_iso8601, canonical_json_bytes, sha256_id
 from .errors import ObservatoryConflict, StoragePolicyError
@@ -526,6 +526,17 @@ class ObservatoryDatabase:
         return record
 
     def append_model_subject(self, subject: ModelSubject) -> ModelSubjectRecord:
+        record = self._subject_record(subject)
+        self._append_row(
+            "model_subjects",
+            "subject_id",
+            record.subject_id,
+            record.__dict__,
+        )
+        return record
+
+    @staticmethod
+    def _subject_record(subject: ModelSubject) -> ModelSubjectRecord:
         if not isinstance(subject, ModelSubject):
             raise ValueError("subject must be a ModelSubject")
         canonical = {
@@ -537,18 +548,23 @@ class ObservatoryDatabase:
             canonical_json=canonical_json_bytes(canonical).decode("utf-8"),
             first_seen_snapshot_id=subject.first_seen_snapshot_id,
         )
-        self._append_row(
-            "model_subjects",
-            "subject_id",
-            record.subject_id,
-            record.__dict__,
-        )
         return record
 
     def append_execution_route(
         self,
         route: ExecutionRouteIdentity,
     ) -> ExecutionRouteRecord:
+        record = self._route_record(route)
+        self._append_row(
+            "execution_routes",
+            "route_id",
+            record.route_id,
+            record.__dict__,
+        )
+        return record
+
+    @staticmethod
+    def _route_record(route: ExecutionRouteIdentity) -> ExecutionRouteRecord:
         if not isinstance(route, ExecutionRouteIdentity):
             raise ValueError("route must be an ExecutionRouteIdentity")
         record = ExecutionRouteRecord(
@@ -558,16 +574,36 @@ class ObservatoryDatabase:
                 route.canonical_identity()
             ).decode("utf-8"),
         )
-        self._append_row(
-            "execution_routes",
-            "route_id",
-            record.route_id,
-            record.__dict__,
-        )
         return record
 
     def append_observation(
         self,
+        metadata: Mapping[str, Any],
+    ) -> ObservationRecord:
+        record = self._observation_record(metadata)
+        if record.route_id is not None:
+            route_row = self._read_one(
+                "execution_routes",
+                "route_id",
+                record.route_id,
+            )
+            if (
+                route_row is None
+                or route_row["model_subject_id"] != record.subject_id
+            ):
+                raise ObservatoryConflict(
+                    "observation route does not bind the supplied model subject"
+                )
+        self._append_row(
+            "model_observations",
+            "observation_id",
+            record.observation_id,
+            record.__dict__,
+        )
+        return record
+
+    @staticmethod
+    def _observation_record(
         metadata: Mapping[str, Any],
     ) -> ObservationRecord:
         data = _mapping("observation", metadata)
@@ -579,12 +615,6 @@ class ObservatoryDatabase:
         kind = _identifier("kind", data.get("kind"))
         observed_at = aware_iso8601("observed_at", data.get("observed_at"))
         canonical_json = _canonical_payload(data.get("payload"))
-        if route_id is not None:
-            route_row = self._read_one("execution_routes", "route_id", route_id)
-            if route_row is None or route_row["model_subject_id"] != subject_id:
-                raise ObservatoryConflict(
-                    "observation route does not bind the supplied model subject"
-                )
         identity = {
             "subject_id": subject_id,
             "route_id": route_id,
@@ -600,13 +630,82 @@ class ObservatoryDatabase:
             identity,
         )
         record = ObservationRecord(observation_id=observation_id, **identity)
-        self._append_row(
-            "model_observations",
-            "observation_id",
-            observation_id,
-            record.__dict__,
-        )
         return record
+
+    def append_discovery_batch(
+        self,
+        subjects: Iterable[ModelSubject],
+        routes: Iterable[ExecutionRouteIdentity],
+        observations: Iterable[Mapping[str, Any]],
+    ) -> tuple[
+        tuple[ModelSubjectRecord, ...],
+        tuple[ExecutionRouteRecord, ...],
+        tuple[ObservationRecord, ...],
+    ]:
+        if isinstance(subjects, (str, bytes)):
+            raise ValueError("subjects must be ModelSubject values")
+        if isinstance(routes, (str, bytes)):
+            raise ValueError("routes must be ExecutionRouteIdentity values")
+        if isinstance(observations, (str, bytes)):
+            raise ValueError("observations must be metadata objects")
+        subject_records = tuple(self._subject_record(item) for item in subjects)
+        route_records = tuple(self._route_record(item) for item in routes)
+        observation_records = tuple(
+            self._observation_record(item) for item in observations
+        )
+
+        connection = self.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for record in subject_records:
+                self._append_row_connection(
+                    connection,
+                    "model_subjects",
+                    "subject_id",
+                    record.subject_id,
+                    record.__dict__,
+                )
+            for record in route_records:
+                self._append_row_connection(
+                    connection,
+                    "execution_routes",
+                    "route_id",
+                    record.route_id,
+                    record.__dict__,
+                )
+            for record in observation_records:
+                if record.route_id is not None:
+                    route_row = connection.execute(
+                        "SELECT model_subject_id FROM execution_routes "
+                        "WHERE route_id = ?",
+                        (record.route_id,),
+                    ).fetchone()
+                    if (
+                        route_row is None
+                        or route_row["model_subject_id"] != record.subject_id
+                    ):
+                        raise ObservatoryConflict(
+                            "observation route does not bind the supplied model subject"
+                        )
+                self._append_row_connection(
+                    connection,
+                    "model_observations",
+                    "observation_id",
+                    record.observation_id,
+                    record.__dict__,
+                )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ObservatoryConflict(
+                "discovery batch conflicts with observatory references"
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return subject_records, route_records, observation_records
 
     def append_evidence(self, metadata: Mapping[str, Any]) -> EvidenceRecord:
         data = _mapping("evidence", metadata)
@@ -809,25 +908,16 @@ class ObservatoryDatabase:
         record_id: str,
         values: Mapping[str, Any],
     ) -> None:
-        columns = tuple(values.keys())
         connection = self.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                f"SELECT * FROM {table} WHERE {id_column} = ?",
-                (record_id,),
-            ).fetchone()
-            if existing is None:
-                placeholders = ", ".join("?" for _ in columns)
-                connection.execute(
-                    f"INSERT INTO {table}({', '.join(columns)}) "
-                    f"VALUES ({placeholders})",
-                    tuple(values[column] for column in columns),
-                )
-            elif any(existing[column] != values[column] for column in columns):
-                raise ObservatoryConflict(
-                    f"{id_column} conflicts with append-only observatory state"
-                )
+            self._append_row_connection(
+                connection,
+                table,
+                id_column,
+                record_id,
+                values,
+            )
             connection.commit()
         except sqlite3.IntegrityError as exc:
             connection.rollback()
@@ -839,6 +929,31 @@ class ObservatoryDatabase:
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _append_row_connection(
+        connection: sqlite3.Connection,
+        table: str,
+        id_column: str,
+        record_id: str,
+        values: Mapping[str, Any],
+    ) -> None:
+        columns = tuple(values.keys())
+        existing = connection.execute(
+            f"SELECT * FROM {table} WHERE {id_column} = ?",
+            (record_id,),
+        ).fetchone()
+        if existing is None:
+            placeholders = ", ".join("?" for _ in columns)
+            connection.execute(
+                f"INSERT INTO {table}({', '.join(columns)}) "
+                f"VALUES ({placeholders})",
+                tuple(values[column] for column in columns),
+            )
+        elif any(existing[column] != values[column] for column in columns):
+            raise ObservatoryConflict(
+                f"{id_column} conflicts with append-only observatory state"
+            )
 
     def _read_one(
         self,
