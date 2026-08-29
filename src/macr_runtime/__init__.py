@@ -74,6 +74,11 @@ from .route_resolution import (
     ExecutionRouteSnapshot,
     RouteResolutionPolicy,
 )
+from .plan_runtime import (
+    PlanExecutionResult,
+    PlanRuntime,
+    VerificationReport,
+)
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -143,6 +148,8 @@ __all__ = [
     "ModelPassportProjector",
     "OperatorPolicyProfile",
     "PlanExecutionMode",
+    "PlanExecutionResult",
+    "PlanRuntime",
     "PlanningCandidate",
     "PlanningError",
     "PlanningInput",
@@ -179,6 +186,7 @@ __all__ = [
     "TopologyId",
     "VerifierGraph",
     "VerifierNode",
+    "VerificationReport",
     "VerificationSpec",
     "VerificationState",
     "WorkspaceSpec",

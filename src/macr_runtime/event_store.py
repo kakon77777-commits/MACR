@@ -62,6 +62,10 @@ _OPERATIONAL_PAYLOAD_KEYS = {
             "member_digest",
             "relay_is_authorship",
             "fencing_token",
+            "plan_digest",
+            "plan_revision",
+            "role_slot_id",
+            "route_id",
         }
     ),
     "provider.candidate_completed": frozenset(
@@ -95,6 +99,10 @@ _OPERATIONAL_PAYLOAD_KEYS = {
             "authority_digest",
             "authority_revision",
             "authority_epoch",
+            "plan_digest",
+            "plan_revision",
+            "role_slot_id",
+            "route_id",
         }
     ),
 }
@@ -134,6 +142,10 @@ _OPERATIONAL_FIELD_KINDS = {
         "member_digest": "optional_text",
         "relay_is_authorship": "boolean",
         "fencing_token": "integer",
+        "plan_digest": "optional_text",
+        "plan_revision": "optional_integer",
+        "role_slot_id": "optional_text",
+        "route_id": "optional_text",
     },
     "provider.candidate_completed": {
         "provider_id": "text",
@@ -165,6 +177,10 @@ _OPERATIONAL_FIELD_KINDS = {
         "authority_digest": "text",
         "authority_revision": "integer",
         "authority_epoch": "integer",
+        "plan_digest": "optional_text",
+        "plan_revision": "optional_integer",
+        "role_slot_id": "optional_text",
+        "route_id": "optional_text",
     },
 }
 _CANDIDATE_CAPTURE_FIELD_KINDS = {
@@ -510,9 +526,12 @@ class SqliteEventStore:
         event_type: str,
         event_id: str,
         payload: Mapping[str, Any],
+        *,
+        run_id: str | None = None,
     ) -> dict[str, Any]:
         normalized_type = _non_empty("event_type", event_type)
         normalized_id = _uuid4("event_id", event_id)
+        normalized_run = _uuid4("run_id", run_id) if run_id is not None else None
         payload_json = _canonical_json(payload)
         observed_at = _utc_now()
         connection = self.database.connect()
@@ -521,7 +540,7 @@ class SqliteEventStore:
             self._insert_event(
                 connection,
                 event_id=normalized_id,
-                run_id=None,
+                run_id=normalized_run,
                 event_type=normalized_type,
                 observed_at=observed_at,
                 payload_json=payload_json,
@@ -537,7 +556,7 @@ class SqliteEventStore:
             connection.close()
         return {
             "event_id": normalized_id,
-            "run_id": None,
+            "run_id": normalized_run,
             "event_type": normalized_type,
             "observed_at": observed_at,
             "payload": json.loads(payload_json),

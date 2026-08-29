@@ -91,6 +91,7 @@ class MaterializationState(str, Enum):
 
 
 class VerificationState(str, Enum):
+    NOT_RUN = "not_run"
     PENDING = "pending"
     PASSED = "passed"
     FAILED = "failed"
@@ -176,6 +177,10 @@ class DispatchContext:
     batch_id: str | None = None
     member_digest: str | None = None
     relay_is_authorship: bool = False
+    plan_digest: str | None = None
+    plan_revision: int | None = None
+    role_slot_id: str | None = None
+    route_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_id", _uuid4("run_id", self.run_id))
@@ -203,6 +208,29 @@ class DispatchContext:
             )
         if self.relay_is_authorship is not False:
             raise ValueError("relay_is_authorship must remain false")
+        if self.plan_digest is not None:
+            object.__setattr__(
+                self,
+                "plan_digest",
+                _digest("plan_digest", self.plan_digest),
+            )
+        if self.plan_revision is not None and (
+            isinstance(self.plan_revision, bool)
+            or not isinstance(self.plan_revision, int)
+            or self.plan_revision < 1
+        ):
+            raise ValueError("plan_revision must be a positive integer or None")
+        object.__setattr__(
+            self,
+            "role_slot_id",
+            _optional_string("role_slot_id", self.role_slot_id),
+        )
+        if self.route_id is not None:
+            object.__setattr__(
+                self,
+                "route_id",
+                _digest("route_id", self.route_id),
+            )
 
 
 @dataclass(frozen=True)

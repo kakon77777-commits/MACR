@@ -63,10 +63,14 @@ def _canonical_json(value: Any) -> str:
     )
 
 
-def _task_digest(task: TaskContract) -> str:
+def task_contract_digest(task: TaskContract) -> str:
     return hashlib.sha256(
         _canonical_json(task.to_dict()).encode("utf-8")
     ).hexdigest()
+
+
+def _task_digest(task: TaskContract) -> str:
+    return task_contract_digest(task)
 
 
 def dispatch_resource_key(provider_id: str, task: TaskContract) -> str:
@@ -325,6 +329,10 @@ class MacrRuntime:
             "member_digest": context.member_digest,
             "relay_is_authorship": context.relay_is_authorship,
             "fencing_token": fencing_token,
+            "plan_digest": context.plan_digest,
+            "plan_revision": context.plan_revision,
+            "role_slot_id": context.role_slot_id,
+            "route_id": context.route_id,
         }
 
     @staticmethod
@@ -380,4 +388,8 @@ class MacrRuntime:
             "authority_digest": context.authorization.digest,
             "authority_revision": context.authorization.revision,
             "authority_epoch": context.authorization.epoch,
+            "plan_digest": context.plan_digest,
+            "plan_revision": context.plan_revision,
+            "role_slot_id": context.role_slot_id,
+            "route_id": context.route_id,
         }
