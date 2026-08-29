@@ -86,6 +86,39 @@ def _authorize(
 
 
 class PlanQueueTests(unittest.TestCase):
+    def test_plan_scoped_claim_never_consumes_another_manifest(self) -> None:
+        now = datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as temp:
+            database = temp / "dispatch.sqlite3"
+            queue = PlanQueue(database, now=clock)
+            first_plan = _authorize(
+                database,
+                clock,
+                (_member(0),),
+                plan_digest="e" * 64,
+            )
+            second_plan = _authorize(
+                database,
+                clock,
+                (_member(1),),
+                plan_digest="f" * 64,
+            )
+            queue.enqueue(first_plan)
+            queue.enqueue(second_plan)
+
+            claim = queue.claim(
+                "dispatcher-a",
+                plan_digest=second_plan.plan_digest,
+            )
+
+            assert claim is not None
+            self.assertEqual(claim.plan_digest, second_plan.plan_digest)
+            self.assertEqual(
+                queue.list_members(first_plan.plan_digest)[0].state,
+                QueueMemberState.QUEUED,
+            )
+
     def test_global_reconciliation_listing_spans_plans_and_is_bounded(self) -> None:
         now = datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)

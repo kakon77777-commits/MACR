@@ -29,6 +29,7 @@ from macr_runtime.cli import (
     _plan_show,
     _queue_status,
     _t1_stage,
+    _t1_worker,
 )
 from macr_runtime.contracts import (
     DelegationClass,
@@ -43,7 +44,10 @@ from macr_runtime.config import load_provider_configs
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.model_token_store import ModelTokenPolicyStore
+from macr_runtime.registry import ProviderRegistry
+from macr_runtime.runtime import RuntimeServices
 from macr_runtime.scheduler import PlanQueue, QueueMemberState
+from macr_runtime.storage import StorageLayout
 from macr_runtime.t1_manifest import T1ExecutionManifest
 from macr_runtime.token_policy import ModelTokenOverride, t1_glm_live_policy
 from tests.support import d_drive_tempdir, write_fake_google_credential
@@ -96,6 +100,25 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_t1_worker_requires_network_opt_in_before_manifest_or_state(self) -> None:
+        with d_drive_tempdir() as root:
+            state_root = root / "must-not-exist"
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(state_root)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _t1_worker(
+                        "missing-private-manifest.json",
+                        str(ROOT / "config" / "providers.json"),
+                        dispatcher_id="worker-1",
+                        allow_network=False,
+                        allow_local=False,
+                    )
+
+            self.assertEqual(status, 3)
+            self.assertIn("network_opt_in_required", output.getvalue())
+            self.assertFalse(state_root.exists())
+
     def test_t1_stage_cli_is_content_free_and_performs_no_provider_call(self) -> None:
         with d_drive_tempdir() as state_root:
             transport = FakeTransport(success_document())
@@ -123,6 +146,13 @@ class DoctorTests(unittest.TestCase):
                 ).isoformat(),
                 authorized_dispatchers=source.authorized_dispatchers,
             )
+            approval_store = GlmApprovalStore(state_root)
+            for item in subject.members:
+                approval_store.create(
+                    item.task.delegation_approval_sha256,
+                    signing_key="test-id.test-secret",
+                    expires_in_days=1,
+                )
             manifest_path = state_root / "t1-private-manifest.json"
             manifest_path.write_text(
                 json.dumps(subject.to_dict()),
@@ -138,17 +168,38 @@ class DoctorTests(unittest.TestCase):
                         dispatcher_ids=subject.authorized_dispatchers,
                         expires_in_minutes=30,
                     )
+                posts_after_stage = len(transport.posts)
+                worker_output = io.StringIO()
+                services = RuntimeServices.from_layout(
+                    StorageLayout.from_environment()
+                )
+                with contextlib.redirect_stdout(worker_output):
+                    worker_status = _t1_worker(
+                        str(manifest_path),
+                        str(ROOT / "config" / "providers.json"),
+                        dispatcher_id="worker-1",
+                        allow_network=True,
+                        allow_local=False,
+                        registry_override=ProviderRegistry((provider,)),
+                        services_override=services,
+                    )
             queue = PlanQueue(state_root / "runtime" / "dispatch.sqlite3")
             counts = queue.state_counts()
 
         document = json.loads(output.getvalue())
+        worker_document = json.loads(worker_output.getvalue())
         self.assertEqual(status, 0)
+        self.assertEqual(worker_status, 0)
         self.assertEqual(document["status"], "t1_staged")
-        self.assertEqual(counts["queued"], 3)
+        self.assertEqual(worker_document["status"], "t1_worker_completed")
+        self.assertEqual(counts["queued"], 2)
+        self.assertEqual(counts["completed"], 1)
         self.assertFalse(document["network_activity"])
         self.assertNotIn("T1_MEMBER_", output.getvalue())
+        self.assertNotIn("T1_MEMBER_", worker_output.getvalue())
         self.assertNotIn(str(state_root), output.getvalue())
-        self.assertEqual(transport.posts, [])
+        self.assertEqual(posts_after_stage, 0)
+        self.assertEqual(len(transport.posts), 1)
 
     def test_queue_status_lists_global_reconciliation_content_free(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)

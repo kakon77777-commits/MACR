@@ -205,6 +205,73 @@ def _t1_stage(
     return 0
 
 
+def _t1_worker(
+    manifest_path: str,
+    config_path: str | None,
+    *,
+    dispatcher_id: str,
+    allow_network: bool,
+    allow_local: bool,
+    registry_override: ProviderRegistry | None = None,
+    services_override: RuntimeServices | None = None,
+) -> int:
+    if not allow_network:
+        return _print_opt_in_error(
+            "network_opt_in_required",
+            "--allow-network",
+        )
+    layout = StorageLayout.from_environment()
+    if services_override is None:
+        layout.ensure_state_tree()
+        services = RuntimeServices.from_layout(layout)
+    else:
+        services = services_override
+    if not _legacy_migration_complete(layout, services):
+        raise ValueError("T1 worker requires complete legacy migration")
+    if registry_override is None:
+        path = Path(config_path) if config_path else _default_config(layout)
+        config = next(
+            item
+            for item in load_provider_configs(path)
+            if item.id == "glm_flash_worker"
+        )
+        provider = GlmFlashWorkerProvider(
+            config,
+            environ=os.environ,
+            token_policy=t1_glm_live_policy(),
+        )
+        registry = ProviderRegistry((provider,))
+    else:
+        registry = registry_override
+    manifest = load_t1_manifest(manifest_path)
+    dispatcher = T1Dispatcher(registry, services)
+    result = dispatcher.run_one(
+        manifest,
+        dispatcher.load_bundle(manifest),
+        dispatcher_id,
+        DispatchOrigin("cli", "process_id", str(os.getpid())),
+        allow_network=allow_network,
+        allow_local=allow_local,
+    )
+    status = (
+        "t1_worker_completed"
+        if result.queue_state == QueueMemberState.COMPLETED.value
+        else "t1_worker_terminal"
+    )
+    print(
+        json.dumps(
+            {
+                "status": status,
+                "network_activity": result.provider_attempted,
+                "result": result.to_dict(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if result.queue_state == QueueMemberState.COMPLETED.value else 4
+
+
 def _glm_preflight(
     task_path: str,
     config_path: str | None,
@@ -1058,6 +1125,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=30,
     )
 
+    t1_worker = sub.add_parser(
+        "t1-worker",
+        help="claim and execute at most one exact staged T1 member",
+    )
+    t1_worker.add_argument("manifest")
+    t1_worker.add_argument("--config", help="provider configuration JSON path")
+    t1_worker.add_argument("--dispatcher-id", required=True)
+    t1_worker.add_argument("--allow-network", action="store_true")
+    t1_worker.add_argument("--allow-local", action="store_true")
+
     evidence_inspect = sub.add_parser(
         "evidence-inspect",
         help="inspect a reviewed external evidence manifest without writing state",
@@ -1216,6 +1293,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.config,
             dispatcher_ids=args.dispatcher_ids,
             expires_in_minutes=args.expires_in_minutes,
+        )
+    if args.command == "t1-worker":
+        return _t1_worker(
+            args.manifest,
+            args.config,
+            dispatcher_id=args.dispatcher_id,
+            allow_network=args.allow_network,
+            allow_local=args.allow_local,
         )
     if args.command == "evidence-inspect":
         return _evidence_inspect(args.manifest)

@@ -380,6 +380,7 @@ class T1ExecutionMember:
 class T1ExecutionManifest:
     manifest_digest: str
     plan_digest: str
+    plan_revision: int
     members: tuple[T1ExecutionMember, ...]
     aggregate_cost_ceiling_usd: float
     campaign_cost_ceiling_usd: float
@@ -394,6 +395,12 @@ class T1ExecutionManifest:
         if self.topology_id != _T1_TOPOLOGY:
             raise ValueError("T1 manifest topology must be T1_FANOUT_VERIFIED")
         object.__setattr__(self, "plan_digest", _digest("plan_digest", self.plan_digest))
+        if (
+            isinstance(self.plan_revision, bool)
+            or not isinstance(self.plan_revision, int)
+            or self.plan_revision < 1
+        ):
+            raise ValueError("T1 plan_revision must be a positive integer")
         members = tuple(self.members)
         if len(members) != 3 or any(
             not isinstance(item, T1ExecutionMember) for item in members
@@ -463,6 +470,7 @@ class T1ExecutionManifest:
         campaign_cost_ceiling_usd: float,
         expires_at: str,
         authorized_dispatchers: Sequence[str],
+        plan_revision: int = 1,
     ) -> "T1ExecutionManifest":
         if isinstance(members, (str, bytes)) or any(
             not isinstance(item, T1ExecutionMember) for item in members
@@ -481,6 +489,7 @@ class T1ExecutionManifest:
             "schema_version": 1,
             "topology_id": _T1_TOPOLOGY,
             "plan_digest": plan_digest,
+            "plan_revision": plan_revision,
             "ordered_member_digests": [item.member_digest for item in normalized_members],
             "aggregate_cost_ceiling_usd": float(aggregate_cost_ceiling_usd),
             "campaign_cost_ceiling_usd": float(campaign_cost_ceiling_usd),
@@ -490,6 +499,7 @@ class T1ExecutionManifest:
         return cls(
             manifest_digest=sha256_id("t1_execution_manifest_v1", canonical),
             plan_digest=plan_digest,
+            plan_revision=plan_revision,
             members=normalized_members,
             aggregate_cost_ceiling_usd=aggregate_cost_ceiling_usd,
             campaign_cost_ceiling_usd=campaign_cost_ceiling_usd,
@@ -504,6 +514,7 @@ class T1ExecutionManifest:
             "schema_version",
             "topology_id",
             "plan_digest",
+            "plan_revision",
             "members",
             "aggregate_cost_ceiling_usd",
             "campaign_cost_ceiling_usd",
@@ -520,6 +531,7 @@ class T1ExecutionManifest:
             schema_version=data["schema_version"],
             topology_id=data["topology_id"],
             plan_digest=data["plan_digest"],
+            plan_revision=data["plan_revision"],
             members=tuple(T1ExecutionMember.from_dict(item) for item in data["members"]),
             aggregate_cost_ceiling_usd=data["aggregate_cost_ceiling_usd"],
             campaign_cost_ceiling_usd=data["campaign_cost_ceiling_usd"],
@@ -532,6 +544,7 @@ class T1ExecutionManifest:
             "schema_version": self.schema_version,
             "topology_id": self.topology_id,
             "plan_digest": self.plan_digest,
+            "plan_revision": self.plan_revision,
             "ordered_member_digests": [item.member_digest for item in self.members],
             "aggregate_cost_ceiling_usd": self.aggregate_cost_ceiling_usd,
             "campaign_cost_ceiling_usd": self.campaign_cost_ceiling_usd,
@@ -545,6 +558,7 @@ class T1ExecutionManifest:
             "schema_version": self.schema_version,
             "topology_id": self.topology_id,
             "plan_digest": self.plan_digest,
+            "plan_revision": self.plan_revision,
             "members": [item.to_dict() for item in self.members],
             "aggregate_cost_ceiling_usd": self.aggregate_cost_ceiling_usd,
             "campaign_cost_ceiling_usd": self.campaign_cost_ceiling_usd,

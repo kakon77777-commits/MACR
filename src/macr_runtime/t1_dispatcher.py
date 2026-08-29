@@ -2,20 +2,36 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from .accounting import CostClass
 from .authority import AuthorityScope, DispatchAuthorityStore
 from .batch_authority import (
     BatchAuthorityReference,
     BatchMemberScope,
     BatchScope,
 )
-from .canonical import aware_iso8601
+from .canonical import aware_iso8601, sha256_id
+from .config import ConnectionScope
+from .contracts import ResultStatus
 from .errors import MacrError
-from .execution import AuthorizationReference, InteractionPlane
+from .execution import (
+    AcceptanceState,
+    AuthorizationReference,
+    DispatchContext,
+    DispatchOrigin,
+    InteractionPlane,
+)
 from .registry import ProviderRegistry
-from .runtime import RuntimeServices
-from .scheduler import PlanQueue, QueueMember, T1QueuePlan
+from .runtime import MacrRuntime, RuntimeServices
+from .scheduler import (
+    PlanQueue,
+    QueueClaim,
+    QueueMember,
+    QueueMemberState,
+    T1QueuePlan,
+)
 from .t1_manifest import (
     T1AuthorityBundle,
     T1ExecutionManifest,
@@ -29,6 +45,46 @@ def _utc_now() -> datetime:
 
 class T1DispatchError(MacrError):
     """A T1 manifest cannot be staged or dispatched safely."""
+
+
+@dataclass(frozen=True)
+class T1DispatchResult:
+    manifest_digest: str
+    plan_digest: str
+    member_id: str
+    member_digest: str
+    run_id: str
+    queue_state: str
+    provider_status: str
+    provider_state: str
+    capture_state: str
+    return_contract_state: str
+    accounting_state: str
+    acceptance_state: str
+    provider_attempted: bool
+    reconciliation_required: bool
+    terminal_evidence_digest: str
+    observed_cost_usd: float | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "manifest_digest": self.manifest_digest,
+            "plan_digest": self.plan_digest,
+            "member_id": self.member_id,
+            "member_digest": self.member_digest,
+            "run_id": self.run_id,
+            "queue_state": self.queue_state,
+            "provider_status": self.provider_status,
+            "provider_state": self.provider_state,
+            "capture_state": self.capture_state,
+            "return_contract_state": self.return_contract_state,
+            "accounting_state": self.accounting_state,
+            "acceptance_state": self.acceptance_state,
+            "provider_attempted": self.provider_attempted,
+            "reconciliation_required": self.reconciliation_required,
+            "terminal_evidence_digest": self.terminal_evidence_digest,
+            "observed_cost_usd": self.observed_cost_usd,
+        }
 
 
 class T1Dispatcher:
@@ -131,12 +187,17 @@ class T1Dispatcher:
                     "T1 route does not use the exact manifest token policy"
                 )
             provider = self.registry.get(member.route.provider_id)
-            approval_metadata = getattr(provider, "approval_metadata", None)
-            if not callable(approval_metadata):
+            validate_approval = getattr(provider, "validate_approval", None)
+            if not callable(validate_approval):
                 raise T1DispatchError(
                     "T1 provider cannot validate exact task approval metadata"
                 )
-            metadata = approval_metadata(member.task)
+            try:
+                metadata = validate_approval(member.task)
+            except MacrError as exc:
+                raise T1DispatchError(
+                    "T1 task approval is missing, stale, or invalid"
+                ) from exc
             if (
                 metadata.get("required_approval_sha256")
                 != member.task.delegation_approval_sha256
@@ -255,6 +316,425 @@ class T1Dispatcher:
         except Exception:
             pass
 
+    def load_bundle(self, manifest: T1ExecutionManifest) -> T1AuthorityBundle:
+        if not isinstance(manifest, T1ExecutionManifest):
+            raise ValueError("manifest must be a T1ExecutionManifest")
+        bundle = self._existing_bundle(manifest)
+        if bundle is None:
+            raise T1DispatchError("T1 manifest has not been staged")
+        return bundle
+
+    def _validate_bundle(
+        self,
+        manifest: T1ExecutionManifest,
+        bundle: T1AuthorityBundle,
+        dispatcher_id: str,
+    ) -> None:
+        if not isinstance(bundle, T1AuthorityBundle):
+            raise ValueError("bundle must be a T1AuthorityBundle")
+        if (
+            bundle.manifest_digest != manifest.manifest_digest
+            or bundle.batch_authority.plan_digest != manifest.plan_digest
+            or bundle.expires_at != manifest.expires_at
+        ):
+            raise T1DispatchError("T1 authority bundle does not match manifest")
+        expected_scope = self._batch_scope(manifest, bundle.expires_at)
+        self.queue.authorities.verify(
+            bundle.batch_authority,
+            expected_scope,
+            dispatcher_id=dispatcher_id,
+        )
+        self._verify_dispatch_authority(manifest, bundle.dispatch_authority)
+        actual_member_ids = tuple(
+            item.member_id for item in self.queue.list_members(manifest.plan_digest)
+        )
+        if actual_member_ids != bundle.member_ids:
+            raise T1DispatchError("T1 authority bundle member IDs are stale")
+
+    @staticmethod
+    def _member_for_claim(
+        manifest: T1ExecutionManifest,
+        bundle: T1AuthorityBundle,
+        claim: QueueClaim,
+    ) -> T1ExecutionMember:
+        if claim.plan_digest != manifest.plan_digest or not 0 <= claim.ordinal < 3:
+            raise T1DispatchError("claimed queue member is outside the exact manifest")
+        member = manifest.members[claim.ordinal]
+        expected = (
+            bundle.member_ids[claim.ordinal],
+            member.member_digest,
+            member.route.provider_id,
+            member.route.route_id,
+            member.role_digest,
+            member.privacy,
+            member.context_class,
+            member.cost_ceiling_usd,
+        )
+        actual = (
+            claim.member_id,
+            claim.member_digest,
+            claim.provider_id,
+            claim.route_id,
+            claim.role_digest,
+            claim.privacy,
+            claim.context_class,
+            claim.cost_ceiling_usd,
+        )
+        if actual != expected:
+            raise T1DispatchError("claimed queue member does not match manifest")
+        return member
+
+    def _runtime_evidence(
+        self,
+        run_id: str,
+        *,
+        failure_type: str | None,
+    ) -> dict[str, object]:
+        try:
+            events = self.services.events.read_events(run_id=run_id)
+        except Exception:
+            events = ()
+        dispatches = tuple(
+            item for item in events if item["event_type"] == "provider.dispatch_requested"
+        )
+        terminals = tuple(
+            item for item in events if item["event_type"] == "provider.candidate_completed"
+        )
+        try:
+            accounting = self.services.accounting.read_invocation(run_id)
+        except Exception:
+            accounting = None
+        try:
+            capture = self.services.vault.read_by_run(run_id)
+        except Exception:
+            capture = None
+        terminal = terminals[0]["payload"] if len(terminals) == 1 else None
+        dispatched = len(dispatches) == 1
+        accounting_terminal = bool(
+            accounting is not None and accounting.get("terminal_at") is not None
+        )
+        billing_state = accounting.get("billing_state") if accounting is not None else None
+        observed_cost = (
+            accounting.get("currency_cost_usd") if accounting is not None else None
+        )
+        complete = bool(
+            dispatched
+            and len(terminals) == 1
+            and accounting_terminal
+            and billing_state != "unknown_after_dispatch"
+            and observed_cost is not None
+        )
+        public = {
+            "run_id": run_id,
+            "dispatch_event_ids": [item["event_id"] for item in dispatches],
+            "terminal_event_ids": [item["event_id"] for item in terminals],
+            "accounting_terminal": accounting_terminal,
+            "billing_state": billing_state,
+            "observed_cost_usd": observed_cost,
+            "capture_id": capture.capture_id if capture is not None else None,
+            "capture_answer_sha256": (
+                capture.sha256 if capture is not None else None
+            ),
+            "provider_status": terminal.get("status") if terminal else None,
+            "provider_state": terminal.get("provider_state") if terminal else None,
+            "capture_state": terminal.get("capture_state") if terminal else None,
+            "return_contract_state": (
+                terminal.get("return_contract_state") if terminal else None
+            ),
+            "failure_type": failure_type,
+        }
+        return {
+            "dispatched": dispatched,
+            "complete": complete,
+            "accounting": accounting,
+            "observed_cost_usd": observed_cost,
+            "provider_status": public["provider_status"],
+            "provider_state": public["provider_state"],
+            "capture_state": public["capture_state"],
+            "return_contract_state": public["return_contract_state"],
+            "terminal_evidence_digest": sha256_id(
+                "t1_terminal_evidence_v1",
+                public,
+            ),
+        }
+
+    def _record_plan_cost(
+        self,
+        manifest: T1ExecutionManifest,
+        member: T1ExecutionMember,
+        run_id: str,
+        accounting: dict[str, object],
+    ) -> None:
+        observed_cost = accounting.get("currency_cost_usd")
+        if not isinstance(observed_cost, (int, float)) or isinstance(
+            observed_cost,
+            bool,
+        ):
+            raise T1DispatchError("T1 observed provider cost is unavailable")
+        basis_digest = sha256_id(
+            "pricing_basis_reference_v1",
+            {
+                "pricing_basis_version": accounting.get("pricing_basis_version"),
+                "cost_kind": accounting.get("cost_kind"),
+            },
+        )
+        self.services.accounting.record_plan_cost(
+            manifest.plan_digest,
+            run_id,
+            CostClass.PRODUCTION_EXECUTION_COST,
+            float(observed_cost),
+            str(accounting.get("cost_kind") or "observed"),
+            basis_digest,
+            role_digest=member.role_digest,
+            route_id=member.route.route_id,
+            idempotency_key=f"{manifest.manifest_digest}:{member.member_digest}",
+        )
+        total = sum(self.services.accounting.plan_costs(manifest.plan_digest).values())
+        if total > manifest.aggregate_cost_ceiling_usd + 1e-12:
+            raise T1DispatchError("T1 aggregate accounting ceiling is exceeded")
+
+    def _reconciliation_result(
+        self,
+        manifest: T1ExecutionManifest,
+        member: T1ExecutionMember,
+        claim: QueueClaim,
+        run_id: str,
+        evidence: dict[str, object],
+    ) -> T1DispatchResult:
+        observed_cost = evidence.get("observed_cost_usd")
+        normalized_cost = (
+            float(observed_cost)
+            if isinstance(observed_cost, (int, float))
+            and not isinstance(observed_cost, bool)
+            else None
+        )
+        digest = str(evidence["terminal_evidence_digest"])
+        try:
+            self.queue.require_reconciliation(
+                claim.member_id,
+                claim.dispatcher_id,
+                claim.fencing_token,
+                terminal_evidence_digest=digest,
+                observed_cost_usd=normalized_cost,
+            )
+        except Exception:
+            record = self.queue.read_member(claim.member_id)
+            if record.state is not QueueMemberState.RECONCILIATION_REQUIRED:
+                raise
+        return T1DispatchResult(
+            manifest_digest=manifest.manifest_digest,
+            plan_digest=manifest.plan_digest,
+            member_id=claim.member_id,
+            member_digest=member.member_digest,
+            run_id=run_id,
+            queue_state=QueueMemberState.RECONCILIATION_REQUIRED.value,
+            provider_status=str(evidence.get("provider_status") or "unknown_after_dispatch"),
+            provider_state="unknown_after_dispatch",
+            capture_state=str(evidence.get("capture_state") or "unknown"),
+            return_contract_state=str(
+                evidence.get("return_contract_state") or "not_evaluated"
+            ),
+            accounting_state=(
+                "complete"
+                if isinstance(evidence.get("accounting"), dict)
+                and evidence["accounting"].get("terminal_at") is not None
+                else "incomplete"
+            ),
+            acceptance_state=AcceptanceState.PENDING.value,
+            provider_attempted=bool(evidence.get("dispatched")),
+            reconciliation_required=True,
+            terminal_evidence_digest=digest,
+            observed_cost_usd=normalized_cost,
+        )
+
+    def run_one(
+        self,
+        manifest: T1ExecutionManifest,
+        bundle: T1AuthorityBundle,
+        dispatcher_id: str,
+        origin: DispatchOrigin,
+        *,
+        allow_network: bool,
+        allow_local: bool,
+    ) -> T1DispatchResult:
+        if not isinstance(manifest, T1ExecutionManifest):
+            raise ValueError("manifest must be a T1ExecutionManifest")
+        if not isinstance(origin, DispatchOrigin):
+            raise ValueError("origin must be a DispatchOrigin")
+        if not isinstance(allow_network, bool) or not isinstance(allow_local, bool):
+            raise ValueError("T1 provider opt-ins must be boolean")
+        if self.queue.state_counts()["reconciliation_required"] != 0:
+            raise T1DispatchError(
+                "global reconciliation must be empty before a T1 claim"
+            )
+        self._validate_bundle(manifest, bundle, dispatcher_id)
+        self._validate_manifest_routes(manifest)
+        provider = self.registry.get(manifest.members[0].route.provider_id)
+        if (
+            provider.connection_scope is ConnectionScope.EXTERNAL_HTTPS
+            and not allow_network
+        ):
+            raise T1DispatchError("T1 worker requires explicit network opt-in")
+        if (
+            provider.connection_scope is ConnectionScope.LOOPBACK_HTTP
+            and not allow_local
+        ):
+            raise T1DispatchError("T1 worker requires explicit local opt-in")
+        lease_seconds = max(
+            1,
+            min(
+                86_400,
+                int(max(item.task.constraints.max_latency_s for item in manifest.members))
+                + 60,
+            ),
+        )
+        claim = self.queue.claim(
+            dispatcher_id,
+            lease_seconds=lease_seconds,
+            plan_digest=manifest.plan_digest,
+        )
+        if claim is None:
+            raise T1DispatchError("T1 manifest has no queued member")
+        run_id = str(uuid.uuid4())
+        try:
+            member = self._member_for_claim(manifest, bundle, claim)
+            self._validate_bundle(manifest, bundle, dispatcher_id)
+        except Exception as exc:
+            evidence = {
+                "dispatched": False,
+                "complete": False,
+                "accounting": None,
+                "observed_cost_usd": None,
+                "provider_status": "not_dispatched",
+                "provider_state": "not_dispatched",
+                "capture_state": "absent",
+                "return_contract_state": "not_evaluated",
+                "terminal_evidence_digest": sha256_id(
+                    "t1_claim_mismatch_v1",
+                    {
+                        "manifest_digest": manifest.manifest_digest,
+                        "member_id": claim.member_id,
+                        "failure_type": type(exc).__name__,
+                    },
+                ),
+            }
+            fallback_member = manifest.members[claim.ordinal]
+            return self._reconciliation_result(
+                manifest,
+                fallback_member,
+                claim,
+                run_id,
+                evidence,
+            )
+        context = DispatchContext(
+            run_id=run_id,
+            plane=InteractionPlane.DELEGATION,
+            origin=origin,
+            authorization=bundle.dispatch_authority,
+            policy_snapshot_sha256=member.route.policy_snapshot_id,
+            batch_id=manifest.manifest_digest,
+            member_digest=member.member_digest,
+            plan_digest=manifest.plan_digest,
+            plan_revision=manifest.plan_revision,
+            role_slot_id=f"t1-member-{member.ordinal}",
+            route_id=member.route.route_id,
+            model_token_policy_digest=member.token_policy_digest,
+        )
+        result = None
+        failure_type = None
+        try:
+            result = MacrRuntime(self.registry, self.services).invoke(
+                member.route.provider_id,
+                member.task,
+                context,
+            )
+        except Exception as exc:
+            failure_type = type(exc).__name__
+        evidence = self._runtime_evidence(run_id, failure_type=failure_type)
+        if not evidence["dispatched"]:
+            digest = str(evidence["terminal_evidence_digest"])
+            record = self.queue.fail(
+                claim.member_id,
+                claim.dispatcher_id,
+                claim.fencing_token,
+                terminal_evidence_digest=digest,
+                observed_cost_usd=0.0,
+            )
+            return T1DispatchResult(
+                manifest_digest=manifest.manifest_digest,
+                plan_digest=manifest.plan_digest,
+                member_id=claim.member_id,
+                member_digest=member.member_digest,
+                run_id=run_id,
+                queue_state=record.state.value,
+                provider_status=(
+                    result.status.value
+                    if result is not None
+                    else ResultStatus.CANDIDATE_FAILURE.value
+                ),
+                provider_state="not_dispatched",
+                capture_state="absent",
+                return_contract_state="not_evaluated",
+                accounting_state="not_started",
+                acceptance_state=AcceptanceState.PENDING.value,
+                provider_attempted=False,
+                reconciliation_required=False,
+                terminal_evidence_digest=digest,
+                observed_cost_usd=0.0,
+            )
+        if not evidence["complete"] or result is None:
+            return self._reconciliation_result(
+                manifest,
+                member,
+                claim,
+                run_id,
+                evidence,
+            )
+        try:
+            accounting = evidence["accounting"]
+            assert isinstance(accounting, dict)
+            self._record_plan_cost(manifest, member, run_id, accounting)
+            observed_cost = float(evidence["observed_cost_usd"])
+            digest = str(evidence["terminal_evidence_digest"])
+            terminal_method = (
+                self.queue.complete
+                if result.status is ResultStatus.CANDIDATE_SUCCESS
+                else self.queue.fail
+            )
+            record = terminal_method(
+                claim.member_id,
+                claim.dispatcher_id,
+                claim.fencing_token,
+                terminal_evidence_digest=digest,
+                observed_cost_usd=observed_cost,
+            )
+        except Exception:
+            return self._reconciliation_result(
+                manifest,
+                member,
+                claim,
+                run_id,
+                evidence,
+            )
+        return T1DispatchResult(
+            manifest_digest=manifest.manifest_digest,
+            plan_digest=manifest.plan_digest,
+            member_id=claim.member_id,
+            member_digest=member.member_digest,
+            run_id=run_id,
+            queue_state=record.state.value,
+            provider_status=result.status.value,
+            provider_state=str(evidence["provider_state"]),
+            capture_state=str(evidence["capture_state"]),
+            return_contract_state=str(evidence["return_contract_state"]),
+            accounting_state="complete",
+            acceptance_state=AcceptanceState.PENDING.value,
+            provider_attempted=True,
+            reconciliation_required=False,
+            terminal_evidence_digest=digest,
+            observed_cost_usd=observed_cost,
+        )
+
     def stage(
         self,
         manifest: T1ExecutionManifest,
@@ -322,4 +802,4 @@ class T1Dispatcher:
         )
 
 
-__all__ = ["T1DispatchError", "T1Dispatcher"]
+__all__ = ["T1DispatchError", "T1DispatchResult", "T1Dispatcher"]

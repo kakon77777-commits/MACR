@@ -473,9 +473,15 @@ class PlanQueue:
         dispatcher_id: str,
         *,
         lease_seconds: int = 300,
+        plan_digest: str | None = None,
     ) -> QueueClaim | None:
         dispatcher = _identifier("dispatcher_id", dispatcher_id)
         ttl = _ttl(lease_seconds)
+        plan = (
+            _digest("plan_digest", plan_digest)
+            if plan_digest is not None
+            else None
+        )
         now = self._current_time()
         connection = self.database.connect()
         try:
@@ -492,9 +498,10 @@ class PlanQueue:
                        b.authorized_dispatchers_json, b.expires_at
                 FROM plan_queue_members AS m
                 JOIN plan_queue_batches AS b USING(plan_digest)
-                WHERE m.state = 'queued'
+                WHERE m.state = 'queued' AND (? IS NULL OR m.plan_digest = ?)
                 ORDER BY m.plan_digest, m.ordinal
-                """
+                """,
+                (plan, plan),
             ).fetchall()
             if not rows:
                 connection.commit()
@@ -682,7 +689,7 @@ class PlanQueue:
         fencing_token: int,
         *,
         terminal_evidence_digest: str,
-        observed_cost_usd: float,
+        observed_cost_usd: float | None,
     ) -> QueueMemberRecord:
         if state not in {QueueMemberState.COMPLETED, QueueMemberState.FAILED}:
             raise ValueError("terminal state is invalid")
@@ -692,7 +699,11 @@ class PlanQueue:
             "terminal_evidence_digest",
             terminal_evidence_digest,
         )
-        cost = _cost("observed_cost_usd", observed_cost_usd)
+        cost = (
+            _cost("observed_cost_usd", observed_cost_usd)
+            if observed_cost_usd is not None
+            else None
+        )
         if (
             isinstance(fencing_token, bool)
             or not isinstance(fencing_token, int)
