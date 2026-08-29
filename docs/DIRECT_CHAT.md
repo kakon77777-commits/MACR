@@ -1,6 +1,6 @@
 # MACR Direct Chat UI 0.1 Operator Guide
 
-Status: `MACR 0.5.0a4` alpha candidate, 2026-08-29
+Status: retained Direct UI `0.1` under `MACR 0.6.0a0`, 2026-08-29
 
 This is the executable Direct plane for provider-native Grok 4.6 and local Qwythos conversations. It is not the future MACR v0.6 dynamic-coordination runtime. The v0.6 design and implementation plan remain separately versioned and unchanged.
 
@@ -9,7 +9,7 @@ This is the executable Direct plane for provider-native Grok 4.6 and local Qwyth
 From the isolated a4 candidate checkout:
 
 ```powershell
-Set-Location 'D:\Ai\work together\MACR\.worktrees\macr-v0.5-direct-chat-ui'
+Set-Location 'D:\Ai\work together\MACR\.worktrees\macr-v0.6-dynamic-coordination'
 .\scripts\install-direct-chat-shortcut.ps1
 ```
 
@@ -92,7 +92,7 @@ MACR retains only content-free provider accounting, operational hashes/Candidate
 
 The implementation gate is offline/local and does not spend Grok credit. The operator completes the remaining live acceptance from the UI:
 
-1. Open the Desktop shortcut and confirm the header says `MACR 0.5.0a4 · Direct UI 0.1 alpha`.
+1. Open the v0.6 checkout's launcher and confirm the header says `MACR 0.6.0a0 · Direct UI 0.1 alpha`.
 2. Confirm Grok reports a configured state and Qwythos reports the installed local model/digest.
 3. Create a Qwythos conversation with a blank system prompt. Send two turns where the second depends on the first. Refresh/reopen and confirm all four messages persist in order.
 4. Create a Grok conversation with a short, visible system prompt or a blank prompt. Send two bounded turns where the second depends on the first. Confirm the response appears only when complete.

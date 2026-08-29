@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "macr-runtime"
-version = "0.5.0a4"
+version = "0.6.0a0"
 description = "Migration-first heterogeneous multi-AI collaboration runtime"
 readme = "README.md"
 requires-python = ">=3.11"

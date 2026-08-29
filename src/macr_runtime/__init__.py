@@ -83,4 +83,4 @@ __all__ = [
     "canonical_policy_snapshot",
 ]
 
-__version__ = "0.5.0a4"
+__version__ = "0.6.0a0"

@@ -1,6 +1,6 @@
 # Storage and migration contract
 
-Status: active at MACR v0.5.0a4 Direct Chat UI 0.1 alpha
+Status: active at MACR v0.6.0a0 Evidence Kernel baseline with retained Direct UI 0.1
 
 Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `D_RESIDENCE_CANONICAL`, `SECRETS_EXTERNAL`
 

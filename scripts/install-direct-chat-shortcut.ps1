@@ -44,7 +44,7 @@ if (-not $DryRun) {
     $shortcut.TargetPath = $powershellPath
     $shortcut.Arguments = $arguments
     $shortcut.WorkingDirectory = $repoRoot
-    $shortcut.Description = 'MACR 0.5.0a4 Direct Chat UI 0.1 alpha'
+    $shortcut.Description = 'MACR 0.6.0a0 Direct Chat UI 0.1 alpha'
     $shortcut.IconLocation = $powershellPath + ',0'
     $shortcut.Save()
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut)

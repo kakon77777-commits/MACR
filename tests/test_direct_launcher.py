@@ -81,7 +81,7 @@ class DirectLauncherTests(unittest.TestCase):
                 report,
                 {
                     "status": "direct_chat_smoke_ok",
-                    "version": "0.5.0a4",
+                    "version": "0.6.0a0",
                     "ui_version": "0.1",
                     "host": "127.0.0.1",
                     "asset_status": 200,

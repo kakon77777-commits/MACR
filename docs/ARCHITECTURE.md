@@ -1,4 +1,4 @@
-# MACR v0.5.0a4 Shared Core + Direct Chat architecture
+# MACR v0.6.0a0 Evidence Kernel + Shared Core + Direct Chat architecture
 
 ```text
 Loopback browser (127.0.0.1, authenticated cookie)
@@ -202,6 +202,6 @@ runtime role != authorship identity
 generation != verification != acceptance
 ```
 
-Every delegated provider completion remains a candidate. MACR v0.5.0a4 records provider, capture, return-contract, materialization, verification, and acceptance states independently; Direct projection into its private conversation store does not create a delegated verification or accepted-result transition.
+Every delegated provider completion remains a candidate. MACR v0.6.0a0 preserves provider, capture, return-contract, materialization, verification, and acceptance states independently; Direct projection into its private conversation store does not create a coordinated verification or accepted-result transition.
 
 `PLAIN_SOURCE` is a conservative wrapper-format guard: it rejects Markdown fences, evidence/warning sections, common leading prose wrappers, and headings derived from the task's declared language. A generic `Code:`/`Source:` heading is rejected only when the colon ends the line, avoiding false rejection of source such as Python `code: str = 'ok'`. It does not prove that arbitrary source compiles. `JSON_OBJECT` validates one semantic object with unique keys; whitespace, final newline, and member order are not significant. Byte-exact JSON belongs under `EXACT_TEXT`.

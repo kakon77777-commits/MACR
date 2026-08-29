@@ -121,7 +121,7 @@
       "model": "veo-3.1-fast-generate-001",
       "capabilities": ["video_generation"],
       "approved_privacy": [],
-      "disabled_reason": "MACR v0.5.0a4 does not implement or live-verify Veo long-running operations."
+      "disabled_reason": "MACR v0.6.0a0 does not implement or live-verify Veo long-running operations."
     },
     {
       "id": "google_tts",
@@ -133,7 +133,7 @@
       "model": "gemini-3.1-flash-tts-preview",
       "capabilities": ["audio_generation"],
       "approved_privacy": [],
-      "disabled_reason": "MACR v0.5.0a4 does not implement or live-verify Google TTS."
+      "disabled_reason": "MACR v0.6.0a0 does not implement or live-verify Google TTS."
     },
     {
       "id": "google_lyria",
@@ -145,7 +145,7 @@
       "model": "lyria-3-clip-preview",
       "capabilities": ["music_generation"],
       "approved_privacy": [],
-      "disabled_reason": "MACR v0.5.0a4 does not implement or live-verify Lyria music generation."
+      "disabled_reason": "MACR v0.6.0a0 does not implement or live-verify Lyria music generation."
     },
     {
       "id": "glm_flash_worker",

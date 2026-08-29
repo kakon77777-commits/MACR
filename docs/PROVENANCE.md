@@ -175,3 +175,18 @@ Neo then authorized an operator-confirmed privacy deletion path for disposable o
 The operator subsequently authorized deletion of the exact current archived set: four of four total Direct conversations, 27 messages, and 16 terminal runs, with zero active runs, leases, or unsettled invocations. The first live batch exposed a Windows-only post-purge defect: one Candidate file had already been overwritten/removed when an empty-directory `rmdir` received `WinError 5`; the Direct database transaction had not begun, so all four conversation records remained. A RED/GREEN control now proves transient empty-directory locks are cosmetic after Candidate bytes are gone. Replaying the same exact archived set was idempotent for the already-absent file and completed all four deletions. Readback showed zero conversations/messages/Direct runs, zero Grok/Qwythos Candidate `answer.bin` files, a zero-byte Direct WAL, four content-free deletion tombstones, and 14 retained content-free Direct accounting rows. No non-archived or active conversation was in scope.
 
 This checkpoint remains an alpha candidate until the operator performs one bounded complete multi-turn Grok Direct conversation and one complete multi-turn Qwythos Direct conversation, including D-drive reload and accounting inspection. Transport-level cancellation and explicit late-result recovery are openly absent and remain beta gates. No merge, release, deployment, publication, v0.6 implementation, host-adapter authority, named resident identity, or delegated acceptance follows from this candidate.
+
+## v0.6.0a0 integration baseline decision
+
+Neo explicitly directed MACR development to continue from the completed a4 Direct Chat checkpoint rather than return to the earlier a3-only subject. A new isolated branch/worktree was created without merging or modifying the a4 branch:
+
+```text
+branch               = feature/macr-v0.6-dynamic-coordination
+worktree             = D:\Ai\work together\MACR\.worktrees\macr-v0.6-dynamic-coordination
+base_commit          = 8b897eadb0f2f82ff02676ff5ead017067d6bb85
+base_tree            = 7b938ca69652c876b9be1c5cbebc80a7971e2921
+a4 implementation    = 0827fc5e0c9d11cd62674648e0fdd8e90a7bb663
+a4 implementation tree = 507f58b47ba58edc9457b7b443ee92caf8598f64
+```
+
+The fresh v0.6 worktree baseline ran 309 tests with zero failures and the same two Windows symbolic-link capability skips. A read-only shared-state observation found the legacy JSONL unchanged at 41,490 bytes / 74 parsed events / SHA-256 `80AF74FB9FB20FF805E168F13A40E4DC585DA20AEA3778347FDDE6CC29128299`, with the read-only attribute set, 74 legacy-backed runtime events, a current complete 74-event source row, 114 total runtime events, and zero leases. Runtime-event totals may grow under the separately running a4 Direct service and are not an immutable v0.6 baseline input. The sealed legacy bytes/hash and complete source record are the gate; no migration, provider call, credential read, discovery request, deployment, automation, or shared-state write occurred during v0.6 baseline inspection.

@@ -1,6 +1,6 @@
-# MACR Runtime v0.5.0a4 — Direct Chat UI 0.1 Alpha
+# MACR Runtime v0.6.0a0 — Evidence Kernel + Direct Chat UI 0.1
 
-MACR is a migration-aware runtime for heterogeneous AI workers. The v0.5.0a4 alpha keeps the host-neutral, cross-process-safe shared core and adds the first executable Direct plane: a local browser UI for full multi-turn Grok 4.6 or Qwythos conversations. Direct provider completion, private capture, conversation projection, delegated candidate generation, verification, and acceptance remain separate states.
+MACR is a migration-aware runtime for heterogeneous AI workers. The v0.6.0a0 line preserves the complete v0.5.0a4 Direct plane and begins the offline Evidence / Identity Kernel for deterministic coordination. Direct provider completion, private capture, conversation projection, coordinated candidate generation, verification, and acceptance remain separate states.
 
 This alpha line preserves all a3 replay and sensitive-marker repairs. Direct Chat is a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. It does **not** implement Codex/Claude Code host adapters, bounded fan-out, Context Capsules, or the separately designed v0.6 dynamic-coordination architecture.
 
@@ -20,7 +20,7 @@ OLLAMA_MODELS     = D:\Ai\work together\LocalModels\models
 Install or refresh the Windows Desktop shortcut:
 
 ```powershell
-Set-Location 'D:\Ai\work together\MACR\.worktrees\macr-v0.5-direct-chat-ui'
+Set-Location 'D:\Ai\work together\MACR\.worktrees\macr-v0.6-dynamic-coordination'
 .\scripts\install-direct-chat-shortcut.ps1
 ```
 

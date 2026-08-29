@@ -109,7 +109,7 @@ class DirectUiTests(unittest.TestCase):
                 "delete-conversation",
             }.issubset(ids)
         )
-        self.assertIn("MACR 0.5.0a4", " ".join(parser.text))
+        self.assertIn("MACR 0.6.0a0", " ".join(parser.text))
         self.assertIn("Direct UI 0.1 alpha", " ".join(parser.text))
         resources = [
             attrs.get("src") or attrs.get("href")

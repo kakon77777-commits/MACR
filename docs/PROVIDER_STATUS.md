@@ -18,7 +18,7 @@ Updated: 2026-08-29
 
 ## Shared execution and Direct alpha status
 
-Delegated callable profiles enter the v0.5.0a4 CLI through a one-shot current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Direct Grok/Qwythos turns use a separate `DirectRuntime` contract with standing local-operator authority, the same fenced provider admission and accounting core, and provider-native full-history payloads without worker instructions.
+Delegated callable profiles enter the v0.6.0a0 CLI through the preserved one-shot current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Direct Grok/Qwythos turns keep the separate `DirectRuntime` contract; v0.6 coordination remains shadow/offline until later plan tasks and authority gates.
 
 Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. No provider generation was called while building or verifying the a4 UI. Direct Chat is locally executable; Codex/Claude Code host adapters, automatic routing, bounded fan-out, and Context Capsules remain unavailable.
 
