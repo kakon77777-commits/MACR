@@ -153,8 +153,8 @@ base_commit          = 42ea69479b4cc02c41fda9f0f6746c764cf9d2fa
 base_tree            = 605084f538c36435e3e23a04f91c2cefd8ef8260
 branch               = feature/macr-v0.5-direct-chat-ui
 worktree             = D:\Ai\work together\MACR\.worktrees\macr-v0.5-direct-chat-ui
-implementation_commit = dea89d7e7697dca7364ac31f13737a58b443a7b4
-implementation_tree   = 335d9c1f15f01984e4b8f1ee8995e32c340b8772
+implementation_commit = 0827fc5e0c9d11cd62674648e0fdd8e90a7bb663
+implementation_tree   = 507f58b47ba58edc9457b7b443ee92caf8598f64
 ```
 
 | Repository artifact | Bytes | SHA-256 |
@@ -171,5 +171,7 @@ The first real shortcut launch exposed two Windows credential-loader integration
 The credential/UI correction gate ran 302 tests with zero failures and the same two symbolic-link capability skips. It adds fail-closed Direct secret-shape validation, Qwythos-only degradation, disabled unavailable provider cards, and visible failed-turn projection that preserves composer text. The gate remained offline apart from the separately bounded `/models` authentication probe.
 
 Neo then authorized an operator-confirmed privacy deletion path for disposable or sensitive Direct tests. The implementation never deletes an existing conversation automatically. Exact uppercase `DELETE` is required; active runs refuse deletion. Under disposable D-drive tests, Candidate answer files were overwritten best-effort and removed, Direct system/user/assistant sentinels were absent from both the main SQLite file and WAL after `secure_delete=ON` plus a successful `wal_checkpoint(TRUNCATE)`, and content-free accounting remained readable. A `direct.conversation_deleted` event retains only conversation/run/message/Candidate counts, origin metadata, deletion mode, and secure-delete/WAL results. The complete gate increased to 308 tests with zero failures and the same two symbolic-link capability skips. This is application-layer privacy deletion, not a claim of forensic NAND erasure, provider-side deletion, snapshot removal, backup deletion, or removal of already materialized external copies.
+
+The operator subsequently authorized deletion of the exact current archived set: four of four total Direct conversations, 27 messages, and 16 terminal runs, with zero active runs, leases, or unsettled invocations. The first live batch exposed a Windows-only post-purge defect: one Candidate file had already been overwritten/removed when an empty-directory `rmdir` received `WinError 5`; the Direct database transaction had not begun, so all four conversation records remained. A RED/GREEN control now proves transient empty-directory locks are cosmetic after Candidate bytes are gone. Replaying the same exact archived set was idempotent for the already-absent file and completed all four deletions. Readback showed zero conversations/messages/Direct runs, zero Grok/Qwythos Candidate `answer.bin` files, a zero-byte Direct WAL, four content-free deletion tombstones, and 14 retained content-free Direct accounting rows. No non-archived or active conversation was in scope.
 
 This checkpoint remains an alpha candidate until the operator performs one bounded complete multi-turn Grok Direct conversation and one complete multi-turn Qwythos Direct conversation, including D-drive reload and accounting inspection. Transport-level cancellation and explicit late-result recovery are openly absent and remain beta gates. No merge, release, deployment, publication, v0.6 implementation, host-adapter authority, named resident identity, or delegated acceptance follows from this candidate.
