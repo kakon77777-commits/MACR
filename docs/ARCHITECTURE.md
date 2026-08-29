@@ -76,6 +76,7 @@ The a3 Checkpoint A shared core remains the immutable base. The a4 alpha impleme
 - Grok Direct records are `archive_only`; Qwythos Direct records are `eval_only`; both are `training_eligible=false`. The Qwythos installed model digest is pinned at conversation creation and its canonical weights are never modified.
 - Complete history is sent without automatic summary, compaction, truncation, routing, fallback, or retry. A local context estimate warns or refuses before provider use without dropping earlier turns.
 - Raw answer bytes enter the private Candidate Vault before a successful assistant message is committed. Rejected protocol observations retain safe usage/cost/finish/model evidence without entering conversation history.
+- Archive is reversible. Operator-confirmed permanent deletion is serialized against sends for the same conversation, refuses an active run, purges unmaterialized Candidate answer files, deletes Direct plaintext under SQLite `secure_delete`, truncates the Direct WAL, and appends only a content-free deletion event. Existing provider accounting and operational hashes remain immutable.
 
 ## Loopback Web boundary
 

@@ -32,7 +32,7 @@ Local startup smoke without model generation:
 .\scripts\macr.ps1 direct-chat --smoke
 ```
 
-The UI exposes only `grok` (`grok-4.6`) and `ollama_qwythos`. A blank system-prompt field produces no system message; nonblank content stays visible and is sent exactly once. Responses appear only after the provider completes. Conversation history, search, archive/restore, settings snapshots, cost metadata, and candidate captures remain on D:. See `docs/DIRECT_CHAT.md` for the manual two-provider acceptance run.
+The UI exposes only `grok` (`grok-4.6`) and `ollama_qwythos`. A blank system-prompt field produces no system message; nonblank content stays visible and is sent exactly once. Responses appear only after the provider completes. Conversation history, search, archive/restore, settings snapshots, cost metadata, and candidate captures remain on D:. Permanent privacy deletion requires exact `DELETE`, refuses active runs, removes Direct plaintext and Candidate files, enables SQLite `secure_delete`, and truncates the Direct WAL while retaining content-free accounting/audit metadata. See `docs/DIRECT_CHAT.md` for limits and the manual two-provider acceptance run.
 
 ## Provider profiles
 

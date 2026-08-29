@@ -72,6 +72,22 @@ D:\AI_RESIDENCE\AI_Runtime\macr-state\
 
 Conversation and settings databases are plaintext in UI 0.1 and record `encryption=none`. The browser never receives provider credentials, candidate file paths, authorization bodies, or remote error bodies. Operational/accounting databases contain content-free identity, authority, model, usage, cost, duration, state, byte count, and hash metadata; exact prompt/answer text stays in the private Direct database or Candidate Vault.
 
+## Archive and permanent deletion
+
+Archive is reversible. Archived conversations remain plaintext on D: and can be searched, opened, and restored when archived history is enabled.
+
+Permanent deletion is deliberately harder:
+
+1. select the conversation and press **永久刪除**;
+2. type exact uppercase `DELETE` in the browser confirmation;
+3. deletion refuses while that conversation has an active run;
+4. unmaterialized Candidate answer files for its runs are overwritten best-effort and removed;
+5. system prompt, user/assistant messages, Direct runs, and conversation row are deleted with SQLite `secure_delete=ON`;
+6. the Direct WAL must checkpoint and truncate successfully;
+7. the UI removes the thread and reports message/run/Candidate counts.
+
+MACR retains only content-free provider accounting, operational hashes/Candidate metadata, and a `direct.conversation_deleted` tombstone. Permanent deletion does not ask Grok or another provider to delete already transmitted data and cannot guarantee physical NAND erasure under SSD wear leveling. Filesystem snapshots, external backups, materialized copies, and provider retention require their own deletion controls. No current conversation is deleted automatically.
+
 ## Manual alpha acceptance
 
 The implementation gate is offline/local and does not spend Grok credit. The operator completes the remaining live acceptance from the UI:

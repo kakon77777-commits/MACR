@@ -62,6 +62,8 @@ D:\AI_RESIDENCE\AI_Runtime\macr-state\
 
 SQLite event and accounting databases contain bounded operational metadata, not prompts, candidate bytes, credentials, local input paths, or remote response bodies. Candidate files are create-once and referenced publicly by byte count and SHA-256 only. A transformed materialization cannot claim verbatim provenance.
 
+Direct archive is reversible and changes no content bytes. Permanent Direct deletion is a separate operator-confirmed path requiring exact `DELETE`. It refuses conversations with an active run, overwrites and removes unmaterialized Candidate answer files, deletes Direct conversation/message/run rows with SQLite `secure_delete=ON`, and requires a successful WAL `TRUNCATE` checkpoint. Content-free invocation accounting, operational hashes, Candidate metadata, and a deletion tombstone remain for cost/audit continuity. MACR does not claim forensic erasure from SSD wear-leveling, filesystem snapshots, external backups, provider retention, or already materialized external artifacts.
+
 Operational event payloads use required keys, reviewed field types, exact candidate-capture shape, and recursive key/value privacy guards. Acronym-bearing aliases and drive-relative/absolute or backslash/forward-UNC paths fail before persistence. WAL is configured during bounded bootstrap and verified on ordinary connections, avoiding concurrent journal-mode mutation during steady-state use.
 
 ## Legacy JSONL migration
