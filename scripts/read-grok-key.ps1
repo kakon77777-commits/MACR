@@ -32,8 +32,7 @@ if ($token.Length -lt 20 -or $token.Length -gt 4096 -or $token -match '\s') {
 }
 
 $legacyShape = $token -match '\Axai-[A-Za-z0-9_-]{20,}\z'
-$uuidShape = $token -match '\A[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\z'
-if (-not ($legacyShape -or $uuidShape)) {
+if (-not $legacyShape) {
     throw 'The configured Grok credential has an unsupported format.'
 }
 

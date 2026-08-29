@@ -28,7 +28,7 @@ def run_powershell(*arguments: str) -> subprocess.CompletedProcess[str]:
 
 
 class DirectLauncherScriptTests(unittest.TestCase):
-    def test_grok_key_loader_accepts_legacy_and_uuid_without_logging(self) -> None:
+    def test_grok_key_loader_accepts_secret_and_rejects_uuid_identifier(self) -> None:
         DEFAULT_TEST_ROOT.mkdir(parents=True, exist_ok=True)
         legacy_path = DEFAULT_TEST_ROOT / f"grok-legacy-{uuid.uuid4()}.txt"
         uuid_path = DEFAULT_TEST_ROOT / f"grok-uuid-{uuid.uuid4()}.txt"
@@ -48,17 +48,17 @@ class DirectLauncherScriptTests(unittest.TestCase):
             self.assertEqual(legacy.returncode, 0, legacy.stderr)
             self.assertEqual(legacy.stdout.rstrip("\r\n"), legacy_token)
 
-            current = run_powershell(
+            identifier = run_powershell(
                 "-File",
                 str(READ_KEY),
                 "-CredentialPath",
                 str(uuid_path),
             )
-            self.assertEqual(current.returncode, 0, current.stderr)
-            self.assertEqual(current.stdout.rstrip("\r\n"), uuid_token)
+            self.assertNotEqual(identifier.returncode, 0)
+            self.assertNotIn(uuid_token, identifier.stderr)
 
             escaped_script = str(READ_KEY).replace("'", "''")
-            escaped_path = str(uuid_path).replace("'", "''")
+            escaped_path = str(legacy_path).replace("'", "''")
             capture_command = (
                 "$value=& '"
                 + escaped_script
@@ -69,7 +69,7 @@ class DirectLauncherScriptTests(unittest.TestCase):
             )
             captured = run_powershell("-Command", capture_command)
             self.assertEqual(captured.returncode, 0, captured.stderr)
-            self.assertEqual(captured.stdout, uuid_token)
+            self.assertEqual(captured.stdout, legacy_token)
 
             invalid = run_powershell(
                 "-File",
@@ -96,6 +96,32 @@ class DirectLauncherScriptTests(unittest.TestCase):
         serialized = json.dumps(report)
         self.assertNotIn("xai-", serialized)
         self.assertNotIn("bootstrap", serialized.lower())
+
+    def test_start_script_keeps_qwythos_available_when_grok_key_is_invalid(self) -> None:
+        DEFAULT_TEST_ROOT.mkdir(parents=True, exist_ok=True)
+        identifier_path = DEFAULT_TEST_ROOT / f"grok-id-{uuid.uuid4()}.txt"
+        identifier_path.write_text(
+            "00000000-0000-4000-8000-000000000999",
+            encoding="utf-8",
+        )
+        try:
+            result = run_powershell(
+                "-File",
+                str(START),
+                "-DryRun",
+                "-CredentialPath",
+                str(identifier_path),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertFalse(report["grok_credential_usable"])
+            self.assertTrue(report["direct_service_would_start"])
+            self.assertNotIn(
+                "00000000-0000-4000-8000-000000000999",
+                result.stdout,
+            )
+        finally:
+            identifier_path.unlink(missing_ok=True)
 
     def test_shortcut_dry_run_and_real_file_have_no_secret_arguments(self) -> None:
         DEFAULT_TEST_ROOT.mkdir(parents=True, exist_ok=True)

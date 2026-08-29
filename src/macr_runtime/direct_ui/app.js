@@ -86,6 +86,7 @@ function renderProviders() {
     const label = PROVIDER_LABELS[providerId];
     const button = node("button", "provider-card");
     button.type = "button";
+    button.disabled = !health.ready;
     button.dataset.providerId = providerId;
     if (state.selectedProvider === providerId) button.classList.add("selected");
     const dot = node("span", `health-dot ${health.ready ? "ready" : ""}`.trim());
@@ -108,8 +109,17 @@ function renderProviders() {
 async function loadProviders() {
   const data = await request("/providers");
   state.providers = data.providers;
-  if (!state.selectedProvider) state.selectedProvider = "grok";
-  element("selected-provider-label").textContent = PROVIDER_LABELS[state.selectedProvider].name;
+  const selectedHealth = state.providers.find(
+    (item) => item.provider_id === state.selectedProvider,
+  );
+  if (!selectedHealth?.ready) {
+    state.selectedProvider = window.MacrDirectResult.defaultProvider(
+      state.providers,
+    );
+  }
+  element("selected-provider-label").textContent = state.selectedProvider
+    ? PROVIDER_LABELS[state.selectedProvider].name
+    : "沒有可用模型";
   renderProviders();
 }
 
@@ -241,10 +251,14 @@ async function sendMessage() {
       `/conversations/${state.currentConversation.conversation_id}/messages`,
       { method: "POST", body: { content } },
     );
-    input.value = "";
+    const presentation = window.MacrDirectResult.presentation(data.result);
     await openConversation(state.currentConversation.conversation_id);
-    const label = data.result.context_warning ? "完成 · Context 接近上限" : "完整回覆已投影";
-    stopGenerating(label);
+    stopGenerating(presentation.label);
+    if (!presentation.ok) {
+      showToast(presentation.label);
+      return;
+    }
+    input.value = "";
     await loadAccounting();
   } catch (error) {
     stopGenerating("本輪未完成");

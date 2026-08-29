@@ -24,7 +24,7 @@ On launch, the PowerShell entry point:
 5. clears the parent PowerShell environment value;
 6. opens the default browser with a one-time fragment bootstrap.
 
-The loader accepts only a single non-whitespace token in the historical `xai-...` form or the currently observed UUID form. The credential file must be an ordinary D-drive file, not a reparse point.
+The loader accepts only one bounded non-whitespace `xai-...` API secret. A UUID-shaped console identifier is not an API secret and is rejected locally. The credential file must be an ordinary D-drive file, not a reparse point. Missing or invalid Grok credentials disable only the Grok card; the service and local Qwythos remain available.
 
 The server shuts down after 30 idle minutes by default. Active requests and unsettled accounting keep it alive. Launching the shortcut again opens the existing instance when it is reachable.
 
@@ -47,6 +47,7 @@ The server shuts down after 30 idle minutes by default. Active requests and unse
 - Conversation dataset role is `archive_only`; local `training_eligible=false`.
 - The settings preference `provider_improvement_preference=allowed` is recorded, but it does not prove provider retention, deletion, or training behavior.
 - Provider-reported cost ticks are normalized and written to the shared AI-expense subledger. Missing cost remains explicitly unknown.
+- Failed turns show their sanitized failure type in the UI instead of appearing as an empty response.
 
 ### Qwythos
 

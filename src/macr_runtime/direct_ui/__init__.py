@@ -3,7 +3,9 @@ from __future__ import annotations
 from importlib.resources import files
 
 
-_ASSETS = frozenset({"index.html", "app.js", "style.css"})
+_ASSETS = frozenset(
+    {"index.html", "result_logic.js", "app.js", "style.css"}
+)
 
 
 def read_asset(name: str) -> bytes:

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string]$CredentialPath = 'D:\KEY\GROK.txt'
 )
 
 Set-StrictMode -Version Latest
@@ -18,6 +19,17 @@ if (-not (Test-Path -LiteralPath $credentialHelper -PathType Leaf)) {
     throw 'The configured xAI credential helper is missing.'
 }
 
+$xaiKey = $null
+$credentialUsable = $false
+try {
+    $xaiKey = (& $credentialHelper -CredentialPath $CredentialPath)
+    $credentialUsable = -not [string]::IsNullOrWhiteSpace($xaiKey)
+}
+catch {
+    $xaiKey = $null
+    $credentialUsable = $false
+}
+
 if ($DryRun) {
     [pscustomobject]@{
         status = 'direct_chat_launch_dry_run'
@@ -26,21 +38,24 @@ if ($DryRun) {
         credential_helper_present = $true
         python = $pythonCommand.Source
         hidden_child = $true
+        grok_credential_usable = $credentialUsable
+        direct_service_would_start = $true
         network_activity = $false
     } | ConvertTo-Json -Compress
+    $xaiKey = $null
     exit 0
 }
 
-$xaiKey = $null
 try {
-    $xaiKey = (& $credentialHelper -CredentialPath 'D:\KEY\GROK.txt')
-    if ([string]::IsNullOrWhiteSpace($xaiKey)) {
-        throw 'The xAI credential helper returned no credential.'
-    }
     $env:MACR_ROOT = $repoRoot
     $env:MACR_STATE_ROOT = $stateRoot
     $env:PYTHONPATH = Join-Path $repoRoot 'src'
-    $env:XAI_API_KEY = $xaiKey
+    if ($credentialUsable) {
+        $env:XAI_API_KEY = $xaiKey
+    }
+    else {
+        Remove-Item Env:XAI_API_KEY -ErrorAction SilentlyContinue
+    }
 
     $process = Start-Process `
         -FilePath $pythonCommand.Source `

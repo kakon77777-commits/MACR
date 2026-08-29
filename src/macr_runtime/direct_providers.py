@@ -23,6 +23,7 @@ from .providers.ollama import OLLAMA_LOOPBACK_BASE_URL, _resolve_keep_alive
 
 _QWYTHOS_MODEL = "hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_XAI_SECRET = re.compile(r"^xai-[A-Za-z0-9_-]{20,4092}$")
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,10 @@ class GrokDirectAdapter:
         if not value:
             raise ProviderUnavailableError(
                 f"provider grok is missing environment variable {name}"
+            )
+        if not _XAI_SECRET.fullmatch(value):
+            raise ProviderUnavailableError(
+                "provider grok credential has an invalid format"
             )
         return value
 

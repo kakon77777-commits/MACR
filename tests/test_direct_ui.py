@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import http.client
+import json
+import subprocess
 import threading
 import unittest
 from html.parser import HTMLParser
+from pathlib import Path
 
 from macr_runtime.direct_server import create_direct_server
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class MinimalRuntime:
@@ -78,6 +84,7 @@ class DirectUiTests(unittest.TestCase):
                 "text/css"
             )
         )
+        self.assertEqual(self.fetch("/result_logic.js")[0], 200)
         self.assertEqual(self.fetch("/missing.js")[0], 404)
 
     def test_html_exposes_accessible_direct_chat_regions_and_only_local_assets(self) -> None:
@@ -108,7 +115,10 @@ class DirectUiTests(unittest.TestCase):
             for tag, attrs in parser.tags
             if tag in {"script", "link"}
         ]
-        self.assertEqual(resources, ["/style.css", "/app.js"])
+        self.assertEqual(
+            resources,
+            ["/style.css", "/result_logic.js", "/app.js"],
+        )
         self.assertNotIn("http://", html)
         self.assertNotIn("https://", html)
 
@@ -124,6 +134,55 @@ class DirectUiTests(unittest.TestCase):
         self.assertIn("textContent", javascript)
         self.assertNotIn("EventSource", javascript)
         self.assertNotIn("WebSocket", javascript)
+
+    def test_failed_turn_projection_is_visible_and_preserves_input(self) -> None:
+        logic = ROOT / "src" / "macr_runtime" / "direct_ui" / "result_logic.js"
+        command = (
+            "const fs=require('fs');"
+            "eval(fs.readFileSync(process.argv[1],'utf8'));"
+            "const value={presentation:globalThis.MacrDirectResult.presentation("
+            "JSON.parse(process.argv[2])),defaultProvider:"
+            "globalThis.MacrDirectResult.defaultProvider(JSON.parse(process.argv[3]))};"
+            "process.stdout.write(JSON.stringify(value));"
+        )
+        result = subprocess.run(
+            [
+                "node",
+                "-e",
+                command,
+                str(logic),
+                json.dumps(
+                    {
+                        "status": "failed_after_dispatch",
+                        "failure_type": "ProviderUnavailableError",
+                        "context_warning": False,
+                    }
+                ),
+                json.dumps(
+                    [
+                        {"provider_id": "grok", "ready": False},
+                        {"provider_id": "ollama_qwythos", "ready": True},
+                    ]
+                ),
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout),
+            {
+                "presentation": {
+                    "ok": False,
+                    "label": "本輪失敗 · ProviderUnavailableError",
+                    "preserveInput": True,
+                },
+                "defaultProvider": "ollama_qwythos",
+            },
+        )
 
 
 if __name__ == "__main__":

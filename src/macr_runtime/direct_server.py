@@ -304,6 +304,10 @@ def _handler_class(state: _DirectServerState):
 
             assets = {
                 "/": ("index.html", "text/html; charset=utf-8"),
+                "/result_logic.js": (
+                    "result_logic.js",
+                    "text/javascript; charset=utf-8",
+                ),
                 "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                 "/style.css": ("style.css", "text/css; charset=utf-8"),
             }

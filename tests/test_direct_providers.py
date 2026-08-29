@@ -22,6 +22,7 @@ from macr_runtime.execution import ProviderState
 
 MODEL = "hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M"
 DIGEST = "c" * 64
+VALID_XAI_KEY = "xai-" + ("A" * 24)
 
 
 class FakeTransport:
@@ -160,7 +161,7 @@ class DirectProviderTests(unittest.TestCase):
         adapter = GrokDirectAdapter(
             grok_config(),
             transport=transport,
-            environ={"XAI_API_KEY": "xai-test-secret"},
+            environ={"XAI_API_KEY": VALID_XAI_KEY},
             monotonic=iter((10.0, 10.25)).__next__,
         )
         messages = (
@@ -188,7 +189,10 @@ class DirectProviderTests(unittest.TestCase):
         self.assertNotIn("MACR worker", serialized)
         self.assertNotIn("evidence", serialized.lower())
         self.assertNotIn("tools", call["payload"])
-        self.assertEqual(call["headers"]["Authorization"], "Bearer xai-test-secret")
+        self.assertEqual(
+            call["headers"]["Authorization"],
+            f"Bearer {VALID_XAI_KEY}",
+        )
         self.assertIsNone(reply.validation_error)
         self.assertEqual(reply.observation.answer_bytes, b"Grok answer")
         self.assertEqual(reply.observation.model, "grok-4.6")
@@ -196,14 +200,14 @@ class DirectProviderTests(unittest.TestCase):
         self.assertEqual(reply.observation.usage.reasoning_tokens, 7)
         self.assertEqual(reply.observation.currency_cost_usd, 0.0003)
         self.assertEqual(reply.observation.duration_ms, 250)
-        self.assertNotIn("xai-test-secret", str(reply.to_public_dict()))
+        self.assertNotIn(VALID_XAI_KEY, str(reply.to_public_dict()))
 
     def test_blank_system_prompt_means_no_system_message(self) -> None:
         transport = FakeTransport(post_response=grok_response())
         GrokDirectAdapter(
             grok_config(),
             transport=transport,
-            environ={"XAI_API_KEY": "xai-test-secret"},
+            environ={"XAI_API_KEY": VALID_XAI_KEY},
         ).invoke(
             (DirectMessage("user", "question"),),
             operator_managed_settings(),
@@ -222,7 +226,7 @@ class DirectProviderTests(unittest.TestCase):
                 reply = GrokDirectAdapter(
                     grok_config(),
                     transport=FakeTransport(post_response=response),
-                    environ={"XAI_API_KEY": "xai-test-secret"},
+                    environ={"XAI_API_KEY": VALID_XAI_KEY},
                 ).invoke(
                     (DirectMessage("user", "question"),),
                     operator_managed_settings(),
@@ -239,6 +243,25 @@ class DirectProviderTests(unittest.TestCase):
             environ={},
         )
         with self.assertRaisesRegex(ProviderUnavailableError, "XAI_API_KEY"):
+            adapter.invoke(
+                (DirectMessage("user", "question"),),
+                operator_managed_settings(),
+            )
+        self.assertEqual(transport.posts, [])
+
+    def test_grok_uuid_identifier_is_not_accepted_as_an_api_secret(self) -> None:
+        transport = FakeTransport(post_response=grok_response())
+        adapter = GrokDirectAdapter(
+            grok_config(),
+            transport=transport,
+            environ={
+                "XAI_API_KEY": "00000000-0000-4000-8000-000000000999"
+            },
+        )
+        health = adapter.health()
+        self.assertFalse(health.ready)
+        self.assertEqual(health.status, "configuration_incomplete")
+        with self.assertRaisesRegex(ProviderUnavailableError, "format"):
             adapter.invoke(
                 (DirectMessage("user", "question"),),
                 operator_managed_settings(),
@@ -323,7 +346,7 @@ class DirectProviderTests(unittest.TestCase):
                 "grok": FakeTransport(post_response=grok_response()),
                 "ollama_qwythos": FakeTransport(get_response=tags_response()),
             },
-            environ={"XAI_API_KEY": "xai-test-secret"},
+            environ={"XAI_API_KEY": VALID_XAI_KEY},
         )
         self.assertEqual(registry.provider_ids(), ("grok", "ollama_qwythos"))
         self.assertIsInstance(registry.get("grok"), GrokDirectAdapter)
@@ -333,14 +356,14 @@ class DirectProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigurationError, "requires both"):
             DirectProviderRegistry.from_configs(
                 (grok_config(),),
-                environ={"XAI_API_KEY": "xai-test-secret"},
+                environ={"XAI_API_KEY": VALID_XAI_KEY},
             )
 
     def test_message_sequence_rejects_hidden_or_invalid_shapes(self) -> None:
         adapter = GrokDirectAdapter(
             grok_config(),
             transport=FakeTransport(post_response=grok_response()),
-            environ={"XAI_API_KEY": "xai-test-secret"},
+            environ={"XAI_API_KEY": VALID_XAI_KEY},
         )
         invalid = (
             (),

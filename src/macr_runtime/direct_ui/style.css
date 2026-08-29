@@ -197,6 +197,8 @@ select:focus {
 .provider-card:hover,
 .provider-card.selected { border-color: rgba(167, 229, 212, 0.42); }
 .provider-card.selected { background: rgba(71, 104, 105, 0.25); }
+.provider-card:disabled { opacity: 0.48; cursor: not-allowed; }
+.provider-card:disabled:hover { border-color: var(--line); }
 
 .health-dot {
   width: 8px;
