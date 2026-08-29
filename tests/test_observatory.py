@@ -182,6 +182,45 @@ class ModelObservatoryTests(unittest.TestCase):
 
         self.assertEqual(snapshot_count, 0)
 
+    def test_repeat_catalog_ingest_keeps_first_lineage_and_adds_history(self) -> None:
+        class ChangingProvider(FixtureProvider):
+            def __init__(self, observed_at: str, context_tokens: int) -> None:
+                self.observed_at = observed_at
+                self.context_tokens = context_tokens
+
+            def snapshot(self, requested) -> DiscoverySnapshot:
+                document = json.loads(RAW)
+                document["data"][0]["context_tokens"] = self.context_tokens
+                return DiscoverySnapshot.from_bytes(
+                    "fixture_models",
+                    self.observed_at,
+                    requested,
+                    canonical_json_bytes(document),
+                    "fixture-v1",
+                )
+
+        with d_drive_tempdir() as temp:
+            store = ObservatoryDatabase(
+                temp / "observatory.sqlite3",
+                temp / "snapshots",
+            )
+            observatory = ModelObservatory(store, FixtureNormalizer())
+            first = observatory.ingest(
+                ChangingProvider("2026-08-29T00:00:00+00:00", 131072),
+                query(),
+            )
+            second = observatory.ingest(
+                ChangingProvider("2026-08-30T00:00:00+00:00", 262144),
+                query(),
+            )
+            subject_id = first.subject_ids[0]
+            subject = store.read_model_subject(subject_id)
+            history = store.read_observations(subject_id)
+
+        self.assertEqual(first.subject_ids, second.subject_ids)
+        self.assertEqual(subject.first_seen_snapshot_id, first.snapshot_id)
+        self.assertEqual(len(history), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

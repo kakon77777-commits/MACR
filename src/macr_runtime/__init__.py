@@ -37,6 +37,7 @@ from .planning_contracts import (
 )
 from .observatory_db import ObservatoryDatabase
 from .observatory import IngestReport, ModelObservatory
+from .model_passport import ModelPassport, ModelPassportProjector
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -88,6 +89,8 @@ __all__ = [
     "MacrRuntime",
     "ModelSubject",
     "ModelObservatory",
+    "ModelPassport",
+    "ModelPassportProjector",
     "OperatorPolicyProfile",
     "ObservatoryDatabase",
     "MaterializationState",

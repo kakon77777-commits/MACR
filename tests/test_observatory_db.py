@@ -193,6 +193,37 @@ class ObservatoryDatabaseTests(unittest.TestCase):
         self.assertEqual(observation, repeated)
         self.assertEqual(observation.observed_at, "2026-08-29T00:00:00+00:00")
 
+    def test_repeat_subject_preserves_original_first_seen_snapshot(self) -> None:
+        with d_drive_tempdir() as temp:
+            store = ObservatoryDatabase(
+                temp / "observatory.sqlite3",
+                temp / "snapshots",
+            )
+            first_snapshot = store.append_snapshot(
+                snapshot_meta(),
+                raw_bytes=b'{"version":1}',
+            )
+            later_meta = {
+                **snapshot_meta(),
+                "observed_at": "2026-08-30T00:00:00+00:00",
+            }
+            later_snapshot = store.append_snapshot(
+                later_meta,
+                raw_bytes=b'{"version":2}',
+            )
+            first_subject = make_subject(first_snapshot.snapshot_id)
+            later_subject = make_subject(later_snapshot.snapshot_id)
+
+            first_record = store.append_model_subject(first_subject)
+            repeated_record = store.append_model_subject(later_subject)
+
+        self.assertEqual(first_subject.subject_id, later_subject.subject_id)
+        self.assertEqual(first_record, repeated_record)
+        self.assertEqual(
+            repeated_record.first_seen_snapshot_id,
+            first_snapshot.snapshot_id,
+        )
+
     def test_evidence_decisions_and_invalidations_are_immutable_records(self) -> None:
         qualification = "c" * 64
         with d_drive_tempdir() as temp:

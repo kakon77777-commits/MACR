@@ -527,13 +527,22 @@ class ObservatoryDatabase:
 
     def append_model_subject(self, subject: ModelSubject) -> ModelSubjectRecord:
         record = self._subject_record(subject)
-        self._append_row(
-            "model_subjects",
-            "subject_id",
-            record.subject_id,
-            record.__dict__,
-        )
-        return record
+        connection = self.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            persisted = self._append_subject_connection(connection, record)
+            connection.commit()
+            return persisted
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ObservatoryConflict(
+                "subject_id conflicts with observatory references"
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     @staticmethod
     def _subject_record(subject: ModelSubject) -> ModelSubjectRecord:
@@ -655,15 +664,12 @@ class ObservatoryDatabase:
         )
 
         connection = self.connect()
+        persisted_subjects: list[ModelSubjectRecord] = []
         try:
             connection.execute("BEGIN IMMEDIATE")
             for record in subject_records:
-                self._append_row_connection(
-                    connection,
-                    "model_subjects",
-                    "subject_id",
-                    record.subject_id,
-                    record.__dict__,
+                persisted_subjects.append(
+                    self._append_subject_connection(connection, record)
                 )
             for record in route_records:
                 self._append_row_connection(
@@ -705,7 +711,7 @@ class ObservatoryDatabase:
             raise
         finally:
             connection.close()
-        return subject_records, route_records, observation_records
+        return tuple(persisted_subjects), route_records, observation_records
 
     def append_evidence(self, metadata: Mapping[str, Any]) -> EvidenceRecord:
         data = _mapping("evidence", metadata)
@@ -851,6 +857,18 @@ class ObservatoryDatabase:
         row = self._read_one("execution_routes", "route_id", route_id)
         return ExecutionRouteRecord(**dict(row)) if row is not None else None
 
+    def read_routes_for_subject(
+        self,
+        subject_id: str,
+    ) -> tuple[ExecutionRouteRecord, ...]:
+        rows = self._read_many(
+            "execution_routes",
+            "model_subject_id",
+            _digest("subject_id", subject_id),
+            "route_id",
+        )
+        return tuple(ExecutionRouteRecord(**dict(row)) for row in rows)
+
     def read_observations(
         self,
         subject_id: str,
@@ -871,6 +889,18 @@ class ObservatoryDatabase:
             "evidence_items",
             "qualification_key",
             _digest("qualification_key", qualification_key),
+            "observed_at, evidence_id",
+        )
+        return tuple(EvidenceRecord(**dict(row)) for row in rows)
+
+    def read_evidence_for_subject(
+        self,
+        subject_id: str,
+    ) -> tuple[EvidenceRecord, ...]:
+        rows = self._read_many(
+            "evidence_items",
+            "subject_digest",
+            _digest("subject_id", subject_id),
             "observed_at, evidence_id",
         )
         return tuple(EvidenceRecord(**dict(row)) for row in rows)
@@ -954,6 +984,33 @@ class ObservatoryDatabase:
             raise ObservatoryConflict(
                 f"{id_column} conflicts with append-only observatory state"
             )
+
+    @staticmethod
+    def _append_subject_connection(
+        connection: sqlite3.Connection,
+        record: ModelSubjectRecord,
+    ) -> ModelSubjectRecord:
+        existing = connection.execute(
+            "SELECT * FROM model_subjects WHERE subject_id = ?",
+            (record.subject_id,),
+        ).fetchone()
+        if existing is None:
+            connection.execute(
+                "INSERT INTO model_subjects("
+                "subject_id, canonical_json, first_seen_snapshot_id"
+                ") VALUES (?, ?, ?)",
+                (
+                    record.subject_id,
+                    record.canonical_json,
+                    record.first_seen_snapshot_id,
+                ),
+            )
+            return record
+        if existing["canonical_json"] != record.canonical_json:
+            raise ObservatoryConflict(
+                "subject_id conflicts with append-only observatory state"
+            )
+        return ModelSubjectRecord(**dict(existing))
 
     def _read_one(
         self,
