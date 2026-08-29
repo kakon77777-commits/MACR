@@ -14,6 +14,7 @@ from tests.support import d_drive_tempdir
 
 
 PLAN = "a" * 64
+OTHER_PLAN = "f" * 64
 MEMBER_A = "b" * 64
 MEMBER_B = "c" * 64
 
@@ -96,6 +97,36 @@ class TargetLeaseTests(unittest.TestCase):
                     "src/a.py",
                     alternative_group="implementation-alternatives",
                     materialize_automatically=True,
+                    ttl_seconds=60,
+                )
+
+    def test_named_alternative_group_cannot_cross_plan_boundary(self) -> None:
+        now = datetime(2026, 8, 30, 1, 0, tzinfo=timezone.utc)
+        with d_drive_tempdir() as temp:
+            root = temp / "repo"
+            root.mkdir()
+            repository = RepositoryIdentity.create(root, "d" * 64)
+            leases = TargetLeaseStore(
+                temp / "runtime.sqlite3",
+                repository,
+                now=Clock(now),
+            )
+            leases.acquire(
+                PLAN,
+                MEMBER_A,
+                "src/a.py",
+                alternative_group="implementation-alternatives",
+                materialize_automatically=False,
+                ttl_seconds=60,
+            )
+
+            with self.assertRaisesRegex(DispatchLeaseError, "plan"):
+                leases.acquire(
+                    OTHER_PLAN,
+                    MEMBER_B,
+                    "src/a.py",
+                    alternative_group="implementation-alternatives",
+                    materialize_automatically=False,
                     ttl_seconds=60,
                 )
 

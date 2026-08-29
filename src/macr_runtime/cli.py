@@ -679,19 +679,30 @@ def _probe_plan(plan_path: str) -> int:
     return 0
 
 
-def _probe_replay(manifest_path: str, result_path: str) -> int:
+def _probe_replay(
+    manifest_path: str,
+    result_path: str,
+    probe_pack_path: str,
+) -> int:
     try:
         manifest_document = strict_json_bytes(Path(manifest_path).read_bytes())
         result_document = strict_json_bytes(Path(result_path).read_bytes())
+        probe_pack_document = strict_json_bytes(
+            Path(probe_pack_path).read_bytes()
+        )
         if not isinstance(result_document, list):
             raise ValueError("differential replay results must be an array")
         manifest = DifferentialRunManifest.from_dict(manifest_document)
+        from .differential import DifferentialProbePack
+
+        probe_pack = DifferentialProbePack.from_dict(probe_pack_document)
         comparison = compare_differential_results(
             manifest,
             tuple(
                 DifferentialCandidateResult.from_dict(item)
                 for item in result_document
             ),
+            probe_pack,
         )
     except (OSError, TypeError, ValueError, MacrError) as exc:
         print(
@@ -929,6 +940,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     probe_replay.add_argument("manifest")
     probe_replay.add_argument("results")
+    probe_replay.add_argument("probe_pack")
 
     glm_preflight = sub.add_parser(
         "glm-preflight",
@@ -1043,7 +1055,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "probe-plan":
         return _probe_plan(args.input)
     if args.command == "probe-replay":
-        return _probe_replay(args.manifest, args.results)
+        return _probe_replay(
+            args.manifest,
+            args.results,
+            args.probe_pack,
+        )
     if args.command == "glm-preflight":
         return _glm_preflight(
             args.task_path,

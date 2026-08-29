@@ -19,6 +19,7 @@ from .batch_authority import (
 from .canonical import canonical_json_bytes, sha256_id
 from .errors import DispatchAuthorizationError, DispatchLeaseError
 from .runtime_db import RuntimeDatabase
+from .target_leases import normalize_repository_relative_path
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -103,14 +104,7 @@ class TargetClaim:
         alternative_group: str | None = None,
         materialize_automatically: bool = True,
     ) -> "TargetClaim":
-        if not isinstance(path, str) or not path.strip() or "\x00" in path:
-            raise ValueError("target path must be a non-empty string")
-        normalized = path.strip().replace("\\", "/")
-        while "//" in normalized:
-            normalized = normalized.replace("//", "/")
-        if normalized.startswith("./"):
-            normalized = normalized[2:]
-        normalized = normalized.casefold()
+        normalized = normalize_repository_relative_path(path)
         return cls(
             target_key=sha256_id("plan_target_path_v1", {"path": normalized}),
             alternative_group=alternative_group,

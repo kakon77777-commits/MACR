@@ -136,8 +136,12 @@ class DifferentialTests(unittest.TestCase):
     def test_comparison_uses_candidate_ids_not_model_labels_and_replays_stably(self) -> None:
         run = manifest()
         observations = results(run)
-        first = compare_differential_results(run, observations)
-        second = compare_differential_results(run, tuple(reversed(observations)))
+        first = compare_differential_results(run, observations, pack())
+        second = compare_differential_results(
+            run,
+            tuple(reversed(observations)),
+            pack(),
+        )
 
         self.assertEqual(first.replay_digest, second.replay_digest)
         self.assertEqual(first.public_rows, second.public_rows)
@@ -159,7 +163,7 @@ class DifferentialTests(unittest.TestCase):
         for message, values in cases:
             with self.subTest(message=message):
                 with self.assertRaisesRegex(ValueError, message):
-                    compare_differential_results(run, values)
+                    compare_differential_results(run, values, pack())
         over = dataclasses_replace(
             observations[0],
             observed_cost_usd=0.006,
@@ -168,6 +172,7 @@ class DifferentialTests(unittest.TestCase):
             compare_differential_results(
                 run,
                 (over,) + observations[1:],
+                pack(),
             )
 
     def test_probe_pack_and_route_cost_policy_are_exact(self) -> None:
@@ -207,7 +212,7 @@ class DifferentialTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cost policy"):
             DifferentialRunManifest.from_dict(tampered)
 
-        comparison = compare_differential_results(run, results(run))
+        comparison = compare_differential_results(run, results(run), pack())
         with self.assertRaisesRegex(ValueError, "model label"):
             dataclasses.replace(
                 comparison.public_rows[0],
@@ -244,11 +249,17 @@ class DifferentialTests(unittest.TestCase):
                 json.dumps([item.to_dict() for item in results(run)]),
                 encoding="utf-8",
             )
+            pack_path = temp / "probe-pack.json"
+            pack_path.write_text(
+                json.dumps(pack().to_dict()),
+                encoding="utf-8",
+            )
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
                 replay_status = _probe_replay(
                     str(manifest_path),
                     str(result_path),
+                    str(pack_path),
                 )
             replayed = json.loads(output.getvalue())
 
@@ -258,6 +269,20 @@ class DifferentialTests(unittest.TestCase):
         self.assertFalse(replayed["dispatch_performed"])
         self.assertIn("probe-plan", build_parser()._subparsers._group_actions[0].choices)
         self.assertIn("probe-replay", build_parser()._subparsers._group_actions[0].choices)
+
+    def test_replay_rejects_self_consistent_manifest_that_omits_pack_case(self) -> None:
+        official = pack()
+        original = manifest()
+        forged = dataclasses.replace(
+            original,
+            members=tuple(
+                item for item in original.members if item.case_id == "exact-a"
+            ),
+        )
+        forged_results = results(forged)
+
+        with self.assertRaisesRegex(ValueError, "probe pack"):
+            compare_differential_results(forged, forged_results, official)
 
 
 def dataclasses_replace(value, **changes):

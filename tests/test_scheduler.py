@@ -85,6 +85,24 @@ def _authorize(
 
 
 class PlanQueueTests(unittest.TestCase):
+    def test_target_claim_rejects_unsafe_paths_and_canonicalizes_aliases(self) -> None:
+        self.assertEqual(
+            TargetClaim.for_path(r"Src\Module.py").target_key,
+            TargetClaim.for_path("src/module.py").target_key,
+        )
+        for target in (
+            "src/../module.py",
+            "../module.py",
+            r"D:\module.py",
+            r"\\server\share\module.py",
+            "/absolute/module.py",
+            "src/NUL.txt",
+            "src/module.py:stream",
+        ):
+            with self.subTest(target=target):
+                with self.assertRaisesRegex(ValueError, "target"):
+                    TargetClaim.for_path(target)
+
     def test_queue_lifecycle_is_fenced_and_one_attempt_only(self) -> None:
         now = datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)

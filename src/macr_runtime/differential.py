@@ -282,6 +282,7 @@ class DifferentialManifestMember:
     candidate_id: str
     member_digest: str
     task_digest: str
+    context_class: str
     qualification_key: str
     route_proposal_digest: str
     route_id: str
@@ -290,6 +291,11 @@ class DifferentialManifestMember:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "case_id", _identifier("case_id", self.case_id))
+        object.__setattr__(
+            self,
+            "context_class",
+            _identifier("context_class", self.context_class),
+        )
         for name in (
             "candidate_id",
             "member_digest",
@@ -316,6 +322,7 @@ class DifferentialManifestMember:
             "candidate_id": self.candidate_id,
             "member_digest": self.member_digest,
             "task_digest": self.task_digest,
+            "context_class": self.context_class,
             "qualification_key": self.qualification_key,
             "route_proposal_digest": self.route_proposal_digest,
             "route_id": self.route_id,
@@ -330,6 +337,7 @@ class DifferentialManifestMember:
             "candidate_id",
             "member_digest",
             "task_digest",
+            "context_class",
             "qualification_key",
             "route_proposal_digest",
             "route_id",
@@ -431,6 +439,7 @@ class DifferentialRunManifest:
                 "case_id": item.case_id,
                 "candidate_id": item.candidate_id,
                 "task_digest": item.task_digest,
+                "context_class": item.context_class,
                 "qualification_key": item.qualification_key,
                 "route_proposal_digest": item.route_proposal_digest,
                 "route_id": item.route_id,
@@ -547,6 +556,7 @@ class DifferentialRunManifest:
                     "case_id": case.case_id,
                     "candidate_id": candidate_id,
                     "task_digest": case.task_digest,
+                    "context_class": case.context_class,
                     "qualification_key": route.qualification_key,
                     "route_proposal_digest": route.route_proposal_digest,
                     "route_id": route.route_id,
@@ -767,9 +777,32 @@ class DifferentialComparison:
 def compare_differential_results(
     manifest: DifferentialRunManifest,
     results: Iterable[DifferentialCandidateResult],
+    probe_pack: DifferentialProbePack,
 ) -> DifferentialComparison:
     if not isinstance(manifest, DifferentialRunManifest):
         raise ValueError("manifest must be a DifferentialRunManifest")
+    if not isinstance(probe_pack, DifferentialProbePack):
+        raise ValueError("probe_pack must be a DifferentialProbePack")
+    if probe_pack.pack_digest != manifest.probe_pack_digest:
+        raise ValueError("differential manifest does not match exact probe pack")
+    cases = {item.case_id: item for item in probe_pack.cases}
+    manifest_case_ids = {item.case_id for item in manifest.members}
+    if manifest_case_ids != set(cases):
+        raise ValueError(
+            "differential manifest case matrix does not match exact probe pack"
+        )
+    for member in manifest.members:
+        probe_case = cases[member.case_id]
+        if (
+            member.task_digest != probe_case.task_digest
+            or member.context_class != probe_case.context_class
+            or member.verifier_graph_digest
+            != probe_case.verifier_graph_digest
+            or member.cost_ceiling_usd > probe_case.cost_ceiling_usd + 1e-12
+        ):
+            raise ValueError(
+                "differential manifest member does not match exact probe pack"
+            )
     if isinstance(results, (str, bytes)):
         raise ValueError("results must contain differential results")
     observations = tuple(results)

@@ -61,6 +61,33 @@ class TargetLeaseState(str, Enum):
     RECONCILIATION_REQUIRED = "reconciliation_required"
 
 
+def normalize_repository_relative_path(target_path: str) -> str:
+    """Return one Windows-safe repository-relative collision identity."""
+
+    if not isinstance(target_path, str) or not target_path.strip():
+        raise ValueError("target path must be a non-empty relative path")
+    text = unicodedata.normalize("NFC", target_path)
+    if text != text.strip():
+        raise ValueError("target path may not have outer whitespace")
+    if (
+        "\x00" in text
+        or text.startswith(("/", "\\"))
+        or _WINDOWS_DRIVE.match(text)
+        or ":" in text
+    ):
+        raise ValueError("target path must be repository-relative")
+    parts = text.replace("\\", "/").split("/")
+    if any(
+        not part
+        or part in {".", ".."}
+        or part.endswith((" ", "."))
+        or part.split(".", 1)[0].upper() in _WINDOWS_RESERVED
+        for part in parts
+    ):
+        raise ValueError("target path contains unsafe components")
+    return "/".join(part.casefold() for part in parts)
+
+
 @dataclass(frozen=True)
 class NormalizedTarget:
     relative_path: str
@@ -143,31 +170,13 @@ class RepositoryIdentity:
         )
 
     def normalize_target(self, target_path: str) -> NormalizedTarget:
-        if not isinstance(target_path, str) or not target_path.strip():
-            raise ValueError("target path must be a non-empty relative path")
-        text = unicodedata.normalize("NFC", target_path.strip())
-        if (
-            "\x00" in text
-            or text.startswith(("/", "\\"))
-            or _WINDOWS_DRIVE.match(text)
-            or ":" in text
-        ):
-            raise ValueError("target path must be repository-relative")
-        parts = text.replace("\\", "/").split("/")
-        if any(
-            not part
-            or part in {".", ".."}
-            or part.endswith((" ", "."))
-            or part.split(".", 1)[0].upper() in _WINDOWS_RESERVED
-            for part in parts
-        ):
-            raise ValueError("target path contains unsafe components")
+        normalized = normalize_repository_relative_path(target_path)
+        parts = normalized.split("/")
         candidate = self.root.joinpath(*parts).resolve(strict=False)
         try:
             candidate.relative_to(self.root)
         except ValueError as exc:
             raise ValueError("target path escapes repository root") from exc
-        normalized = "/".join(part.casefold() for part in parts)
         return NormalizedTarget(
             relative_path=normalized,
             target_key=sha256_id(
@@ -327,6 +336,10 @@ class TargetLeaseStore:
                     ):
                         raise DispatchLeaseError(
                             "target ownership requires reconciliation"
+                        )
+                    if any(row["plan_digest"] != plan for row in active):
+                        raise DispatchLeaseError(
+                            "target ownership belongs to another plan"
                         )
                     groups = {row["alternative_group"] for row in active}
                     if (
@@ -575,4 +588,5 @@ __all__ = [
     "TargetLease",
     "TargetLeaseState",
     "TargetLeaseStore",
+    "normalize_repository_relative_path",
 ]
