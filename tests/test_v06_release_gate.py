@@ -103,6 +103,19 @@ class V06ReleaseGateTests(unittest.TestCase):
         ):
             with self.subTest(checkpoint_marker=marker):
                 self.assertIn(marker, checkpoint)
+        release = (ROOT / "docs" / "V06_RELEASE.md").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "v0.6.0a0",
+            "feature/macr-v0.5-direct-chat-ui",
+            "publication branch   main",
+            "offline candidate",
+            "no configured Git remote",
+            "unexecuted live gate",
+        ):
+            with self.subTest(release_marker=marker):
+                self.assertIn(marker, release)
 
 
 if __name__ == "__main__":

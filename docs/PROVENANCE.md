@@ -217,3 +217,7 @@ The first verifier/docs/runbook subject `ca374ec1be30d675dc10d62354c7f5b44d7dfb9
 ## v0.6 repaired final offline gate evidence
 
 Commit `6c66eff1ce200c4d07506310794ea9ac89a42895` / tree `5172fb7b0d72d3a733ec06bf7aa1d7f598b68e2f` closes cross-plan target alternatives, pre-digest T1 path aliases, and actual probe-pack replay binding. The primary seat ran the clean gate twice with byte-identical summary digest `38b6087445be0e0232bf4f415d87ccd7fe2adbb4dc5ddc18af80ff5b0a680832`: 443 tests, two existing platform skips, 106 named controls, schemas 6/2/2, census zero, network false, provider generation false. The same authorized twin independently reproduced all three closures, ran 3 exact regressions, 24 adjacent tests, and the complete gate; Critical 0, Important 0. The live runbook remains unexecuted.
+
+## v0.6.0a0 local release decision
+
+On 2026-08-30 Neo explicitly authorized updating, merging, and publishing the verified v0.6 work. The release remains version `0.6.0a0` and is tagged `v0.6.0a0` only after merged-result verification. It is an offline candidate, not a claim that the live runbook passed. At the time of authorization this repository had no configured remote, so local merge/tag and external push are distinct states; no external publication is inferred.
