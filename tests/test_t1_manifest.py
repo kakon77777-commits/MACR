@@ -87,7 +87,7 @@ def manifest() -> T1ExecutionManifest:
         members=(member(0), member(1), member(2)),
         aggregate_cost_ceiling_usd=0.015,
         campaign_cost_ceiling_usd=0.020,
-        expires_at="2026-08-30T12:00:00+00:00",
+        expires_at="2099-01-01T00:00:00+00:00",
         authorized_dispatchers=("worker-1", "worker-2", "worker-3"),
     )
 

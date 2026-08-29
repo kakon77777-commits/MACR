@@ -276,6 +276,21 @@ class PlanQueueTests(unittest.TestCase):
             self.assertEqual(record.state, QueueMemberState.RECONCILIATION_REQUIRED)
             self.assertEqual(record.attempts, 1)
 
+            resolved = queue.resolve_reconciliation(
+                claim.member_id,
+                terminal_state=QueueMemberState.FAILED,
+                reconciliation_evidence_digest="d" * 64,
+                observed_cost_usd=0.001,
+            )
+
+            self.assertEqual(resolved.state, QueueMemberState.FAILED)
+            self.assertEqual(
+                queue.state_counts()["reconciliation_required"],
+                0,
+            )
+            with self.assertRaisesRegex(DispatchAuthorizationError, "revoked"):
+                queue.authorities.scope(plan.authority)
+
     def test_expiry_reconciliation_commits_before_later_budget_refusal(self) -> None:
         now = datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)

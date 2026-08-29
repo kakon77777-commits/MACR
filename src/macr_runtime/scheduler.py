@@ -867,6 +867,84 @@ class PlanQueue:
             )
         return self.read_member(member)
 
+    def resolve_reconciliation(
+        self,
+        member_id: str,
+        *,
+        terminal_state: QueueMemberState,
+        reconciliation_evidence_digest: str,
+        observed_cost_usd: float,
+    ) -> QueueMemberRecord:
+        member = _digest("member_id", member_id)
+        if terminal_state not in {
+            QueueMemberState.COMPLETED,
+            QueueMemberState.FAILED,
+        }:
+            raise ValueError("reconciliation terminal_state is invalid")
+        evidence = _digest(
+            "reconciliation_evidence_digest",
+            reconciliation_evidence_digest,
+        )
+        cost = _cost("observed_cost_usd", observed_cost_usd)
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """
+                SELECT m.*, b.authority_id, b.authority_digest,
+                       b.authority_revision
+                FROM plan_queue_members AS m
+                JOIN plan_queue_batches AS b USING(plan_digest)
+                WHERE member_id = ?
+                """,
+                (member,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise DispatchLeaseError("queue member does not exist")
+        if row["state"] != QueueMemberState.RECONCILIATION_REQUIRED.value:
+            raise DispatchLeaseError(
+                "queue member does not require reconciliation"
+            )
+        if (
+            terminal_state is QueueMemberState.COMPLETED
+            and cost > row["cost_ceiling_usd"] + 1e-12
+        ):
+            raise DispatchAuthorizationError(
+                "over-ceiling reconciliation cannot complete successfully"
+            )
+        batch_reference = BatchAuthorityReference(
+            authority_id=row["authority_id"],
+            digest=row["authority_digest"],
+            revision=row["authority_revision"],
+            plan_digest=row["plan_digest"],
+        )
+        self.authorities.revoke(batch_reference)
+        now = self._current_time().isoformat()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            changed = connection.execute(
+                """
+                UPDATE plan_queue_members
+                SET state = ?, terminal_at = ?, terminal_evidence_digest = ?,
+                    observed_cost_usd = ?
+                WHERE member_id = ? AND state = 'reconciliation_required'
+                """,
+                (terminal_state.value, now, evidence, cost, member),
+            ).rowcount
+            if changed != 1:
+                raise DispatchLeaseError(
+                    "queue reconciliation lost atomic resolution"
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.read_member(member)
+
     @staticmethod
     def _record(row) -> QueueMemberRecord:
         try:

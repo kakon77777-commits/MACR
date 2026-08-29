@@ -5,10 +5,11 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from macr_runtime.event_store import SqliteEventStore
+from macr_runtime.errors import DispatchAuthorizationError
 from macr_runtime.execution import DispatchOrigin, InteractionPlane
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.registry import ProviderRegistry
-from macr_runtime.scheduler import PlanQueue
+from macr_runtime.scheduler import PlanQueue, QueueMemberState
 from macr_runtime.t1_dispatcher import T1DispatchError, T1Dispatcher
 from macr_runtime.t1_manifest import T1ExecutionManifest, T1ExecutionMember
 from macr_runtime.token_policy import t1_glm_live_policy
@@ -48,6 +49,36 @@ def approved_manifest(provider: GlmFlashWorkerProvider) -> T1ExecutionManifest:
     return T1ExecutionManifest.create(
         plan_digest=source.plan_digest,
         members=tuple(members),
+        aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
+        campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
+        expires_at=source.expires_at,
+        authorized_dispatchers=source.authorized_dispatchers,
+    )
+
+
+def replan_manifest(
+    source: T1ExecutionManifest,
+    plan_digest: str,
+) -> T1ExecutionManifest:
+    members = tuple(
+        T1ExecutionMember.create(
+            plan_digest=plan_digest,
+            ordinal=item.ordinal,
+            task=item.task,
+            route=item.route,
+            token_policy_digest=item.token_policy_digest,
+            role_digest=item.role_digest,
+            privacy=item.privacy,
+            context_class=item.context_class,
+            cost_ceiling_usd=item.cost_ceiling_usd,
+            target_claims=item.target_claims,
+        )
+        for item in source.members
+    )
+    return T1ExecutionManifest.create(
+        plan_digest=plan_digest,
+        plan_revision=source.plan_revision + 1,
+        members=members,
         aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
         campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
         expires_at=source.expires_at,
@@ -191,12 +222,51 @@ class T1DispatcherTests(unittest.TestCase):
                     allow_local=False,
                 )
             counts = dispatcher.queue.state_counts()
+            dispatcher.queue.resolve_reconciliation(
+                result.member_id,
+                terminal_state=QueueMemberState.FAILED,
+                reconciliation_evidence_digest="e" * 64,
+                observed_cost_usd=result.observed_cost_usd or 0.0,
+            )
+            with self.assertRaisesRegex(DispatchAuthorizationError, "revoked"):
+                dispatcher.run_one(
+                    subject,
+                    bundle,
+                    "worker-2",
+                    DispatchOrigin("test", "process_id", "5678"),
+                    allow_network=True,
+                    allow_local=False,
+                )
+            recovered_services = replace(
+                services,
+                events=SqliteEventStore(services.events.path),
+            )
+            recovered = T1Dispatcher(
+                ProviderRegistry((provider,)),
+                recovered_services,
+                now=clock,
+            )
+            new_subject = replan_manifest(subject, "b" * 64)
+            new_bundle = recovered.stage(
+                new_subject,
+                new_subject.authorized_dispatchers,
+                new_subject.expires_at,
+            )
+            resumed = recovered.run_one(
+                new_subject,
+                new_bundle,
+                "worker-2",
+                DispatchOrigin("test", "process_id", "5678"),
+                allow_network=True,
+                allow_local=False,
+            )
 
         self.assertEqual(result.queue_state, "reconciliation_required")
         self.assertEqual(result.provider_state, "unknown_after_dispatch")
         self.assertEqual(counts["reconciliation_required"], 1)
         self.assertEqual(counts["queued"], 2)
-        self.assertEqual(len(transport.posts), 1)
+        self.assertEqual(resumed.queue_state, "completed")
+        self.assertEqual(len(transport.posts), 2)
 
     def test_stale_task_approval_refuses_before_any_authority_or_queue_write(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)

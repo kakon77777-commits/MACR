@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -24,15 +25,24 @@ from macr_runtime.event_store import SqliteEventStore
 from macr_runtime.execution import DispatchContext, DispatchOrigin, InteractionPlane
 from macr_runtime.ledger import AppendOnlyLedger
 from macr_runtime.legacy_ledger import LegacyLedgerImporter
+from macr_runtime.glm_approval import GlmApprovalStore
+from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.registry import ProviderRegistry
+from macr_runtime.runtime import RuntimeServices
 from macr_runtime.scheduler import PlanQueue, QueueMember, T1QueuePlan
+from macr_runtime.t1_dispatcher import T1Dispatcher
+from macr_runtime.token_policy import t1_glm_live_policy
 
-from tests.support import d_drive_tempdir
+from tests.support import build_test_services, d_drive_tempdir
+from tests.test_glm_provider import FakeTransport, StaticKeySource, glm_config, success_document
+from tests.test_t1_dispatcher import approved_manifest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WRITER = ROOT / "tests" / "helpers" / "sqlite_event_writer.py"
 BOOTSTRAP_WORKER = ROOT / "tests" / "helpers" / "sqlite_bootstrap_worker.py"
 PLAN_WORKER = ROOT / "tests" / "helpers" / "plan_worker.py"
+T1_RUNTIME_WORKER = ROOT / "tests" / "helpers" / "t1_runtime_worker.py"
 CENSUS = ROOT / "scripts" / "Test-MacrInvokerProcesses.ps1"
 
 
@@ -158,6 +168,138 @@ def _run_census(expected_count: int | None = None) -> subprocess.CompletedProces
 
 
 class MultiprocessRuntimeTests(unittest.TestCase):
+    def test_three_t1_workers_produce_exact_complete_path_evidence(self) -> None:
+        with d_drive_tempdir() as temp:
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=FakeTransport(success_document()),
+                environ={"MACR_STATE_ROOT": str(temp)},
+                key_source=StaticKeySource(),
+                token_policy=t1_glm_live_policy(),
+            )
+            subject = approved_manifest(provider)
+            approval_store = GlmApprovalStore(temp)
+            for item in subject.members:
+                approval_store.create(
+                    item.task.delegation_approval_sha256,
+                    signing_key="test-id.test-secret",
+                    expires_in_days=1,
+                )
+            services = build_test_services(temp)
+            dispatcher = T1Dispatcher(
+                ProviderRegistry((provider,)),
+                services,
+            )
+            dispatcher.stage(
+                subject,
+                subject.authorized_dispatchers,
+                subject.expires_at,
+            )
+            manifest_path = temp / "private-t1-manifest.json"
+            manifest_path.write_text(
+                json.dumps(subject.to_dict()),
+                encoding="utf-8",
+            )
+            start_signal = temp / "t1-start.signal"
+            processes = [
+                subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(T1_RUNTIME_WORKER),
+                        str(temp),
+                        str(manifest_path),
+                        str(start_signal),
+                        str(temp / f"t1-ready-{index}"),
+                        dispatcher_id,
+                    ],
+                    env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                for index, dispatcher_id in enumerate(subject.authorized_dispatchers)
+            ]
+            completed: list[tuple[str, str]] = []
+            try:
+                deadline = time.monotonic() + 30
+                while (
+                    len(tuple(temp.glob("t1-ready-*"))) < 3
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.005)
+                self.assertEqual(len(tuple(temp.glob("t1-ready-*"))), 3)
+                start_signal.touch()
+                completed = [
+                    process.communicate(timeout=60) for process in processes
+                ]
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.terminate()
+                        process.wait(timeout=15)
+
+            results = []
+            for process, (stdout, stderr) in zip(processes, completed):
+                self.assertEqual(
+                    process.returncode,
+                    0,
+                    msg=f"stdout={stdout!r} stderr={stderr!r}",
+                )
+                results.append(json.loads(stdout))
+            events = services.events.read_events()
+            queue_records = dispatcher.queue.list_members(subject.plan_digest)
+            runtime_connection = services.events.database.connect()
+            try:
+                capture_count = runtime_connection.execute(
+                    "SELECT COUNT(*) FROM candidate_captures"
+                ).fetchone()[0]
+            finally:
+                runtime_connection.close()
+            accounting_connection = sqlite3.connect(services.accounting.path)
+            try:
+                invocation_count = accounting_connection.execute(
+                    "SELECT COUNT(*) FROM invocations WHERE terminal_at IS NOT NULL"
+                ).fetchone()[0]
+                plan_cost_count = accounting_connection.execute(
+                    "SELECT COUNT(*) FROM plan_costs"
+                ).fetchone()[0]
+            finally:
+                accounting_connection.close()
+            public_databases = (
+                services.events.path.read_bytes()
+                + services.accounting.path.read_bytes()
+            )
+            unsettled_count = services.accounting.unsettled_count()
+            reconciliation_count = dispatcher.queue.state_counts()[
+                "reconciliation_required"
+            ]
+
+        self.assertEqual(len({item["member_id"] for item in results}), 3)
+        self.assertEqual(
+            [item.state.value for item in queue_records],
+            ["completed", "completed", "completed"],
+        )
+        self.assertEqual(
+            len([item for item in events if item["event_type"] == "mock.t1_transport_called"]),
+            3,
+        )
+        self.assertEqual(
+            len([item for item in events if item["event_type"] == "provider.dispatch_requested"]),
+            3,
+        )
+        self.assertEqual(
+            len([item for item in events if item["event_type"] == "provider.candidate_completed"]),
+            3,
+        )
+        self.assertEqual((capture_count, invocation_count, plan_cost_count), (3, 3, 3))
+        self.assertEqual(unsettled_count, 0)
+        self.assertEqual(reconciliation_count, 0)
+        for item in subject.members:
+            self.assertNotIn(item.task.goal.encode(), public_databases)
+        self.assertNotIn(b"multiprocess candidate", public_databases)
+        self.assertNotIn(b"test-secret", public_databases)
+        self.assertNotIn(b"private-t1-manifest.json", public_databases)
     def test_fresh_sqlite_bootstrap_is_safe_for_synchronized_processes(self) -> None:
         with d_drive_tempdir() as temp:
             database = temp / "dispatch.sqlite3"
