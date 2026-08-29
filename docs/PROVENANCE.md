@@ -209,3 +209,7 @@ tree   = b6af1a038bfe1b733264e29aa02a44dd1cee6c9d
 | blinded differential manifest/replay harness | `13c975e90ee5283cb73142e9ab72612bba619146` |
 
 These commits add no standing provider authority and perform no discovery request, paid/local generation, real migration, seal change, merge, release, deployment, adoption, automation, or resident binding. T2 output cannot issue authority; T3 verification cannot materialize; differential public rows cannot reveal model labels. The separate final offline checkpoint records the later clean verifier/docs subject rather than rewriting these historical code commits.
+
+## v0.6 final offline gate evidence
+
+The final verifier/docs/runbook subject `ca374ec1be30d675dc10d62354c7f5b44d7dfb9e` / tree `61a1988a59096823640c942687ae81904b72e13b` was clean and ran `scripts\verify-v06.ps1` twice. Both runs returned exit 0 and the byte-identical summary digest `843c1b9a4f0761c23fa03619ae9b2d8fed2499fa6c645f73a52cc9194902761f`: 440 tests with two existing platform skips, 103 named v0.6 controls, schemas 6/2/2, census zero, network false, provider generation false. `docs/V06_OFFLINE_CHECKPOINT.md` records the complete controls and NotMeasured boundary. This is offline verification evidence only; the live runbook remains unexecuted.
