@@ -792,6 +792,70 @@ class PlanQueue:
             observed_cost_usd=observed_cost_usd,
         )
 
+    def require_reconciliation(
+        self,
+        member_id: str,
+        dispatcher_id: str,
+        fencing_token: int,
+        *,
+        terminal_evidence_digest: str,
+        observed_cost_usd: float,
+    ) -> QueueMemberRecord:
+        member = _digest("member_id", member_id)
+        dispatcher = _identifier("dispatcher_id", dispatcher_id)
+        evidence = _digest(
+            "terminal_evidence_digest",
+            terminal_evidence_digest,
+        )
+        cost = _cost("observed_cost_usd", observed_cost_usd)
+        if (
+            isinstance(fencing_token, bool)
+            or not isinstance(fencing_token, int)
+            or fencing_token < 1
+        ):
+            raise ValueError("fencing_token must be positive integer")
+        now = self._current_time()
+        connection = self.database.connect()
+        expired = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM plan_queue_members WHERE member_id = ?",
+                (member,),
+            ).fetchone()
+            if row is None:
+                raise DispatchLeaseError("queue member does not exist")
+            if row["state"] != QueueMemberState.CLAIMED.value:
+                raise DispatchLeaseError("queue member is terminal or not claimed")
+            if (
+                row["lease_holder"] != dispatcher
+                or row["fencing_token"] != fencing_token
+            ):
+                raise DispatchLeaseError(
+                    "queue lease holder or fencing token is invalid"
+                )
+            expired = _aware(row["lease_expires_at"]) <= now
+            connection.execute(
+                """
+                UPDATE plan_queue_members
+                SET state = 'reconciliation_required', terminal_at = ?,
+                    terminal_evidence_digest = ?, observed_cost_usd = ?
+                WHERE member_id = ?
+                """,
+                (now.isoformat(), evidence, cost, member),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        if expired:
+            raise DispatchLeaseError(
+                "expired queue lease requires reconciliation but was not active"
+            )
+        return self.read_member(member)
+
     @staticmethod
     def _record(row) -> QueueMemberRecord:
         try:
@@ -841,6 +905,101 @@ class PlanQueue:
         finally:
             connection.close()
         return tuple(self._record(row) for row in rows)
+
+    def list_by_state(
+        self,
+        state: QueueMemberState,
+        *,
+        limit: int = 100,
+        after_member_id: str | None = None,
+    ) -> tuple[QueueMemberRecord, ...]:
+        if not isinstance(state, QueueMemberState):
+            raise ValueError("state must be a QueueMemberState")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 1000
+        ):
+            raise ValueError("limit must be between 1 and 1000")
+        cursor = (
+            None
+            if after_member_id is None
+            else _digest("after_member_id", after_member_id)
+        )
+        now = self._current_time()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            self._mark_expired_claims(connection, now)
+            parameters: list[object] = [state.value]
+            cursor_clause = ""
+            if cursor is not None:
+                cursor_row = connection.execute(
+                    "SELECT * FROM plan_queue_members WHERE member_id = ?",
+                    (cursor,),
+                ).fetchone()
+                if cursor_row is None or cursor_row["state"] != state.value:
+                    raise DispatchLeaseError(
+                        "queue cursor does not resolve to the requested state"
+                    )
+                cursor_clause = """
+                    AND (
+                        plan_digest > ?
+                        OR (plan_digest = ? AND ordinal > ?)
+                        OR (plan_digest = ? AND ordinal = ? AND member_id > ?)
+                    )
+                """
+                parameters.extend(
+                    (
+                        cursor_row["plan_digest"],
+                        cursor_row["plan_digest"],
+                        cursor_row["ordinal"],
+                        cursor_row["plan_digest"],
+                        cursor_row["ordinal"],
+                        cursor_row["member_id"],
+                    )
+                )
+            parameters.append(limit)
+            rows = connection.execute(
+                f"""
+                SELECT * FROM plan_queue_members
+                WHERE state = ? {cursor_clause}
+                ORDER BY plan_digest, ordinal, member_id
+                LIMIT ?
+                """,
+                tuple(parameters),
+            ).fetchall()
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return tuple(self._record(row) for row in rows)
+
+    def state_counts(self) -> dict[str, int]:
+        now = self._current_time()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            self._mark_expired_claims(connection, now)
+            rows = connection.execute(
+                """
+                SELECT state, COUNT(*) AS count
+                FROM plan_queue_members GROUP BY state
+                """
+            ).fetchall()
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        observed = {row["state"]: row["count"] for row in rows}
+        return {
+            state.value: int(observed.get(state.value, 0))
+            for state in QueueMemberState
+        }
 
 
 QueueMemberSpec = QueueMember

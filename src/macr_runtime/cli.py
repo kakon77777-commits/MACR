@@ -40,6 +40,7 @@ from .discovery.openrouter import (
 from .registry import ProviderRegistry
 from .providers.glm import GlmFlashWorkerProvider
 from .runtime import MacrRuntime, RuntimeServices
+from .scheduler import PlanQueue, QueueMemberRecord, QueueMemberState
 from .storage import StorageLayout
 from .task_preflight import validate_task_consistency
 
@@ -92,6 +93,53 @@ def _validate_task(path: str) -> int:
     task = TaskContract.from_dict(document)
     validate_task_consistency(task)
     print(json.dumps(task.to_dict(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def _public_queue_member(record: QueueMemberRecord) -> dict[str, object]:
+    return {
+        "member_id": record.member_id,
+        "plan_digest": record.plan_digest,
+        "ordinal": record.ordinal,
+        "member_digest": record.member_digest,
+        "state": record.state.value,
+        "lease_holder": record.lease_holder,
+        "fencing_token": record.fencing_token,
+        "lease_expires_at": record.lease_expires_at,
+        "attempts": record.attempts,
+        "terminal_at": record.terminal_at,
+        "terminal_evidence_digest": record.terminal_evidence_digest,
+        "observed_cost_usd": record.observed_cost_usd,
+    }
+
+
+def _queue_status(
+    state: str,
+    *,
+    limit: int,
+    after_member_id: str | None,
+) -> int:
+    layout = StorageLayout.from_environment()
+    selected_state = QueueMemberState(state)
+    queue = PlanQueue(layout.runtime_db_path)
+    members = queue.list_by_state(
+        selected_state,
+        limit=limit,
+        after_member_id=after_member_id,
+    )
+    print(
+        json.dumps(
+            {
+                "status": "queue_status",
+                "network_activity": False,
+                "selected_state": selected_state.value,
+                "counts": queue.state_counts(),
+                "members": [_public_queue_member(item) for item in members],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -918,6 +966,18 @@ def build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate-task", help="validate and normalize a TaskContract JSON file")
     validate.add_argument("path")
 
+    queue_status = sub.add_parser(
+        "queue-status",
+        help="list bounded content-free global queue state",
+    )
+    queue_status.add_argument(
+        "--state",
+        choices=tuple(item.value for item in QueueMemberState),
+        default=QueueMemberState.RECONCILIATION_REQUIRED.value,
+    )
+    queue_status.add_argument("--limit", type=int, default=100)
+    queue_status.add_argument("--after-member-id")
+
     evidence_inspect = sub.add_parser(
         "evidence-inspect",
         help="inspect a reviewed external evidence manifest without writing state",
@@ -1064,6 +1124,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "validate-task":
         return _validate_task(args.path)
+    if args.command == "queue-status":
+        return _queue_status(
+            args.state,
+            limit=args.limit,
+            after_member_id=args.after_member_id,
+        )
     if args.command == "evidence-inspect":
         return _evidence_inspect(args.manifest)
     if args.command == "evidence-import":

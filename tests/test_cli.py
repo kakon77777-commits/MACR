@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import unittest
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -26,6 +27,7 @@ from macr_runtime.cli import (
     _plan_diff,
     _plan_shadow,
     _plan_show,
+    _queue_status,
 )
 from macr_runtime.contracts import (
     DelegationClass,
@@ -40,9 +42,11 @@ from macr_runtime.config import load_provider_configs
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.model_token_store import ModelTokenPolicyStore
+from macr_runtime.scheduler import PlanQueue, QueueMemberState
 from macr_runtime.token_policy import ModelTokenOverride
 from tests.support import d_drive_tempdir, write_fake_google_credential
 from tests.test_coordination import make_plan
+from tests.test_scheduler import Clock, _authorize, _member
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,6 +92,64 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_queue_status_lists_global_reconciliation_content_free(self) -> None:
+        now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as state_root:
+            queue = PlanQueue(
+                state_root / "runtime" / "dispatch.sqlite3",
+                now=clock,
+            )
+            plan = _authorize(
+                queue.database.path,
+                clock,
+                (_member(0),),
+                plan_digest="e" * 64,
+            )
+            queue.enqueue(plan)
+            claim = queue.claim("dispatcher-a", lease_seconds=60)
+            assert claim is not None
+            queue.require_reconciliation(
+                claim.member_id,
+                claim.dispatcher_id,
+                claim.fencing_token,
+                terminal_evidence_digest="c" * 64,
+                observed_cost_usd=0.001,
+            )
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(state_root)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _queue_status(
+                        QueueMemberState.RECONCILIATION_REQUIRED.value,
+                        limit=100,
+                        after_member_id=None,
+                    )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(document["counts"]["reconciliation_required"], 1)
+        self.assertEqual(len(document["members"]), 1)
+        self.assertEqual(
+            set(document["members"][0]),
+            {
+                "member_id",
+                "plan_digest",
+                "ordinal",
+                "member_digest",
+                "state",
+                "lease_holder",
+                "fencing_token",
+                "lease_expires_at",
+                "attempts",
+                "terminal_at",
+                "terminal_evidence_digest",
+                "observed_cost_usd",
+            },
+        )
+        self.assertFalse(document["network_activity"])
+        self.assertNotIn(str(state_root), output.getvalue())
+
     def test_model_observe_and_passport_use_operator_snapshot_without_network(self) -> None:
         source = (
             ROOT

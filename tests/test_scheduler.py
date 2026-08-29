@@ -54,11 +54,12 @@ def _authorize(
     members: tuple[QueueMember, ...],
     *,
     aggregate: float | None = None,
+    plan_digest: str = "f" * 64,
 ) -> T1QueuePlan:
     total = sum(item.cost_ceiling_usd for item in members)
     aggregate = total if aggregate is None else aggregate
     scope = BatchScope(
-        plan_digest="f" * 64,
+        plan_digest=plan_digest,
         ordered_members=tuple(
             BatchMemberScope(
                 member_digest=item.member_digest,
@@ -85,6 +86,70 @@ def _authorize(
 
 
 class PlanQueueTests(unittest.TestCase):
+    def test_global_reconciliation_listing_spans_plans_and_is_bounded(self) -> None:
+        now = datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as temp:
+            database = temp / "dispatch.sqlite3"
+            queue = PlanQueue(database, now=clock)
+            plan_a = _authorize(
+                database,
+                clock,
+                (_member(0),),
+                plan_digest="e" * 64,
+            )
+            plan_b = _authorize(
+                database,
+                clock,
+                (_member(1),),
+                plan_digest="f" * 64,
+            )
+            queue.enqueue(plan_b)
+            queue.enqueue(plan_a)
+            first = queue.claim("dispatcher-a", lease_seconds=60)
+            second = queue.claim("dispatcher-b", lease_seconds=60)
+            assert first is not None and second is not None
+            queue.require_reconciliation(
+                first.member_id,
+                first.dispatcher_id,
+                first.fencing_token,
+                terminal_evidence_digest="c" * 64,
+                observed_cost_usd=0.001,
+            )
+            queue.require_reconciliation(
+                second.member_id,
+                second.dispatcher_id,
+                second.fencing_token,
+                terminal_evidence_digest="d" * 64,
+                observed_cost_usd=0.002,
+            )
+
+            first_page = queue.list_by_state(
+                QueueMemberState.RECONCILIATION_REQUIRED,
+                limit=1,
+            )
+            second_page = queue.list_by_state(
+                QueueMemberState.RECONCILIATION_REQUIRED,
+                limit=1,
+                after_member_id=first_page[0].member_id,
+            )
+            counts = queue.state_counts()
+
+            self.assertEqual(len(first_page), 1)
+            self.assertEqual(len(second_page), 1)
+            self.assertLess(first_page[0].plan_digest, second_page[0].plan_digest)
+            self.assertEqual(counts["reconciliation_required"], 2)
+            self.assertEqual(sum(counts.values()), 2)
+            with self.assertRaisesRegex(ValueError, "limit"):
+                queue.list_by_state(QueueMemberState.QUEUED, limit=0)
+            with self.assertRaisesRegex(ValueError, "limit"):
+                queue.list_by_state(QueueMemberState.QUEUED, limit=1_001)
+            with self.assertRaisesRegex(DispatchLeaseError, "cursor"):
+                queue.list_by_state(
+                    QueueMemberState.QUEUED,
+                    after_member_id=first_page[0].member_id,
+                )
+
     def test_target_claim_rejects_unsafe_paths_and_canonicalizes_aliases(self) -> None:
         self.assertEqual(
             TargetClaim.for_path(r"Src\Module.py").target_key,
