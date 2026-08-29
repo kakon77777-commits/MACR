@@ -44,6 +44,7 @@ BOOTSTRAP_WORKER = ROOT / "tests" / "helpers" / "sqlite_bootstrap_worker.py"
 PLAN_WORKER = ROOT / "tests" / "helpers" / "plan_worker.py"
 T1_RUNTIME_WORKER = ROOT / "tests" / "helpers" / "t1_runtime_worker.py"
 CENSUS = ROOT / "scripts" / "Test-MacrInvokerProcesses.ps1"
+QUIET_CENSUS = ROOT / "scripts" / "Test-MacrQuietCensus.ps1"
 
 
 def _admission_worker(
@@ -167,7 +168,89 @@ def _run_census(expected_count: int | None = None) -> subprocess.CompletedProces
     )
 
 
+def _run_quiet_census(
+    *,
+    samples: int = 5,
+    interval_ms: int = 50,
+) -> subprocess.CompletedProcess:
+    command = [
+            _powershell(),
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(QUIET_CENSUS),
+            "-ConsecutiveZeroSamples",
+            str(samples),
+            "-IntervalMilliseconds",
+            str(interval_ms),
+        ]
+    if os.environ.get("MACR_V06_QUIET_CENSUS_HELD") == "1":
+        command.append("-SkipMutex")
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=45,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
 class MultiprocessRuntimeTests(unittest.TestCase):
+    def test_successful_census_resets_stale_native_exit_code(self) -> None:
+        escaped = str(CENSUS).replace("'", "''")
+        command = (
+            "& cmd.exe /c exit 7 | Out-Null; "
+            f"& '{escaped}' -ExpectedCount 0 | Out-Null; "
+            "if ($LASTEXITCODE -ne 0) { exit 9 }; exit 0"
+        )
+        completed = subprocess.run(
+            [_powershell(), "-NoProfile", "-NonInteractive", "-Command", command],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+
+    def test_quiet_census_rejects_marker_then_accepts_five_zero_samples(self) -> None:
+        harmless = subprocess.Popen(
+            [
+                _powershell(),
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$null = 'invoke-glm.ps1 -TaskPath'; Wait-Event -Timeout 60 | Out-Null",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        try:
+            deadline = time.monotonic() + 15
+            failed = None
+            while time.monotonic() < deadline:
+                failed = _run_quiet_census(samples=2, interval_ms=20)
+                if failed.returncode == 1:
+                    report = json.loads(failed.stdout)
+                    if harmless.pid in report["matching_pids"]:
+                        break
+                time.sleep(0.1)
+            else:
+                self.fail(f"quiet census missed harmless marker: {failed}")
+        finally:
+            harmless.terminate()
+            harmless.wait(timeout=15)
+
+        passed = _run_quiet_census(samples=5, interval_ms=20)
+        self.assertEqual(passed.returncode, 0, msg=passed.stderr)
+        report = json.loads(passed.stdout)
+        self.assertEqual(report["count"], 0)
+        self.assertEqual(report["consecutive_zero_samples"], 5)
+        self.assertNotIn("command", report)
+
     def test_three_t1_workers_produce_exact_complete_path_evidence(self) -> None:
         with d_drive_tempdir() as temp:
             provider = GlmFlashWorkerProvider(

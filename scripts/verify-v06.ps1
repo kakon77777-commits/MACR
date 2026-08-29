@@ -11,8 +11,29 @@ $env:MACR_TEST_TMP = Join-Path $env:MACR_STATE_ROOT 'test-tmp'
 $env:PYTHONPATH = Join-Path $repoRoot 'src'
 $env:PYTHONDONTWRITEBYTECODE = '1'
 
-& (Join-Path $PSScriptRoot 'verify.ps1')
-if ($LASTEXITCODE) { exit $LASTEXITCODE }
+$mutexName = 'Local\MACR_V06_QUIET_CENSUS'
+$verificationMutex = [System.Threading.Mutex]::new($false, $mutexName)
+$mutexAcquired = $false
+try {
+    try {
+        $mutexAcquired = $verificationMutex.WaitOne(30000)
+    }
+    catch [System.Threading.AbandonedMutexException] {
+        $mutexAcquired = $true
+    }
+    if (-not $mutexAcquired) {
+        throw 'Timed out acquiring the MACR v0.6 verification mutex.'
+    }
+    $env:MACR_V06_QUIET_CENSUS_HELD = '1'
+
+    & (Join-Path $PSScriptRoot 'Test-MacrQuietCensus.ps1') `
+        -ConsecutiveZeroSamples 5 `
+        -IntervalMilliseconds 250 `
+        -SkipMutex | Out-Null
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+    & (Join-Path $PSScriptRoot 'verify.ps1')
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
 $targetedModules = @(
     'tests.test_multiprocess_runtime',
@@ -24,6 +45,10 @@ $targetedModules = @(
     'tests.test_qualification',
     'tests.test_batch_authority',
     'tests.test_scheduler',
+    'tests.test_t1_manifest',
+    'tests.test_t1_dispatcher',
+    'tests.test_token_policy',
+    'tests.test_model_token_store',
     'tests.test_target_leases',
     'tests.test_coordinator_contract',
     'tests.test_crossfile_verifier',
@@ -34,9 +59,6 @@ $targetedModules = @(
 )
 python -m unittest @targetedModules -q
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
-
-& (Join-Path $PSScriptRoot 'Test-MacrInvokerProcesses.ps1') -ExpectedCount 0 | Out-Null
-if (-not $?) { exit 1 }
 
 $doctorText = python -m macr_runtime doctor --config (Join-Path $repoRoot 'config\providers.json')
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -58,6 +80,20 @@ if ($summary.git_clean -ne $true) {
     throw 'The v0.6 offline checkpoint subject must be a clean Git worktree.'
 }
 
+& (Join-Path $PSScriptRoot 'Test-MacrQuietCensus.ps1') `
+    -ConsecutiveZeroSamples 5 `
+    -IntervalMilliseconds 250 `
+    -SkipMutex | Out-Null
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
 $compact = $summary | ConvertTo-Json -Compress -Depth 8
 Write-Output ("V06_SUMMARY=" + $compact)
+}
+finally {
+    Remove-Item Env:MACR_V06_QUIET_CENSUS_HELD -ErrorAction SilentlyContinue
+    if ($mutexAcquired) {
+        $verificationMutex.ReleaseMutex()
+    }
+    $verificationMutex.Dispose()
+}
 exit 0

@@ -24,15 +24,23 @@ class V06ReleaseGateTests(unittest.TestCase):
             "test_model_identity",
             "test_qualification",
             "test_target_leases",
+            "test_t1_manifest",
+            "test_t1_dispatcher",
             "test_accounting",
             "test_differential",
-            "Test-MacrInvokerProcesses.ps1",
+            "Test-MacrQuietCensus.ps1",
+            "ConsecutiveZeroSamples",
+            "MACR_V06_QUIET_CENSUS",
             "diff --check",
             "network_activity",
             "V06_SUMMARY=",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, text)
+        quiet = (ROOT / "scripts" / "Test-MacrQuietCensus.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Test-MacrInvokerProcesses.ps1", quiet)
 
     def test_summary_is_content_free_deterministic_and_exact_schema_bound(self) -> None:
         completed = subprocess.run(

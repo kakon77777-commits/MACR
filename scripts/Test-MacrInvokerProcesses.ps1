@@ -34,3 +34,6 @@ if (
 ) {
     exit 1
 }
+
+$global:LASTEXITCODE = 0
+return
