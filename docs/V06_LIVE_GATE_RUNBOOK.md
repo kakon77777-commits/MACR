@@ -20,7 +20,7 @@
 5. 只在另行授權後，執行一個公開、低成本、精確 authority 的 T0 canary。核對 dispatch／terminal、Candidate capture、return contract、verification 與 accounting；acceptance 保持 pending，直到 operator 決定。
 6. 只在 T0 對帳完整後，另行授權一個序列化的 T1 three-member（三成員）batch。核對三個 exact member digest、三個不同 claim、每成員最多一次 provider attempt、aggregate ceiling、零 duplicate、零遺失、零 corrupt evidence。
 7. 任一 lease expiry、transport 結果未知、terminal persistence failure 或帳務缺口都轉入 reconciliation；不得自動重試。
-8. 只在前三成員完整對帳後，對至少三條 qualified candidate route 執行同一 canonical probe pack。差分比較介面只顯示 blinded candidate ID；模型標籤不得進入評分列。
+8. 只在前三成員完整對帳後，對至少三條 qualified candidate route 執行同一 canonical probe pack。`probe-replay` 必須重新載入實際 pack 並核對完整 case/task/context/verifier/cost 矩陣；只帶 manifest＋results 不得完成 replay。差分比較介面只顯示 blinded candidate ID；模型標籤不得進入評分列。
 9. 分別記錄 discovery、probe、production execution、verification、integration 成本與 future bill observation；帳單同步仍是預留 port，不在 v0.6 自動匯入。
 10. Operator 最後只能做明示 acceptance 或 route closure。綠色 provider 回應、測試、replay 或 reviewer 意見都不自行構成 merge、release、deploy、adoption 或 resident authority。
 

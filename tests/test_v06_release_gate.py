@@ -88,6 +88,21 @@ class V06ReleaseGateTests(unittest.TestCase):
         )
         self.assertIn("runtime operational SQLite 6", active_docs)
         self.assertIn("verify-v06.ps1", active_docs)
+        checkpoint = (ROOT / "docs" / "V06_OFFLINE_CHECKPOINT.md").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "historical rejected candidate",
+            "6c66eff1ce200c4d07506310794ea9ac89a42895",
+            "5172fb7b0d72d3a733ec06bf7aa1d7f598b68e2f",
+            "443 passed",
+            "106 passed",
+            "38b6087445be0e0232bf4f415d87ccd7fe2adbb4dc5ddc18af80ff5b0a680832",
+            "twin Critical                  0",
+            "twin Important                 0",
+        ):
+            with self.subTest(checkpoint_marker=marker):
+                self.assertIn(marker, checkpoint)
 
 
 if __name__ == "__main__":
