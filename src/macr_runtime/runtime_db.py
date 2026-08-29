@@ -10,7 +10,7 @@ from .errors import EventStoreConflict, StoragePolicyError
 class RuntimeDatabase:
     """Connection policy and schema owner for MACR runtime coordination state."""
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, path: str | Path) -> None:
         candidate = Path(path)
@@ -183,7 +183,7 @@ class RuntimeDatabase:
                         source_id TEXT NOT NULL,
                         body_json TEXT NOT NULL,
                         body_sha256 TEXT NOT NULL,
-                        revision INTEGER NOT NULL,
+                        revision INTEGER NOT NULL CHECK(revision >= 1),
                         epoch INTEGER NOT NULL,
                         scope_json TEXT NOT NULL,
                         issued_at TEXT NOT NULL,
@@ -257,6 +257,86 @@ class RuntimeDatabase:
                 connection.execute(
                     "UPDATE schema_meta SET version = ? WHERE component = ?",
                     (4, "runtime"),
+                )
+                version = 4
+            if version == 4:
+                migration_five = (
+                    """CREATE TABLE IF NOT EXISTS batch_authorities (
+                        authority_id TEXT PRIMARY KEY,
+                        body_json TEXT NOT NULL,
+                        body_sha256 TEXT NOT NULL UNIQUE,
+                        scope_json TEXT NOT NULL,
+                        scope_sha256 TEXT NOT NULL,
+                        plan_digest TEXT NOT NULL,
+                        revision INTEGER NOT NULL,
+                        issued_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        revoked_at TEXT,
+                        UNIQUE(plan_digest, revision)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS plan_queue_batches (
+                        plan_digest TEXT PRIMARY KEY,
+                        authority_id TEXT NOT NULL
+                            REFERENCES batch_authorities(authority_id),
+                        authority_digest TEXT NOT NULL,
+                        authority_revision INTEGER NOT NULL,
+                        aggregate_cost_ceiling_usd REAL NOT NULL
+                            CHECK(aggregate_cost_ceiling_usd >= 0),
+                        authorized_dispatchers_json TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        members_sha256 TEXT NOT NULL,
+                        enqueued_at TEXT NOT NULL
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS plan_queue_members (
+                        member_id TEXT PRIMARY KEY,
+                        plan_digest TEXT NOT NULL
+                            REFERENCES plan_queue_batches(plan_digest),
+                        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+                        member_digest TEXT NOT NULL,
+                        provider_id TEXT NOT NULL,
+                        route_id TEXT NOT NULL,
+                        role_digest TEXT NOT NULL,
+                        privacy TEXT NOT NULL,
+                        context_class TEXT NOT NULL,
+                        cost_ceiling_usd REAL NOT NULL
+                            CHECK(cost_ceiling_usd >= 0),
+                        state TEXT NOT NULL CHECK(state IN (
+                            'queued', 'claimed', 'completed', 'failed',
+                            'reconciliation_required'
+                        )),
+                        lease_holder TEXT,
+                        fencing_token INTEGER,
+                        lease_expires_at TEXT,
+                        attempts INTEGER NOT NULL
+                            CHECK(attempts = 0 OR attempts = 1),
+                        terminal_at TEXT,
+                        terminal_evidence_digest TEXT,
+                        observed_cost_usd REAL
+                            CHECK(observed_cost_usd IS NULL
+                                  OR observed_cost_usd >= 0),
+                        UNIQUE(plan_digest, ordinal),
+                        UNIQUE(plan_digest, member_digest)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS plan_target_claims (
+                        plan_digest TEXT NOT NULL,
+                        target_key TEXT NOT NULL,
+                        member_id TEXT NOT NULL
+                            REFERENCES plan_queue_members(member_id),
+                        alternative_group TEXT,
+                        materialize_automatically INTEGER NOT NULL
+                            CHECK(materialize_automatically IN (0, 1)),
+                        PRIMARY KEY(plan_digest, target_key, member_id)
+                    )""",
+                    """CREATE INDEX IF NOT EXISTS plan_queue_claimable
+                    ON plan_queue_members(state, plan_digest, ordinal)""",
+                    """CREATE INDEX IF NOT EXISTS plan_queue_expiring
+                    ON plan_queue_members(state, lease_expires_at)""",
+                )
+                for statement in migration_five:
+                    connection.execute(statement)
+                connection.execute(
+                    "UPDATE schema_meta SET version = ? WHERE component = ?",
+                    (5, "runtime"),
                 )
             connection.commit()
         except Exception:

@@ -13,12 +13,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
+from macr_runtime.batch_authority import (
+    BatchAuthorityStore,
+    BatchMemberScope,
+    BatchScope,
+)
 from macr_runtime.dispatch import AdmissionGate, DispatcherLeaseStore
 from macr_runtime.errors import DispatchLeaseError
 from macr_runtime.event_store import SqliteEventStore
 from macr_runtime.execution import DispatchContext, DispatchOrigin, InteractionPlane
 from macr_runtime.ledger import AppendOnlyLedger
 from macr_runtime.legacy_ledger import LegacyLedgerImporter
+from macr_runtime.scheduler import PlanQueue, QueueMember, T1QueuePlan
 
 from tests.support import d_drive_tempdir
 
@@ -26,6 +32,7 @@ from tests.support import d_drive_tempdir
 ROOT = Path(__file__).resolve().parents[1]
 WRITER = ROOT / "tests" / "helpers" / "sqlite_event_writer.py"
 BOOTSTRAP_WORKER = ROOT / "tests" / "helpers" / "sqlite_bootstrap_worker.py"
+PLAN_WORKER = ROOT / "tests" / "helpers" / "plan_worker.py"
 CENSUS = ROOT / "scripts" / "Test-MacrInvokerProcesses.ps1"
 
 
@@ -216,8 +223,115 @@ class MultiprocessRuntimeTests(unittest.TestCase):
             finally:
                 connection.close()
 
-        self.assertEqual(version, 4)
+        self.assertEqual(version, 5)
         self.assertEqual(journal_mode.lower(), "wal")
+
+    def test_plan_workers_claim_exact_members_once(self) -> None:
+        for worker_count in (1, 2, 3, 4, 8):
+            with self.subTest(worker_count=worker_count), d_drive_tempdir() as temp:
+                database = temp / "dispatch.sqlite3"
+                members = tuple(
+                    QueueMember(
+                        member_digest=format(index + 1, "x") * 64,
+                        provider_id="glm_flash_worker",
+                        route_id="a" * 64,
+                        role_digest="b" * 64,
+                        privacy="public_text",
+                        context_class="non_sensitive_routine",
+                        cost_ceiling_usd=0.01,
+                    )
+                    for index in range(worker_count)
+                )
+                scope = BatchScope(
+                    plan_digest="f" * 64,
+                    ordered_members=tuple(
+                        BatchMemberScope(
+                            member_digest=item.member_digest,
+                            provider_id=item.provider_id,
+                            route_id=item.route_id,
+                            role_digest=item.role_digest,
+                            privacy=item.privacy,
+                            context_class=item.context_class,
+                            cost_ceiling_usd=item.cost_ceiling_usd,
+                        )
+                        for item in members
+                    ),
+                    aggregate_cost_ceiling_usd=worker_count * 0.01,
+                    expires_at="2099-01-01T00:00:00+00:00",
+                    authorized_dispatchers=tuple(
+                        f"plan-worker-{index}" for index in range(worker_count)
+                    ),
+                )
+                authority = BatchAuthorityStore(database).issue(scope)
+                queue = PlanQueue(database)
+                expected_ids = queue.enqueue(
+                    T1QueuePlan(
+                        plan_digest=scope.plan_digest,
+                        members=members,
+                        aggregate_cost_ceiling_usd=scope.aggregate_cost_ceiling_usd,
+                        authority=authority,
+                    )
+                )
+                start_signal = temp / "plan-start.signal"
+                processes = [
+                    subprocess.Popen(
+                        [
+                            sys.executable,
+                            str(PLAN_WORKER),
+                            str(database),
+                            str(start_signal),
+                            str(temp / f"plan-ready-{index}"),
+                            f"plan-worker-{index}",
+                        ],
+                        env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                    for index in range(worker_count)
+                ]
+                completed: list[tuple[str, str]] = []
+                try:
+                    deadline = time.monotonic() + 30
+                    while (
+                        len(tuple(temp.glob("plan-ready-*"))) < worker_count
+                        and time.monotonic() < deadline
+                    ):
+                        time.sleep(0.005)
+                    self.assertEqual(
+                        len(tuple(temp.glob("plan-ready-*"))),
+                        worker_count,
+                    )
+                    start_signal.touch()
+                    completed = [
+                        process.communicate(timeout=45) for process in processes
+                    ]
+                finally:
+                    for process in processes:
+                        if process.poll() is None:
+                            process.terminate()
+                            process.wait(timeout=15)
+
+                observations = []
+                for process, (stdout, stderr) in zip(processes, completed):
+                    self.assertEqual(
+                        process.returncode,
+                        0,
+                        msg=f"stdout={stdout!r} stderr={stderr!r}",
+                    )
+                    observations.append(json.loads(stdout))
+                claimed = tuple(
+                    sorted(item["member_id"] for item in observations)
+                )
+                terminal = queue.list_members(scope.plan_digest)
+
+                self.assertEqual(claimed, tuple(sorted(expected_ids)))
+                self.assertEqual(len(set(claimed)), worker_count)
+                self.assertEqual(
+                    tuple(item.state.value for item in terminal),
+                    ("completed",) * worker_count,
+                )
 
     def test_sqlite_event_store_exact_counts_across_processes(self) -> None:
         for workers in (1, 2, 3, 4, 8):
