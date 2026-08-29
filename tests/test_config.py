@@ -5,6 +5,7 @@ from macr_runtime.config import (
     AuthMode,
     ConnectionScope,
     ProviderConfig,
+    load_discovery_configs,
     load_provider_configs,
 )
 from macr_runtime.errors import ConfigurationError
@@ -35,6 +36,10 @@ class ProviderConfigTests(unittest.TestCase):
         claude = configs[10]
         self.assertFalse(claude.api_usage_allowed)
         self.assertEqual(claude.auth_mode, AuthMode.SUBSCRIPTION_CLIENT)
+        discovery = load_discovery_configs(ROOT / "config" / "providers.json")
+        self.assertEqual([item.id for item in discovery], ["openrouter_discovery"])
+        self.assertTrue(discovery[0].discovery_only)
+        self.assertFalse(discovery[0].inference_allowed)
 
     def test_grok_profiles_are_enabled_and_fixed(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")

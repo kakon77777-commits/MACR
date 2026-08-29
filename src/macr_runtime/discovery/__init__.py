@@ -5,6 +5,12 @@ from .base import (
     ModelNormalizer,
     ModelObservation,
 )
+from .openrouter import (
+    OpenRouterApiDiscoveryProvider,
+    OpenRouterDiscoveryError,
+    OpenRouterModelNormalizer,
+    OpenRouterWebDiscoveryProvider,
+)
 
 __all__ = [
     "DiscoveryQuery",
@@ -12,4 +18,8 @@ __all__ = [
     "ModelDiscoveryProvider",
     "ModelNormalizer",
     "ModelObservation",
+    "OpenRouterApiDiscoveryProvider",
+    "OpenRouterDiscoveryError",
+    "OpenRouterModelNormalizer",
+    "OpenRouterWebDiscoveryProvider",
 ]

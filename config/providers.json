@@ -1,5 +1,20 @@
 {
   "schema_version": 2,
+  "discovery_providers": [
+    {
+      "id": "openrouter_discovery",
+      "kind": "openrouter_models_api",
+      "enabled": true,
+      "discovery_only": true,
+      "inference_allowed": false,
+      "auth_mode": "none",
+      "connection_scope": "external_https",
+      "base_url": "https://openrouter.ai",
+      "endpoint_path": "/api/v1/models",
+      "allowed_hosts": ["openrouter.ai"],
+      "max_response_bytes": 8388608
+    }
+  ],
   "providers": [
     {
       "id": "minimax",

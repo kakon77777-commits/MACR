@@ -320,6 +320,136 @@ class ProviderConfig:
         }
 
 
+@dataclass(frozen=True)
+class DiscoveryProviderConfig:
+    id: str
+    kind: str
+    enabled: bool
+    discovery_only: bool
+    inference_allowed: bool
+    auth_mode: AuthMode
+    connection_scope: ConnectionScope
+    base_url: str
+    endpoint_path: str
+    allowed_hosts: tuple[str, ...]
+    max_response_bytes: int
+
+    def __post_init__(self) -> None:
+        if not self.id or not self.id.strip():
+            raise ConfigurationError("discovery provider id must be non-empty")
+        if not self.kind or not self.kind.strip():
+            raise ConfigurationError("discovery provider kind must be non-empty")
+        if not isinstance(self.enabled, bool):
+            raise ConfigurationError("discovery provider enabled must be boolean")
+        if self.discovery_only is not True:
+            raise ConfigurationError("discovery provider must be discovery_only")
+        if self.inference_allowed is not False:
+            raise ConfigurationError("discovery provider inference must remain disabled")
+        if self.auth_mode is not AuthMode.NONE:
+            raise ConfigurationError(
+                "public discovery provider must use auth_mode none"
+            )
+        if self.connection_scope is not ConnectionScope.EXTERNAL_HTTPS:
+            raise ConfigurationError(
+                "discovery provider must use external_https scope"
+            )
+        normalized_hosts = tuple(host.lower() for host in self.allowed_hosts)
+        if (
+            not normalized_hosts
+            or len(set(normalized_hosts)) != len(normalized_hosts)
+            or any(
+                not host
+                or ":" in host
+                or "/" in host
+                or host.startswith(".")
+                or host.endswith(".")
+                for host in normalized_hosts
+            )
+        ):
+            raise ConfigurationError(
+                "discovery provider allowed_hosts is invalid"
+            )
+        parsed = urlparse(self.base_url)
+        hostname = parsed.hostname.lower() if parsed.hostname else ""
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or hostname not in normalized_hosts
+        ):
+            raise ConfigurationError("discovery provider base_url is invalid")
+        if (
+            not isinstance(self.endpoint_path, str)
+            or not self.endpoint_path.startswith("/")
+            or self.endpoint_path.startswith("//")
+            or ".." in self.endpoint_path.split("/")
+            or "?" in self.endpoint_path
+            or "#" in self.endpoint_path
+        ):
+            raise ConfigurationError(
+                "discovery provider endpoint_path is invalid"
+            )
+        if isinstance(self.max_response_bytes, bool) or not isinstance(
+            self.max_response_bytes,
+            int,
+        ):
+            raise ConfigurationError(
+                "discovery provider max_response_bytes must be an integer"
+            )
+        if not 1 <= self.max_response_bytes <= 64 * 1024 * 1024:
+            raise ConfigurationError(
+                "discovery provider max_response_bytes is out of range"
+            )
+        object.__setattr__(self, "allowed_hosts", normalized_hosts)
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "DiscoveryProviderConfig":
+        try:
+            return cls(
+                id=_required_string(data, "id"),
+                kind=_required_string(data, "kind"),
+                enabled=_boolean(data, "enabled", False),
+                discovery_only=_boolean(data, "discovery_only", False),
+                inference_allowed=_boolean(data, "inference_allowed", False),
+                auth_mode=AuthMode(str(data.get("auth_mode", "none"))),
+                connection_scope=ConnectionScope(
+                    str(data.get("connection_scope", "disabled"))
+                ),
+                base_url=_required_string(data, "base_url"),
+                endpoint_path=_required_string(data, "endpoint_path"),
+                allowed_hosts=_string_array(data, "allowed_hosts"),
+                max_response_bytes=data.get("max_response_bytes", 8 * 1024 * 1024),
+            )
+        except ConfigurationError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ConfigurationError(
+                f"invalid discovery provider configuration: {exc}"
+            ) from exc
+
+    @property
+    def url(self) -> str:
+        return self.base_url.rstrip("/") + self.endpoint_path
+
+    def public_summary(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "enabled": self.enabled,
+            "discovery_only": self.discovery_only,
+            "inference_allowed": self.inference_allowed,
+            "auth_mode": self.auth_mode.value,
+            "connection_scope": self.connection_scope.value,
+            "base_url": self.base_url,
+            "endpoint_path": self.endpoint_path,
+            "allowed_hosts": list(self.allowed_hosts),
+            "max_response_bytes": self.max_response_bytes,
+        }
+
+
 def load_provider_configs(path: str | Path) -> tuple[ProviderConfig, ...]:
     config_path = Path(path)
     try:
@@ -342,4 +472,32 @@ def load_provider_configs(path: str | Path) -> tuple[ProviderConfig, ...]:
     ids = [item.id for item in configs]
     if len(ids) != len(set(ids)):
         raise ConfigurationError("provider ids must be unique")
+    return configs
+
+
+def load_discovery_configs(
+    path: str | Path,
+) -> tuple[DiscoveryProviderConfig, ...]:
+    config_path = Path(path)
+    try:
+        document = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ConfigurationError(
+            f"cannot load discovery config {config_path}: {exc}"
+        ) from exc
+    if not isinstance(document, dict) or document.get("schema_version") != 2:
+        raise ConfigurationError(
+            "discovery config requires providers.json schema_version 2"
+        )
+    raw = document.get("discovery_providers", ())
+    if not isinstance(raw, list) or any(
+        not isinstance(item, Mapping) for item in raw
+    ):
+        raise ConfigurationError(
+            "providers.json discovery_providers must be an array of objects"
+        )
+    configs = tuple(DiscoveryProviderConfig.from_dict(item) for item in raw)
+    ids = [item.id for item in configs]
+    if len(ids) != len(set(ids)):
+        raise ConfigurationError("discovery provider ids must be unique")
     return configs
