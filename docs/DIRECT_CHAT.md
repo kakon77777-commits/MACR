@@ -1,6 +1,6 @@
 # MACR Direct Chat UI 0.1 Operator Guide
 
-Status: retained Direct UI `0.1` under `MACR 0.6.0a0`, 2026-08-29
+Status: retained Direct UI `0.1` under `MACR 0.6.0a1`, 2026-08-30
 
 This is the executable Direct plane for provider-native Grok 4.6 and local Qwythos conversations. It is not the future MACR v0.6 dynamic-coordination runtime. The v0.6 design and implementation plan remain separately versioned and unchanged.
 
@@ -37,6 +37,7 @@ The server shuts down after 30 idle minutes by default. Active requests and unse
 - While generating, the UI shows model and elapsed wall time only. It has no fabricated percentage and does not stream partial tokens.
 - A completed answer is privately captured and accounted before it is atomically added to history. Model text is rendered as exact safe pre-wrapped text, not executable HTML.
 - Search, archive, restore, active settings, and provider-account summaries are local UI functions.
+- Sampling/budget settings remain global, while context warning, hard context, default output, and maximum output are selected per exact provider/model from `model-token-policies.sqlite3`. A new conversation pins that policy digest; an override never silently changes an existing conversation or Qwythos when Grok is edited.
 
 ## Provider boundaries
 
@@ -65,6 +66,7 @@ D:\AI_RESIDENCE\AI_Runtime\macr-state\
   direct\instance.json
   direct\instance.lock
   settings\settings.sqlite3
+  settings\model-token-policies.sqlite3
   runtime\dispatch.sqlite3
   accounting\accounting.sqlite3
   candidates\<provider>\<run-id>\answer.bin
@@ -92,7 +94,7 @@ MACR retains only content-free provider accounting, operational hashes/Candidate
 
 The implementation gate is offline/local and does not spend Grok credit. The operator completes the remaining live acceptance from the UI:
 
-1. Open the v0.6 checkout's launcher and confirm the header says `MACR 0.6.0a0 · Direct UI 0.1 alpha`.
+1. Open the v0.6 checkout's launcher and confirm the header says `MACR 0.6.0a1 · Direct UI 0.1 alpha`.
 2. Confirm Grok reports a configured state and Qwythos reports the installed local model/digest.
 3. Create a Qwythos conversation with a blank system prompt. Send two turns where the second depends on the first. Refresh/reopen and confirm all four messages persist in order.
 4. Create a Grok conversation with a short, visible system prompt or a blank prompt. Send two bounded turns where the second depends on the first. Confirm the response appears only when complete.

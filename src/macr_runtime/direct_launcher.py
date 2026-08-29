@@ -226,7 +226,7 @@ def smoke_direct_chat(
         raise RuntimeError("Direct Chat local smoke check failed")
     return {
         "status": "direct_chat_smoke_ok",
-        "version": "0.6.0a0",
+        "version": "0.6.0a1",
         "ui_version": "0.1",
         "host": "127.0.0.1",
         "asset_status": asset_status,
@@ -240,7 +240,7 @@ def _instance_document(server: DirectChatServer) -> dict[str, object]:
     address = server.address
     return {
         "schema": "macr_direct_instance_v1",
-        "version": "0.6.0a0",
+        "version": "0.6.0a1",
         "ui_version": "0.1",
         "pid": os.getpid(),
         "host": address.host,
@@ -279,7 +279,7 @@ def _read_instance(path: Path) -> dict[str, object] | None:
         return None
     if (
         document["schema"] != "macr_direct_instance_v1"
-        or document["version"] != "0.6.0a0"
+        or document["version"] != "0.6.0a1"
         or document["ui_version"] != "0.1"
         or document["host"] != "127.0.0.1"
         or isinstance(document["port"], bool)

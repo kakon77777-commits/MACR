@@ -65,7 +65,7 @@ def _doctor(
     registry = ProviderRegistry.from_configs(configs, key_sources=key_sources)
     report = {
         "runtime": "macr-runtime",
-        "version": "0.6.0a0",
+        "version": "0.6.0a1",
         "network_activity": False,
         "storage": layout.describe(),
         "providers": list(registry.health()),
@@ -1067,7 +1067,7 @@ def _invoke(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="macr",
-        description="MACR v0.6.0a0 evidence kernel and Direct Chat control utility",
+        description="MACR v0.6.0a1 evidence kernel and Direct Chat control utility",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

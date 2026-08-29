@@ -1,10 +1,10 @@
 # Provider status
 
-Updated: 2026-08-29
+Updated: 2026-08-30
 
 | Provider ID | Required model/route | Credential | Billing | Runtime state |
 |---|---|---|---:|---|
-| `minimax` | operator-selected compatible model | `MINIMAX_API_KEY` | allowed | adapter implemented; account configuration may be absent |
+| `minimax` | exact `MiniMax-M2.7` or `MiniMax-M2.7-highspeed` | `MINIMAX_API_KEY` | allowed | adapter implemented; 180,000 hard context / 2,048 output policy |
 | `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | delegated + Direct adapters implemented; Direct live acceptance pending |
 | `grok_standard` | `grok-4.3` | `XAI_API_KEY` | allowed | adapter implemented; manual profile only |
 | `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | delegated + Direct adapters implemented; Direct live acceptance pending |
@@ -18,11 +18,15 @@ Updated: 2026-08-29
 
 ## Shared execution and Direct alpha status
 
-Delegated callable profiles enter the v0.6.0a0 CLI through the preserved one-shot current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Direct Grok/Qwythos turns keep the separate `DirectRuntime` contract; v0.6 coordination remains shadow/offline until later plan tasks and authority gates.
+Delegated callable profiles enter the v0.6.0a1 CLI through current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Direct Grok/Qwythos turns keep the separate `DirectRuntime` contract. T1 now has explicit `t1-stage` and one-member `t1-worker` product paths, but the live T1 route remains stopped and offline-only.
 
-Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. No provider generation was called while building or verifying the a4 UI. Direct Chat is locally executable; Codex/Claude Code host adapters, automatic routing, bounded fan-out, and Context Capsules remain unavailable.
+Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. The three-process T1 gate uses an injected fake transport; no real provider generation occurred. Direct Chat is locally executable; Codex/Claude Code host adapters and autonomous routing remain unavailable.
 
 Accounting's `soft_warning` state remains distinct from each delegated provider adapter's hard task-budget gate. The Direct local `operator_managed` profile is now active for newly created Direct conversations and is warn-only; exact settings are pinned per conversation.
+
+## Exact model-token policy status
+
+The active token controls are model-local and append-only at `settings\model-token-policies.sqlite3`: Grok 4.6/4.3 hard context 400,000 and max output 65,536; ordinary GLM 5.3 Flash and Gemini 3.7 Flash hard context 512,000 and max output 65,536; MiniMax M2.7 variants hard context 180,000 and max output 2,048; Qwythos-9B-v2 hard context 8,192 and max output 4,096. The separate T1 GLM preset remains 128,000 / 8,192. An override never changes provider/model identity or immutable provider ceilings.
 
 ## Grok policy
 
@@ -77,6 +81,8 @@ Dispatch requires all of:
 - empty inputs or bounded text-only inputs with non-path labels.
 
 The outbound request excludes local task/workspace identity and currency budget. Credential-free preflight validates structure without reading a key; provider invocation repeats validation, reads fixed `D:\KEY\GLM.txt`, verifies the approval HMAC, and only then permits network transport. Health reads metadata only. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only.
+
+For T1, `queue-status` exposes only bounded content-free state. A strict private manifest binds three ordered member digests, exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy digest, USD 0.005 per member, USD 0.015 aggregate, USD 0.020 campaign, expiry, and dispatcher set. `reconciliation_required` blocks every later claim. There is no automatic retry, fallback, verification, materialization, or acceptance.
 
 ## Claude boundary
 

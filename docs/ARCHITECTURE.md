@@ -1,4 +1,4 @@
-# MACR v0.6.0a0 Dynamic Coordination + Shared Core + Direct Chat architecture
+# MACR v0.6.0a1 T1 Operability + Shared Core + Direct Chat architecture
 
 ```text
 Loopback browser (127.0.0.1, authenticated cookie)
@@ -67,7 +67,7 @@ one SQLite terminal event + accounting outbox
 materialization / verification / acceptance (orthogonal; acceptance host-only)
 ```
 
-The a3 Checkpoint A shared core remains an immutable ancestor and a4 supplies Direct runtime/UI. v0.6 adds Context Capsules, model/route identities, append-only Observatory evidence, deterministic planning, exact T0 execution, durable T1 queue/batch authority, constrained T2 proposals, T3 target ownership/cross-file verification, and blinded differential manifests. Codex or Claude Code host adapters, transport-level Direct cancellation, late-result recovery, autonomous acceptance, and an activated live v0.6 route remain absent.
+The a3 Checkpoint A shared core remains an immutable ancestor and a4 supplies Direct runtime/UI. v0.6 adds Context Capsules, model/route identities, append-only Observatory evidence, deterministic planning, exact T0 execution, durable T1 queue/batch authority, constrained T2 proposals, T3 target ownership/cross-file verification, and blinded differential manifests. v0.6.0a1 adds the production T1 consumer and model-local token policy plane without activating a live route. Codex or Claude Code host adapters, transport-level Direct cancellation, late-result recovery, autonomous acceptance, and an activated live route remain absent.
 
 ## Dynamic coordination boundary
 
@@ -82,7 +82,7 @@ untrusted external observation -> immutable snapshot/evidence
                               -> host-only acceptance
 ```
 
-T1 queue members are exact ordered digests bound to provider, route, role, privacy, context class, per-member ceiling, aggregate ceiling, expiry, and an authorized dispatcher set. One member permits one provider attempt. Expired dispatch leases enter `reconciliation_required` and never auto-requeue. T2 coordinator output is an untrusted, content-free plan-revision proposal; it cannot choose a provider/model, expand Context Capsules, issue authority, accept, merge, deploy, or name a resident. T3 target paths are normalized under an exact D-drive repository identity and persisted only as digests. Same-target ownership requires one named alternative group and at most one automatic-materialization flag; verification itself always leaves materialization `none` and acceptance `pending`.
+T1 queue members are exact ordered digests bound to provider, route, role, privacy, context class, per-member ceiling, aggregate ceiling, expiry, and an authorized dispatcher set. One member permits one provider attempt. `queue-status` provides bounded global state/reconciliation enumeration. `t1-stage` creates exact batch plus dispatch authority only after manifest, token-policy and GLM approval validation. `t1-worker` claims one plan-scoped member and traverses `MacrRuntime`, Candidate Vault, events and accounting once. Expired or ambiguous dispatches enter `reconciliation_required`, block every later T1 claim, and never auto-requeue. Explicit reconciliation revokes the old batch, so continuation requires a new manifest and new authority. Verification and acceptance remain outside the worker. T2 coordinator output is an untrusted, content-free plan-revision proposal; it cannot issue authority, accept, merge, deploy, or name a resident. T3 target paths remain digest-only.
 
 Differential manifests apply one exact probe pack and verifier graph to at least three qualified route candidates. Public comparison rows contain blinded candidate IDs, verifier counts, evidence digests, and costs—never model labels. `probe-plan` and `probe-replay` are manifest/replay commands and perform no provider execution.
 
@@ -219,6 +219,16 @@ runtime role != authorship identity
 generation != verification != acceptance
 ```
 
-Every delegated provider completion remains a candidate. MACR v0.6.0a0 preserves provider, capture, return-contract, materialization, verification, and acceptance states independently; Direct projection into its private conversation store does not create a coordinated verification or accepted-result transition.
+Every delegated provider completion remains a candidate. MACR v0.6.0a1 preserves provider, capture, return-contract, materialization, verification, and acceptance states independently; Direct projection into its private conversation store does not create a coordinated verification or accepted-result transition.
+
+## Model-local token-policy plane
+
+`ModelTokenPolicy` is keyed by exact provider and exact model. Seven built-ins establish immutable provider ceilings; append-only revisions in `settings\model-token-policies.sqlite3` may change warning, hard-context, default-output, and max-output values only inside those ceilings. There is no global active token profile. Direct schema 2 pins canonical policy JSON/digest when a conversation is created. Delegated runtime resolves the current exact policy before authority admission, records its digest in the dispatch event, and never clamps an oversized task. GLM approval schema 2 binds the same digest, explicit context envelope, and output envelope.
+
+Ordinary external policies are larger than the local Qwythos policy: Grok hard context 400,000; GLM and Gemini 512,000; MiniMax 180,000 with a 2,048 OpenAI-compatible output ceiling; Qwythos remains 8,192 context and 4,096 output. The T1 GLM preset is separate at 128,000 context and 8,192 output.
+
+## Quiet verification admission
+
+The invoker predicate is unchanged and fail-closed. `verify-v06.ps1` owns the named `MACR_V06_QUIET_CENSUS` mutex for its complete run and requires five zero samples before and after all tests. The sampler reports only counts and PIDs. The mutex coordinates updated verifiers; it does not control arbitrary processes or turn a census into authority.
 
 `PLAIN_SOURCE` is a conservative wrapper-format guard: it rejects Markdown fences, evidence/warning sections, common leading prose wrappers, and headings derived from the task's declared language. A generic `Code:`/`Source:` heading is rejected only when the colon ends the line, avoiding false rejection of source such as Python `code: str = 'ok'`. It does not prove that arbitrary source compiles. `JSON_OBJECT` validates one semantic object with unique keys; whitespace, final newline, and member order are not significant. Byte-exact JSON belongs under `EXACT_TEXT`.

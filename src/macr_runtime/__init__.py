@@ -79,6 +79,22 @@ from .plan_runtime import (
     PlanRuntime,
     VerificationReport,
 )
+from .model_token_store import ModelTokenPolicyStore
+from .token_policy import (
+    ModelTokenOverride,
+    ModelTokenPolicy,
+    ModelTokenPolicyResolver,
+    builtin_model_token_policies,
+    t1_glm_live_policy,
+)
+from .scheduler import PlanQueue, QueueMemberState
+from .t1_dispatcher import T1DispatchError, T1DispatchResult, T1Dispatcher
+from .t1_manifest import (
+    T1AuthorityBundle,
+    T1ExecutionManifest,
+    T1ExecutionMember,
+    load_t1_manifest,
+)
 from .accounting import CostClass
 from .billing_port import (
     BillObservation,
@@ -150,6 +166,10 @@ __all__ = [
     "ImportReport",
     "MacrRuntime",
     "ModelSubject",
+    "ModelTokenOverride",
+    "ModelTokenPolicy",
+    "ModelTokenPolicyResolver",
+    "ModelTokenPolicyStore",
     "ModelBinding",
     "ModelObservatory",
     "ModelPassport",
@@ -158,6 +178,7 @@ __all__ = [
     "PlanExecutionMode",
     "PlanExecutionResult",
     "PlanRuntime",
+    "PlanQueue",
     "PlanningCandidate",
     "PlanningError",
     "PlanningInput",
@@ -175,6 +196,7 @@ __all__ = [
     "QualificationEngine",
     "QualificationPolicy",
     "QualificationState",
+    "QueueMemberState",
     "ProviderState",
     "ProviderUsage",
     "RawProviderObservation",
@@ -191,6 +213,12 @@ __all__ = [
     "TaskConstraints",
     "TaskContract",
     "TaskPolicyClauses",
+    "T1AuthorityBundle",
+    "T1DispatchError",
+    "T1DispatchResult",
+    "T1Dispatcher",
+    "T1ExecutionManifest",
+    "T1ExecutionMember",
     "TopologyId",
     "VerifierGraph",
     "VerifierNode",
@@ -201,8 +229,11 @@ __all__ = [
     "aware_iso8601",
     "canonical_json_bytes",
     "canonical_policy_snapshot",
+    "builtin_model_token_policies",
+    "load_t1_manifest",
     "sha256_id",
+    "t1_glm_live_policy",
     "wilson_lower_bound",
 ]
 
-__version__ = "0.6.0a0"
+__version__ = "0.6.0a1"

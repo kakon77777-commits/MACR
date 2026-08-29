@@ -221,3 +221,29 @@ Commit `6c66eff1ce200c4d07506310794ea9ac89a42895` / tree `5172fb7b0d72d3a733ec06
 ## v0.6.0a0 local release decision
 
 On 2026-08-30 Neo explicitly authorized updating, merging, and publishing the verified v0.6 work. The release remains version `0.6.0a0` and is tagged `v0.6.0a0` only after merged-result verification. It is an offline candidate, not a claim that the live runbook passed. At the time of authorization this repository had no configured remote, so local merge/tag and external push are distinct states; no external publication is inferred.
+
+## v0.6.0a1 T1 operability and model-local token repair
+
+Post-release MSSP pressure testing retained the clean `v0.6.0a0` positives but found two product gaps and one conservative operational interaction: `PlanQueue` had no global `reconciliation_required` enumeration, no production consumer traversed `MacrRuntime`/Vault/events/accounting, and concurrent reviewer PowerShell command lines containing the synthetic invoker marker could make the unchanged census fail safely. Neo authorized a bounded offline repair and separately requested model-local context/output settings with larger external defaults. No implementation subagent, real provider call, shared-runtime migration, merge, tag, deployment, or live-route activation was authorized for the repair branch.
+
+The implementation train is exact and append-only:
+
+| Boundary | Commit |
+|---|---|
+| model-token policy contracts/store | `a9c72346ed4273e3848ddb553b2d0408b1d80b88` |
+| Direct per-model pinned policy | `e5052583a25baf9cba3928035c381141dbffa869` |
+| delegated limits and GLM approval schema 2 | `dbcd8368b609d0fb9f12e60508c25dad408abff4` |
+| global queue reconciliation/status | `cd8286843d957e27c34845e4611e69f2d8a259cd` |
+| strict private T1 manifests | `f5ff4ccbf0cd8dad9221b8dc10dded5d31c38361` |
+| dual-authority staging | `df92aae165025f1cbd6022d4661f90d6242e1ba6` |
+| one-attempt production worker | `531b4745e664c35995fb42bf7e537bf61fc304f6` |
+| three-process complete-path mock | `8c5c4da8172cc976d6f58b37e9bf76066f691b10` |
+| quiet census admission | `4404fd2012b9789ed6f732c320e188659ec93e6d` |
+
+Token-policy state is append-only at `settings\model-token-policies.sqlite3`. New Direct conversations pin one exact provider/model policy; old conversations are not rewritten. Delegated runtime records the exact policy digest, and GLM approval schema 2 binds the same digest plus context/output envelope. The ordinary presets deliberately differ: Grok hard context 400,000; GLM/Gemini 512,000; MiniMax 180,000 with max output 2,048; Qwythos-9B-v2 8,192 / 4,096. The T1 GLM preset remains a separate 128,000 / 8,192.
+
+T1 staging requires a strict three-member manifest, three existing GLM host approvals, exact T1 token-policy digest, batch authority, dispatch authority, USD 0.005 per member, USD 0.015 aggregate and USD 0.020 campaign. One worker claims at most one plan-scoped member. Provider completion does not verify, materialize, accept, merge, or deploy. Dispatch ambiguity enters global `reconciliation_required`, blocks later claims, and explicit resolution revokes the old batch so only a separately authorized new manifest can continue.
+
+The original concurrent census RED remains evidence; it is not erased by later quiet-window GREEN controls. The predicate was not weakened. Updated verifiers coordinate through the named `MACR_V06_QUIET_CENSUS` mutex and require five zero samples before and after the full gate. Arbitrary external processes remain outside mutex control.
+
+The `v0.6.0a0` tag and release decision remain immutable historical evidence. v0.6.0a1 is offline-only until a later exact clean checkpoint and explicit Neo live authorization. No live provider call occurred during this repair.

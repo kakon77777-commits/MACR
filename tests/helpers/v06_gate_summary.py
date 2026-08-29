@@ -14,11 +14,18 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from macr_runtime.accounting import AccountingStore
+from macr_runtime import __version__
 from macr_runtime.canonical import canonical_json_bytes, sha256_id
+from macr_runtime.direct_store import DirectConversationStore
 from macr_runtime.differential import DifferentialProbePack
 from macr_runtime.observatory_db import ObservatoryDatabase
 from macr_runtime.planner import DynamicCoordinationPlanner
 from macr_runtime.runtime_db import RuntimeDatabase
+from macr_runtime.model_token_store import ModelTokenPolicyStore
+from macr_runtime.token_policy import (
+    builtin_model_token_policies,
+    t1_glm_live_policy,
+)
 
 from tests.support import d_drive_tempdir
 from tests.test_planner import (
@@ -105,6 +112,7 @@ def main() -> int:
     )
     clean = _git("status", "--porcelain") == ""
     summary = {
+        "version": __version__,
         "checkpoint_commit": _git("rev-parse", "HEAD"),
         "checkpoint_tree": _git("rev-parse", "HEAD^{tree}"),
         "git_clean": clean,
@@ -113,11 +121,21 @@ def main() -> int:
         "runtime_schema_version": RuntimeDatabase.SCHEMA_VERSION,
         "observatory_schema_version": ObservatoryDatabase.SCHEMA_VERSION,
         "accounting_schema_version": AccountingStore.SCHEMA_VERSION,
+        "direct_conversation_schema_version": DirectConversationStore.SCHEMA_VERSION,
+        "model_token_policy_schema_version": ModelTokenPolicyStore.SCHEMA_VERSION,
+        "model_token_policy_count": len(builtin_model_token_policies()),
+        "model_token_policy_digest": sha256_id(
+            "model_token_policy_set_v1",
+            [item.to_dict() for item in builtin_model_token_policies()],
+        ),
+        "t1_live_policy_digest": t1_glm_live_policy().policy_digest,
         "schema_fingerprint": schema_fingerprint,
         "planner_replay_digest": _planner_replay_digest(),
         "canonical_probe_pack_digest": pack.pack_digest,
         "queue_worker_counts": [1, 2, 3, 4, 8],
         "sqlite_bootstrap_processes": 32,
+        "t1_complete_path_processes": 3,
+        "quiet_census_samples": 5,
         "network_activity": False,
         "provider_generation": False,
     }

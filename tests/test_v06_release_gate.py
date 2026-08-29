@@ -13,6 +13,63 @@ SUMMARY = ROOT / "tests" / "helpers" / "v06_gate_summary.py"
 
 
 class V06ReleaseGateTests(unittest.TestCase):
+    def test_a1_docs_bind_model_local_tokens_t1_operability_and_offline_route(self) -> None:
+        active = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                ROOT / "README.md",
+                ROOT / "docs" / "ARCHITECTURE.md",
+                ROOT / "docs" / "DIRECT_CHAT.md",
+                ROOT / "docs" / "PROVIDER_STATUS.md",
+                ROOT / "docs" / "STORAGE_AND_MIGRATION.md",
+                ROOT / "docs" / "PROVENANCE.md",
+            )
+        )
+        for marker in (
+            "0.6.0a1",
+            "model-token-policies.sqlite3",
+            "grok-4.6",
+            "400,000",
+            "glm-5.3-flash",
+            "512,000",
+            "MiniMax-M2.7",
+            "2,048",
+            "Qwythos-9B-v2",
+            "8,192",
+            "queue-status",
+            "t1-stage",
+            "t1-worker",
+            "reconciliation_required",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, active)
+        checkpoint = (ROOT / "docs" / "V060A1_OFFLINE_CHECKPOINT.md").read_text(
+            encoding="utf-8"
+        )
+        runbook = (ROOT / "docs" / "V060A1_LIVE_GATE_RUNBOOK.md").read_text(
+            encoding="utf-8"
+        )
+        for marker in (
+            "offline-only",
+            "initial concurrent census RED",
+            "quiet-window GREEN",
+            "three-process complete-path mock",
+            "NotMeasured",
+            "no live provider call",
+        ):
+            self.assertIn(marker, checkpoint)
+        for marker in (
+            "USD 0.005",
+            "USD 0.015",
+            "USD 0.020",
+            "128,000",
+            "8,192",
+            "no retry",
+            "exact live manifest",
+            "not authorized",
+        ):
+            self.assertIn(marker, runbook)
+
     def test_verifier_names_every_required_offline_gate(self) -> None:
         text = VERIFY.read_text(encoding="utf-8")
         for marker in (
@@ -58,6 +115,12 @@ class V06ReleaseGateTests(unittest.TestCase):
         self.assertEqual(document["runtime_schema_version"], 6)
         self.assertEqual(document["observatory_schema_version"], 2)
         self.assertEqual(document["accounting_schema_version"], 2)
+        self.assertEqual(document["version"], "0.6.0a1")
+        self.assertEqual(document["direct_conversation_schema_version"], 2)
+        self.assertEqual(document["model_token_policy_schema_version"], 1)
+        self.assertEqual(document["model_token_policy_count"], 7)
+        self.assertEqual(document["t1_complete_path_processes"], 3)
+        self.assertEqual(document["quiet_census_samples"], 5)
         self.assertFalse(document["network_activity"])
         self.assertFalse(document["provider_generation"])
         self.assertEqual(document["queue_worker_counts"], [1, 2, 3, 4, 8])

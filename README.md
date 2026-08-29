@@ -1,8 +1,8 @@
-# MACR Runtime v0.6.0a0 — Evidence Kernel + Direct Chat UI 0.1
+# MACR Runtime v0.6.0a1 — T1 Operability + Model-Local Tokens + Direct UI 0.1
 
-MACR is a migration-aware runtime for heterogeneous AI workers. The v0.6.0a0 offline candidate preserves the complete v0.5.0a4 Direct plane and implements the deterministic coordination control plane through T1 bounded fan-out, constrained T2 proposals, experimental T3 cross-file verification, and blinded differential manifests. Direct provider completion, private capture, conversation projection, coordinated candidate generation, verification, and acceptance remain separate states.
+MACR is a migration-aware runtime for heterogeneous AI workers. The v0.6.0a1 offline-only candidate preserves the complete Direct plane, adds exact provider/model token policies, and turns the former T1 queue library into a one-attempt production consumer with global reconciliation visibility. Provider completion, private capture, conversation projection, verification, acceptance, merge, release, and live-route activation remain separate states.
 
-This alpha line preserves all a3 replay and sensitive-marker repairs. Direct Chat remains a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. Dynamic coordination is implemented as an offline-first host control plane; no Codex/Claude Code host adapter or live v0.6 route is activated by this branch.
+This alpha line preserves all a3 replay and sensitive-marker repairs. Direct Chat remains a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model and model-token policy per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. No Codex/Claude Code host adapter or live T1 provider route is activated by this branch.
 
 ## Canonical D: placement
 
@@ -20,7 +20,7 @@ OLLAMA_MODELS     = D:\Ai\work together\LocalModels\models
 Install or refresh the Windows Desktop shortcut:
 
 ```powershell
-Set-Location 'D:\Ai\work together\MACR\.worktrees\macr-v0.6-dynamic-coordination'
+Set-Location 'D:\Ai\work together\MACR'
 .\scripts\install-direct-chat-shortcut.ps1
 ```
 
@@ -38,7 +38,7 @@ The UI exposes only `grok` (`grok-4.6`) and `ollama_qwythos`. A blank system-pro
 
 | Provider ID | Model/route | Scope | Selection rule |
 |---|---|---|---|
-| `minimax` | configured MiniMax OpenAI-compatible chat model | external HTTPS | explicit |
+| `minimax` | `MiniMax-M2.7` or `MiniMax-M2.7-highspeed` | external HTTPS | explicit exact model |
 | `grok` | `grok-4.6`, reasoning high | external HTTPS | default Grok/frontier profile |
 | `grok_standard` | `grok-4.3` | external HTTPS | explicit manual selection only |
 | `ollama_qwythos` | Qwythos-9B-v2 Q4_K_M | loopback HTTP | explicit private local selection |
@@ -52,9 +52,25 @@ The UI exposes only `grok` (`grok-4.6`) and `ollama_qwythos`. A blank system-pro
 
 There is no automatic provider routing or fallback. A failed provider never invokes GLM or another model, Google media profile, Grok profile, or Ollama.
 
+## Model-local token policies
+
+Token limits are no longer one global setting. Built-ins and append-only operator overrides are keyed by exact provider/model and stored at `settings\model-token-policies.sqlite3`. A new Direct conversation pins the exact canonical policy JSON and digest; changing an active override affects only later conversations. Delegated dispatch records the same digest and refuses an over-limit task before authority admission or transport; GLM approval schema 2 also binds it.
+
+| Exact provider/model | Warning context | Hard context | Default output | MACR max output |
+|---|---:|---:|---:|---:|
+| `grok/grok-4.6` | 180,000 | 400,000 | 32,768 | 65,536 |
+| `grok_standard/grok-4.3` | 180,000 | 400,000 | 32,768 | 65,536 |
+| `glm_flash_worker/glm-5.3-flash` | 400,000 | 512,000 | 16,384 | 65,536 |
+| `google_gemini/gemini-3.7-flash` | 400,000 | 512,000 | 16,384 | 65,536 |
+| `minimax/MiniMax-M2.7` | 160,000 | 180,000 | 2,048 | 2,048 |
+| `minimax/MiniMax-M2.7-highspeed` | 160,000 | 180,000 | 2,048 | 2,048 |
+| `ollama_qwythos/Qwythos-9B-v2` | 7,000 | 8,192 | 4,096 | 4,096 |
+
+The future T1 live preset is separate and stricter: exact `glm-5.3-flash`, 128,000 context and 8,192 output. Ordinary GLM settings never enlarge a T1 member.
+
 ## Shared-core execution boundary
 
-Every v0.5 CLI invocation uses this order:
+Every delegated CLI or T1 invocation uses this order:
 
 ```text
 deterministic task preflight
@@ -80,9 +96,9 @@ cd 'D:\Ai\work together\MACR'
 .\scripts\verify-v06.ps1
 ```
 
-Both suites are offline. `verify.ps1` runs the complete repository baseline. `verify-v06.ps1` adds exact schema fingerprints, the 1/2/3/4/8 T1 claim matrix, synchronized 32-process bootstrap, planner replay digest, discovery/parser, Context Capsule, identity, qualification, target-collision, accounting-privacy, cross-file, differential, census, doctor-network and clean-tree gates. It emits one deterministic `V06_SUMMARY` line and contacts no provider or local model.
+Both suites are offline. `verify.ps1` runs the complete repository baseline. `verify-v06.ps1` holds the named `MACR_V06_QUIET_CENSUS` mutex, requires five zero-invoker samples before and after the suite, and adds exact schema fingerprints, the 1/2/3/4/8 queue matrix, a real three-process T1 complete-path mock, synchronized 32-process bootstrap, planner replay, identity, qualification, target-collision, accounting-privacy, cross-file and differential gates. It emits one deterministic `V06_SUMMARY` line and contacts no real provider or local model.
 
-Current schema versions are `runtime operational SQLite 6`, `observatory SQLite 2`, and `accounting SQLite 2`.
+Current schema versions are `runtime operational SQLite 6`, `observatory SQLite 2`, `accounting SQLite 2`, Direct conversation schema 2, and model-token policy schema 1.
 
 For the dedicated multiprocess replay from a source checkout:
 
@@ -95,7 +111,7 @@ The synchronized fresh-database test starts 32 processes behind one barrier. WAL
 
 ## Legacy-ledger migration gate
 
-If the preserved JSONL ledger is nonempty, inspect it before the first v0.5 invocation:
+If the preserved JSONL ledger is nonempty, inspect it before any current invocation:
 
 ```powershell
 .\scripts\macr.ps1 migrate-ledger --dry-run
@@ -106,7 +122,7 @@ Use `--expected-count N` when an external exact count is available. Import is co
 
 If an append-only source grows after an earlier import, unchanged logical events are matched by original event ID, type, timestamp, and canonical payload. Only the new tail is inserted; conflicting reuse of an existing ID fails closed.
 
-A v0.5 live route also requires every v0.4 invoker to be retired and the preserved JSONL source to be sealed with the Windows read-only attribute before the authoritative hash/count snapshot and migration. See `docs/STORAGE_AND_MIGRATION.md`. The SQLite current-hash gate detects later drift, but it does not grant authority to unseal or rerun an old writer.
+A live route also requires every legacy invoker to be retired and the preserved JSONL source to be sealed with the Windows read-only attribute before the authoritative hash/count snapshot and migration. See `docs/STORAGE_AND_MIGRATION.md`. The SQLite current-hash gate detects later drift, but it does not grant authority to unseal or rerun an old writer.
 
 ## Invocation
 
@@ -158,6 +174,21 @@ Restricted GLM Flash worker, loading its key from D: for this process only:
 
 `glm_flash_worker` requires `delegable=true`, `delegation_class=non_sensitive_routine`, an exact `delegation_approval_sha256`, and a separate unexpired host-approval record under D: runtime state. That record binds the digest to `host_operator`, a UUID nonce, creation time, and expiration time, and is authenticated with HMAC-SHA256 using the separately controlled fixed GLM credential; editing the JSON or extending its expiry invalidates the MAC. A task cannot authorize itself merely by carrying its own checksum. The approval manifest covers the complete credential-free request payload, fixed provider/endpoint/model, task type, privacy, maximum output, pricing basis, and USD ceiling. Changing any covered byte invalidates approval before network use. Public or explicitly approved internal privacy, an empty `write_scope`, independent verification, no patch authority, and a positive conservative-list-price budget are also mandatory. It accepts only bounded text inputs with non-path labels, rejects obvious local-path/credential markers, and omits local task/workspace identity and currency budget from the outbound request. HTTPS schemes are not drive paths; observed `X:\\<LaTeX-command>` ambiguities are exempted only through a closed command set and cease to be exempt when path-like continuation follows. Semantic classification still belongs to the trusted operator.
 
+## T1 staging and worker commands
+
+`queue-status` globally enumerates bounded content-free queue rows, including `reconciliation_required`, without task bodies, answers, credentials, or paths. `t1-stage` loads one strict private three-member manifest, verifies all three existing GLM host approvals and the exact T1 token policy, signs batch plus dispatch authority, and enqueues without a provider call. `t1-worker` claims at most one exact member and performs no retry or fallback.
+
+```powershell
+.\scripts\macr.ps1 queue-status --state reconciliation_required
+.\scripts\macr.ps1 t1-stage .\private\t1-manifest.json `
+  --dispatcher-id worker-1 --dispatcher-id worker-2 --dispatcher-id worker-3 `
+  --expires-in-minutes 30
+.\scripts\macr.ps1 t1-worker .\private\t1-manifest.json `
+  --dispatcher-id worker-1 --allow-network
+```
+
+These commands are implemented but the current route is offline-only. The repository includes only fake-transport complete-path evidence. No exact live manifest has been authorized and no live provider call was made for v0.6.0a1.
+
 Generated images are preserved at:
 
 ```text
@@ -185,7 +216,7 @@ Only validated JPEG/PNG bytes become artifacts. Paths, prompts, answers, source 
 
 - Direct Chat is an alpha candidate. Offline and local service gates pass, but one real multi-turn Grok conversation and one real multi-turn Qwythos conversation remain operator acceptance gates.
 - Transport-level cancellation and explicit late-result recovery are not exposed in Direct UI 0.1. There is no fake cancel control; these are required before a beta label.
-- No host adapter, automatic production router, autonomous acceptance, or activated v0.6 live route. T1/T2/T3 and differential paths are implemented and synthetically verified, but remain operator-controlled candidates.
+- No host adapter, autonomous router, autonomous acceptance, or activated live route. The explicit T1 worker is implemented and synthetically verified, but remains operator-controlled and offline-only.
 - Direct `operator_managed` calls are warn-only and require accounting. Privacy, credential, legacy-migration, current authority, route, and lease failures remain hard pre-network gates.
 - No provider-side hard USD cap; actual Grok cost is checked after completion and an overrun becomes `candidate_failure`.
 - No Grok search, code execution, files, images, or server-side tools.
