@@ -23,7 +23,7 @@ candidate commit        74e81ae5133dd9e9e34fdfc11dae341a10310b2a
 candidate tree          26a232ae138be7dd7f7f21bd4fb62c9d4951711c
 worktree before/after   clean
 complete gate runs      2
-complete tests/run      482 passed, 2 platform capability skips
+complete tests/run      482 run: 480 passed, 2 platform capability skips
 targeted tests/run      127 passed
 summary digest/run      6f93542eac54462bebb03fab8e504c411298d5e01a8c0d0103d28a39e3bd9c24
 network activity        false
