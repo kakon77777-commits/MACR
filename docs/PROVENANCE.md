@@ -153,19 +153,21 @@ base_commit          = 42ea69479b4cc02c41fda9f0f6746c764cf9d2fa
 base_tree            = 605084f538c36435e3e23a04f91c2cefd8ef8260
 branch               = feature/macr-v0.5-direct-chat-ui
 worktree             = D:\Ai\work together\MACR\.worktrees\macr-v0.5-direct-chat-ui
-implementation_commit = d0b5383225fdd382b22122e492967a4310a131a0
-implementation_tree   = ea5e20c7ff54661578f198576e362c02e32466bb
+implementation_commit = a4027c47cfda6e4c386066dbf721f174a66f463f
+implementation_tree   = dd2b8f232f89417421b672775888c13f54167a0c
 ```
 
 | Repository artifact | Bytes | SHA-256 |
 |---|---:|---|
 | `docs/superpowers/specs/2026-08-27-macr-v0.5-direct-chat-design.md` | 32,493 | `EED4BDF417EDE5A989A40DE4597FD92BC6B536A00EF5ACA9FA8A4C69795A66AF` |
-| `docs/superpowers/plans/2026-08-29-macr-v0.5-direct-chat-ui-v0.1.md` | 25,743 | `F22066EC90918FD8BED1CFB89AE6772BF65127A69855F0BE268E82E0468B1E82` |
+| `docs/superpowers/plans/2026-08-29-macr-v0.5-direct-chat-ui-v0.1.md` | 25,979 | `7828668913F942B66A3DC1D557AA706BD2D11DA0FAA10141AA551D8075CAB76C` |
 
 The implementation adds immutable Direct contracts, versioned settings, complete plaintext conversation persistence, exact Grok/Qwythos native adapters, standing current-epoch operator authority, fenced sequential admission, private answer capture, accounting, an authenticated loopback API, packaged offline UI assets, a cross-process single-instance launcher, and a Windows shortcut installer. `DirectRuntime` does not accept a `TaskContract`, call `MacrRuntime.invoke()`, or compile a worker prompt.
 
 The first complete repository gate after implementation ran 298 tests with zero failures and two pre-existing Windows symbolic-link capability skips. It also completed the parameterized multi-process SQLite gates, content/credential scan, zero-invoker census, and offline doctor at version `0.5.0a4`. No Grok or Qwythos generation occurred in that gate. A separate local smoke started the server on `127.0.0.1`, fetched the packaged UI, exchanged the one-time bootstrap, and stopped without provider generation.
 
-The first real shortcut launch exposed two Windows credential-loader integration faults that the offline dry-run did not exercise: the previously shared helper rejected the operator's updated UUID-shaped Grok key, and direct console output bypassed the PowerShell success pipeline used by the launcher. The corrected repository loader accepts only a bounded single-token legacy `xai-...` or UUID shape from an ordinary D-drive file and emits one capturable pipeline value. Synthetic legacy/UUID/invalid controls pass. The actual Desktop `.lnk` was read back with a D-drive launcher, hidden PowerShell arguments, and no key marker; launching twice retained one identical Python Direct process, served `MACRDirect/0.1` with HTTP 200, and kept the instance descriptor free of key/bootstrap data. No provider generation occurred during this launcher verification.
+The first real shortcut launch exposed two Windows credential-loader integration faults that the offline dry-run did not exercise: the previously shared helper rejected an observed UUID-shaped value, and direct console output bypassed the PowerShell success pipeline used by the launcher. A later content-free live authentication probe proved that UUID was not a valid API secret: `/models` returned HTTP 400 with an invalid-key signal, no quota/model signal, and no credential echo. After the operator updated the D-drive file, the same bounded probe returned HTTP 200 and confirmed `grok-4.6` visibility without generation. The final repository loader accepts only a bounded `xai-...` secret from an ordinary D-drive file, while missing/invalid Grok custody degrades to Qwythos-only startup. The actual Desktop `.lnk` was read back with a D-drive launcher, hidden PowerShell arguments, and no key marker; launching twice retained one identical Python Direct process, served `MACRDirect/0.1` with HTTP 200, and kept the instance descriptor free of key/bootstrap data. No provider generation occurred during these launcher/authentication probes.
+
+The credential/UI correction gate ran 302 tests with zero failures and the same two symbolic-link capability skips. It adds fail-closed Direct secret-shape validation, Qwythos-only degradation, disabled unavailable provider cards, and visible failed-turn projection that preserves composer text. The gate remained offline apart from the separately bounded `/models` authentication probe.
 
 This checkpoint remains an alpha candidate until the operator performs one bounded complete multi-turn Grok Direct conversation and one complete multi-turn Qwythos Direct conversation, including D-drive reload and accounting inspection. Transport-level cancellation and explicit late-result recovery are openly absent and remain beta gates. No merge, release, deployment, publication, v0.6 implementation, host-adapter authority, named resident identity, or delegated acceptance follows from this candidate.
