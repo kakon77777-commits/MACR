@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -104,6 +105,8 @@ class DirectRuntime:
         self.conversations = conversations
         self.settings = settings
         self.authority = authority
+        self._conversation_locks_guard = threading.Lock()
+        self._conversation_locks: dict[str, threading.RLock] = {}
 
     def provider_health(self) -> tuple[dict[str, object], ...]:
         health = getattr(self.registry, "health", None)
@@ -194,7 +197,32 @@ class DirectRuntime:
             policy_snapshot_sha256=policy_snapshot_sha256,
         )
 
+    def _conversation_lock(self, conversation_id: str) -> threading.RLock:
+        if not isinstance(conversation_id, str) or not conversation_id.strip():
+            raise ValueError("conversation_id must be non-empty")
+        with self._conversation_locks_guard:
+            return self._conversation_locks.setdefault(
+                conversation_id,
+                threading.RLock(),
+            )
+
     def send_message(
+        self,
+        conversation_id: str,
+        content: str,
+        *,
+        origin_native_id: str,
+        run_id: str | None = None,
+    ) -> DirectTurnResult:
+        with self._conversation_lock(conversation_id):
+            return self._send_message_locked(
+                conversation_id,
+                content,
+                origin_native_id=origin_native_id,
+                run_id=run_id,
+            )
+
+    def _send_message_locked(
         self,
         conversation_id: str,
         content: str,
@@ -327,6 +355,51 @@ class DirectRuntime:
                 permit.run_id,
                 permit.fencing_token,
             )
+
+    def delete_conversation(
+        self,
+        conversation_id: str,
+        *,
+        confirmation: str,
+        origin_native_id: str,
+    ) -> dict[str, object]:
+        origin = DispatchOrigin(
+            "direct_ui",
+            "browser_session",
+            origin_native_id,
+        )
+        with self._conversation_lock(conversation_id):
+            manifest = self.conversations.deletion_manifest(
+                conversation_id,
+                confirmation=confirmation,
+            )
+            candidate_files_removed = 0
+            for run_id, provider_id in manifest.run_providers:
+                if self.services.vault.purge_direct_run(
+                    provider_id,
+                    run_id,
+                    confirmation=confirmation,
+                ):
+                    candidate_files_removed += 1
+            deletion = self.conversations.delete_permanently(
+                conversation_id,
+                confirmation=confirmation,
+            )
+            public = deletion.to_public_dict(
+                candidate_files_removed=candidate_files_removed
+            )
+            self.services.events.append_standalone(
+                "direct.conversation_deleted",
+                str(uuid.uuid4()),
+                {
+                    **public,
+                    "deletion_mode": "operator_confirmed_privacy_delete",
+                    "origin_host": origin.host,
+                    "origin_identifier_kind": origin.identifier_kind,
+                    "origin_native_id": origin.native_id,
+                },
+            )
+            return public
 
     def _capture(
         self,

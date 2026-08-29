@@ -189,6 +189,7 @@ async function openConversation(conversationId) {
   const archive = element("archive-conversation");
   archive.hidden = false;
   archive.textContent = data.conversation.archived ? "還原" : "封存";
+  element("delete-conversation").hidden = false;
   renderMessages(data.messages);
   renderConversationList();
 }
@@ -278,6 +279,38 @@ async function toggleArchive() {
   await openConversation(state.currentConversation.conversation_id);
 }
 
+function resetConversationView() {
+  state.currentConversation = null;
+  element("current-provider").textContent = "NO CONVERSATION SELECTED";
+  element("current-title").textContent = "選擇模型，建立第一個 Direct 對話";
+  element("message-input").value = "";
+  element("message-input").disabled = true;
+  element("send-message").disabled = true;
+  element("archive-conversation").hidden = true;
+  element("delete-conversation").hidden = true;
+  renderMessages([]);
+}
+
+async function deleteConversation() {
+  if (!state.currentConversation || state.generating) return;
+  const confirmation = window.prompt(
+    "永久刪除會清除本機對話正文與 Candidate 回覆檔，且無法還原。輸入 DELETE 確認。",
+  );
+  if (!window.MacrDirectResult.confirmDelete(confirmation)) {
+    showToast("永久刪除已取消；必須精確輸入 DELETE。");
+    return;
+  }
+  const conversationId = state.currentConversation.conversation_id;
+  const data = await request(`/conversations/${conversationId}`, {
+    method: "DELETE",
+    body: { confirmation },
+  });
+  resetConversationView();
+  await Promise.all([loadConversations(), loadAccounting()]);
+  const removed = data.deletion.candidate_files_removed;
+  showToast(`永久刪除完成 · ${data.deletion.message_count} 則訊息 · ${removed} 個 Candidate 檔案`);
+}
+
 function applySettings(settings) {
   state.settings = settings;
   element("settings-summary").textContent = `${settings.profile_name} v${settings.profile_version} · ${settings.budget_behavior} · full multi-turn · accounting required`;
@@ -346,6 +379,7 @@ function bindEvents() {
   element("conversation-search").addEventListener("input", () => loadConversations().catch(handleError));
   element("include-archived").addEventListener("change", () => loadConversations().catch(handleError));
   element("archive-conversation").addEventListener("click", () => toggleArchive().catch(handleError));
+  element("delete-conversation").addEventListener("click", () => deleteConversation().catch(handleError));
   element("toggle-settings").addEventListener("click", () => toggleSettings());
   element("close-settings").addEventListener("click", () => toggleSettings(false));
   element("save-settings").addEventListener("click", () => saveSettings().catch(handleError));

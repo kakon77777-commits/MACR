@@ -39,5 +39,13 @@
     return null;
   }
 
-  root.MacrDirectResult = Object.freeze({ presentation, defaultProvider });
+  function confirmDelete(value) {
+    return value === "DELETE";
+  }
+
+  root.MacrDirectResult = Object.freeze({
+    presentation,
+    defaultProvider,
+    confirmDelete,
+  });
 })(globalThis);

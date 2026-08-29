@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,29 @@ def _bounded_text(
     if not isinstance(value, str) or not value.strip() or len(value) > maximum:
         raise ValueError(f"{name} must be a bounded non-empty string")
     return value if preserve else value.strip()
+
+
+@dataclass(frozen=True)
+class DirectDeletionRecord:
+    conversation_id: str
+    message_count: int
+    run_providers: tuple[tuple[str, str], ...]
+    secure_delete: bool
+    wal_truncated: bool
+
+    @property
+    def run_ids(self) -> tuple[str, ...]:
+        return tuple(run_id for run_id, _ in self.run_providers)
+
+    def to_public_dict(self, *, candidate_files_removed: int) -> dict[str, object]:
+        return {
+            "conversation_id": self.conversation_id,
+            "message_count": self.message_count,
+            "run_count": len(self.run_providers),
+            "candidate_files_removed": candidate_files_removed,
+            "secure_delete": self.secure_delete,
+            "wal_truncated": self.wal_truncated,
+        }
 
 
 class DirectConversationStore:
@@ -649,3 +673,128 @@ class DirectConversationStore:
         if row is None:
             raise DirectStoreConflict("Direct run is missing")
         return self._run_dict(row)
+
+    def delete_permanently(
+        self,
+        conversation_id: str,
+        *,
+        confirmation: str,
+    ) -> DirectDeletionRecord:
+        identity = _uuid4("conversation_id", conversation_id)
+        if confirmation != "DELETE":
+            raise ValueError("permanent deletion requires exact DELETE confirmation")
+        connection = self.database.connect()
+        secure_delete = False
+        message_count = 0
+        run_providers: tuple[tuple[str, str], ...] = ()
+        try:
+            secure_delete = bool(
+                connection.execute("PRAGMA secure_delete = ON").fetchone()[0]
+            )
+            if not secure_delete:
+                raise DirectStoreConflict(
+                    "Direct database could not enable secure_delete"
+                )
+            connection.execute("BEGIN IMMEDIATE")
+            conversation = connection.execute(
+                "SELECT 1 FROM conversations WHERE conversation_id = ?",
+                (identity,),
+            ).fetchone()
+            if conversation is None:
+                raise DirectStoreConflict("Direct conversation is missing")
+            run_rows = connection.execute(
+                """SELECT run_id, provider_id, state
+                FROM direct_runs WHERE conversation_id = ?
+                ORDER BY created_at, run_id""",
+                (identity,),
+            ).fetchall()
+            if any(row["state"] == "created" for row in run_rows):
+                raise DirectStoreConflict(
+                    "Direct conversation has an active run"
+                )
+            run_providers = tuple(
+                (row["run_id"], row["provider_id"]) for row in run_rows
+            )
+            message_count = connection.execute(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
+                (identity,),
+            ).fetchone()[0]
+            connection.execute(
+                "DELETE FROM messages WHERE conversation_id = ?",
+                (identity,),
+            )
+            connection.execute(
+                "DELETE FROM direct_runs WHERE conversation_id = ?",
+                (identity,),
+            )
+            deleted = connection.execute(
+                "DELETE FROM conversations WHERE conversation_id = ?",
+                (identity,),
+            )
+            if deleted.rowcount != 1:
+                raise DirectStoreConflict("Direct conversation deletion failed")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+        checkpoint = self.database.connect()
+        try:
+            result = checkpoint.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            wal_truncated = result is not None and result[0] == 0
+        finally:
+            checkpoint.close()
+        if not wal_truncated:
+            raise DirectStoreConflict("Direct database WAL truncation was busy")
+        return DirectDeletionRecord(
+            conversation_id=identity,
+            message_count=int(message_count),
+            run_providers=run_providers,
+            secure_delete=secure_delete,
+            wal_truncated=True,
+        )
+
+    def deletion_manifest(
+        self,
+        conversation_id: str,
+        *,
+        confirmation: str,
+    ) -> DirectDeletionRecord:
+        identity = _uuid4("conversation_id", conversation_id)
+        if confirmation != "DELETE":
+            raise ValueError("permanent deletion requires exact DELETE confirmation")
+        connection = self.database.connect()
+        try:
+            conversation = connection.execute(
+                "SELECT 1 FROM conversations WHERE conversation_id = ?",
+                (identity,),
+            ).fetchone()
+            if conversation is None:
+                raise DirectStoreConflict("Direct conversation is missing")
+            run_rows = connection.execute(
+                """SELECT run_id, provider_id, state
+                FROM direct_runs WHERE conversation_id = ?
+                ORDER BY created_at, run_id""",
+                (identity,),
+            ).fetchall()
+            if any(row["state"] == "created" for row in run_rows):
+                raise DirectStoreConflict(
+                    "Direct conversation has an active run"
+                )
+            message_count = connection.execute(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
+                (identity,),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        return DirectDeletionRecord(
+            conversation_id=identity,
+            message_count=int(message_count),
+            run_providers=tuple(
+                (row["run_id"], row["provider_id"]) for row in run_rows
+            ),
+            secure_delete=False,
+            wal_truncated=False,
+        )

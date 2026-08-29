@@ -166,6 +166,70 @@ class CandidateVaultTests(unittest.TestCase):
             with self.assertRaisesRegex(StoragePolicyError, "reparse"):
                 CandidateVault(link, temp / "dispatch.sqlite3")
 
+    def test_confirmed_direct_purge_removes_bytes_but_keeps_metadata(self) -> None:
+        with d_drive_tempdir() as temp:
+            vault = CandidateVault(
+                temp / "candidates",
+                temp / "dispatch.sqlite3",
+            )
+            capture = vault.capture(
+                "ollama_qwythos",
+                RUN_ID,
+                b"PRIVATE_CANDIDATE_SENTINEL_49D5",
+                task_digest="a" * 64,
+                approval_digest="b" * 64,
+            )
+            target = vault.root / capture.relative_path
+            self.assertTrue(target.is_file())
+
+            with self.assertRaisesRegex(ValueError, "DELETE"):
+                vault.purge_direct_run(
+                    "ollama_qwythos",
+                    RUN_ID,
+                    confirmation="delete",
+                )
+            self.assertTrue(target.is_file())
+
+            removed = vault.purge_direct_run(
+                "ollama_qwythos",
+                RUN_ID,
+                confirmation="DELETE",
+            )
+
+            self.assertTrue(removed)
+            self.assertFalse(target.exists())
+            self.assertIsNotNone(vault.read_by_run(RUN_ID))
+            with self.assertRaisesRegex(CandidateConflict, "missing"):
+                vault.read(capture.capture_id)
+            self.assertFalse(
+                vault.purge_direct_run(
+                    "ollama_qwythos",
+                    RUN_ID,
+                    confirmation="DELETE",
+                )
+            )
+
+    def test_direct_purge_rejects_provider_mismatch(self) -> None:
+        with d_drive_tempdir() as temp:
+            vault = CandidateVault(
+                temp / "candidates",
+                temp / "dispatch.sqlite3",
+            )
+            capture = vault.capture(
+                "ollama_qwythos",
+                RUN_ID,
+                b"private",
+                task_digest="a" * 64,
+                approval_digest=None,
+            )
+            with self.assertRaisesRegex(CandidateConflict, "provider"):
+                vault.purge_direct_run(
+                    "grok",
+                    RUN_ID,
+                    confirmation="DELETE",
+                )
+            self.assertEqual(vault.read(capture.capture_id), b"private")
+
 
 if __name__ == "__main__":
     unittest.main()

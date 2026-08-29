@@ -394,23 +394,33 @@ def _handler_class(state: _DirectServerState):
 
             match = _CONVERSATION_ROUTE.fullmatch(path)
             if match:
-                if self.command != "GET":
-                    raise _HttpFailure(405, "method_not_allowed")
-                if query:
-                    raise _HttpFailure(400, "invalid_query")
                 conversation_id = match.group(1)
-                self._send_json(
-                    200,
-                    {
-                        "conversation": runtime.conversations.get(
-                            conversation_id
-                        ),
-                        "messages": list(
-                            runtime.conversations.messages(conversation_id)
-                        ),
-                    },
-                )
-                return
+                if self.command == "GET":
+                    if query:
+                        raise _HttpFailure(400, "invalid_query")
+                    self._send_json(
+                        200,
+                        {
+                            "conversation": runtime.conversations.get(
+                                conversation_id
+                            ),
+                            "messages": list(
+                                runtime.conversations.messages(conversation_id)
+                            ),
+                        },
+                    )
+                    return
+                if self.command == "DELETE":
+                    document = self._json_body()
+                    self._exact_keys(document, required={"confirmation"})
+                    deletion = runtime.delete_conversation(
+                        conversation_id,
+                        confirmation=document["confirmation"],
+                        origin_native_id=native_id,
+                    )
+                    self._send_json(200, {"deletion": deletion})
+                    return
+                raise _HttpFailure(405, "method_not_allowed")
 
             match = _MESSAGE_ROUTE.fullmatch(path)
             if match:

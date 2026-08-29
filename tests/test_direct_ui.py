@@ -106,6 +106,7 @@ class DirectUiTests(unittest.TestCase):
                 "generation-state",
                 "settings-panel",
                 "accounting-panel",
+                "delete-conversation",
             }.issubset(ids)
         )
         self.assertIn("MACR 0.5.0a4", " ".join(parser.text))
@@ -142,7 +143,9 @@ class DirectUiTests(unittest.TestCase):
             "eval(fs.readFileSync(process.argv[1],'utf8'));"
             "const value={presentation:globalThis.MacrDirectResult.presentation("
             "JSON.parse(process.argv[2])),defaultProvider:"
-            "globalThis.MacrDirectResult.defaultProvider(JSON.parse(process.argv[3]))};"
+            "globalThis.MacrDirectResult.defaultProvider(JSON.parse(process.argv[3])),"
+            "deleteLower:globalThis.MacrDirectResult.confirmDelete('delete'),"
+            "deleteExact:globalThis.MacrDirectResult.confirmDelete('DELETE')};"
             "process.stdout.write(JSON.stringify(value));"
         )
         result = subprocess.run(
@@ -181,6 +184,8 @@ class DirectUiTests(unittest.TestCase):
                     "preserveInput": True,
                 },
                 "defaultProvider": "ollama_qwythos",
+                "deleteLower": False,
+                "deleteExact": True,
             },
         )
 

@@ -13,6 +13,7 @@ from macr_runtime.direct_runtime import (
 )
 from macr_runtime.direct_settings import DirectSettingsStore
 from macr_runtime.direct_store import DirectConversationStore
+from macr_runtime.errors import DirectStoreConflict
 from macr_runtime.execution import ProviderState, ProviderUsage, RawProviderObservation
 from tests.support import build_test_services, d_drive_tempdir
 
@@ -406,6 +407,74 @@ class DirectRuntimeTests(unittest.TestCase):
             invocation = services.accounting.read_invocation(result.run_id)
             self.assertEqual(invocation["soft_warning"], 1)
             self.assertEqual(invocation["currency_cost_usd"], 0.5)
+
+    def test_confirmed_delete_purges_candidate_and_keeps_content_free_accounting(self) -> None:
+        with d_drive_tempdir() as root:
+            runtime, services, store, _, _, _ = self.build_runtime(root)
+            conversation = runtime.create_conversation(
+                "ollama_qwythos",
+                conversation_id="00000000-0000-4000-8000-000000000171",
+            )
+            turn = runtime.send_message(
+                conversation["conversation_id"],
+                "PRIVATE_DELETE_RUNTIME_SENTINEL_8A31",
+                origin_native_id="browser-session-delete",
+                run_id="00000000-0000-4000-8000-000000000172",
+            )
+            capture = services.vault.read_by_run(turn.run_id)
+            self.assertIsNotNone(capture)
+            target = services.vault.root / capture.relative_path
+            self.assertTrue(target.is_file())
+
+            with self.assertRaisesRegex(ValueError, "DELETE"):
+                runtime.delete_conversation(
+                    conversation["conversation_id"],
+                    confirmation="delete",
+                    origin_native_id="browser-session-delete",
+                )
+            self.assertTrue(target.is_file())
+
+            result = runtime.delete_conversation(
+                conversation["conversation_id"],
+                confirmation="DELETE",
+                origin_native_id="browser-session-delete",
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "conversation_id": conversation["conversation_id"],
+                    "message_count": 2,
+                    "run_count": 1,
+                    "candidate_files_removed": 1,
+                    "secure_delete": True,
+                    "wal_truncated": True,
+                },
+            )
+            self.assertFalse(target.exists())
+            with self.assertRaisesRegex(DirectStoreConflict, "missing"):
+                store.get(conversation["conversation_id"])
+            invocation = services.accounting.read_invocation(turn.run_id)
+            self.assertEqual(invocation["candidate_status"], "candidate_success")
+            tombstones = services.events.read_events(
+                event_type="direct.conversation_deleted"
+            )
+            self.assertEqual(len(tombstones), 1)
+            self.assertEqual(
+                tombstones[0]["payload"],
+                {
+                    "candidate_files_removed": 1,
+                    "conversation_id": conversation["conversation_id"],
+                    "deletion_mode": "operator_confirmed_privacy_delete",
+                    "message_count": 2,
+                    "origin_host": "direct_ui",
+                    "origin_identifier_kind": "browser_session",
+                    "origin_native_id": "browser-session-delete",
+                    "run_count": 1,
+                    "secure_delete": True,
+                    "wal_truncated": True,
+                },
+            )
 
 
 if __name__ == "__main__":

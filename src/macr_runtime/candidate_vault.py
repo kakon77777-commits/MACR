@@ -268,6 +268,61 @@ class CandidateVault:
             connection.close()
         return self._capture_from_row(row) if row is not None else None
 
+    def purge_direct_run(
+        self,
+        provider_id: str,
+        run_id: str,
+        *,
+        confirmation: str,
+    ) -> bool:
+        provider = _safe_component("provider_id", provider_id)
+        run = _uuid4("run_id", run_id)
+        if confirmation != "DELETE":
+            raise ValueError("candidate purge requires exact DELETE confirmation")
+        capture = self.read_by_run(run)
+        if capture is None:
+            return False
+        if capture.provider_id != provider:
+            raise CandidateConflict(
+                "candidate purge provider does not match capture"
+            )
+        connection = self.database.connect()
+        try:
+            materialization = connection.execute(
+                """SELECT 1 FROM materializations
+                WHERE capture_id = ? LIMIT 1""",
+                (capture.capture_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if materialization is not None:
+            raise CandidateConflict(
+                "candidate purge refuses a materialized capture"
+            )
+        target = self.root / Path(capture.relative_path)
+        _check_existing_ancestry(target)
+        if not target.exists():
+            return False
+        if not target.is_file() or _is_reparse(target):
+            raise CandidateConflict("candidate purge target is not a regular file")
+        with target.open("r+b") as handle:
+            remaining = capture.byte_count
+            zeroes = b"\0" * min(1024 * 1024, max(1, remaining))
+            while remaining > 0:
+                chunk = zeroes[: min(len(zeroes), remaining)]
+                handle.write(chunk)
+                remaining -= len(chunk)
+            handle.flush()
+            os.fsync(handle.fileno())
+        target.unlink()
+        run_directory = target.parent
+        provider_directory = run_directory.parent
+        if run_directory != self.root and not any(run_directory.iterdir()):
+            run_directory.rmdir()
+        if provider_directory != self.root and not any(provider_directory.iterdir()):
+            provider_directory.rmdir()
+        return True
+
     def materialize_verbatim(
         self,
         capture_id: str,

@@ -227,6 +227,7 @@ select:focus {
 
 .primary-button,
 .ghost-button,
+.danger-button,
 .icon-button,
 .send-button {
   border: 0;
@@ -248,6 +249,7 @@ select:focus {
 .primary-button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .ghost-button,
+.danger-button,
 .icon-button {
   border: 1px solid var(--line);
   background: transparent;
@@ -255,6 +257,15 @@ select:focus {
 }
 
 .ghost-button { padding: 7px 10px; border-radius: 9px; font-size: 11px; }
+.danger-button {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 159, 159, 0.3);
+  border-radius: 9px;
+  background: rgba(90, 28, 39, 0.35);
+  color: #ffb9b9;
+  font-size: 11px;
+}
+.danger-button:hover { border-color: rgba(255, 159, 159, 0.62); }
 .icon-button { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 9px; }
 .ghost-button:hover,
 .icon-button:hover { border-color: var(--line-strong); color: var(--text); }

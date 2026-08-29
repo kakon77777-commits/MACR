@@ -134,6 +134,27 @@ class FakeRuntime:
     def accounting_summary(self):
         return {"grok": {"provider_reported": 0.001}}
 
+    def delete_conversation(
+        self,
+        conversation_id,
+        *,
+        confirmation,
+        origin_native_id,
+    ):
+        del origin_native_id
+        if confirmation != "DELETE":
+            raise ValueError("exact DELETE confirmation required")
+        self.conversations.items.pop(conversation_id)
+        messages = self.conversations.message_items.pop(conversation_id, [])
+        return {
+            "conversation_id": conversation_id,
+            "message_count": len(messages),
+            "run_count": 1 if messages else 0,
+            "candidate_files_removed": 1 if messages else 0,
+            "secure_delete": True,
+            "wal_truncated": True,
+        }
+
 
 class DirectServerTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -428,6 +449,49 @@ class DirectServerTests(unittest.TestCase):
         self.assertNotIn("private", serialized)
         self.assertNotIn("XAI", serialized)
         self.assertNotIn("D:", serialized)
+
+    def test_permanent_delete_requires_exact_confirmation_and_removes_thread(self) -> None:
+        cookie, _ = self.authenticate()
+        self.runtime.create_conversation(
+            "grok",
+            title="temporary",
+            system_prompt="",
+        )
+        self.runtime.send_message(
+            CONVERSATION_ID,
+            "temporary content",
+            origin_native_id="test-session",
+        )
+
+        status, _, body = self.request(
+            "DELETE",
+            f"/api/v0.1/conversations/{CONVERSATION_ID}",
+            cookie=cookie,
+            body={"confirmation": "delete"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn(CONVERSATION_ID, self.runtime.conversations.items)
+        self.assertEqual(body["error"], "invalid_request")
+
+        status, _, body = self.request(
+            "DELETE",
+            f"/api/v0.1/conversations/{CONVERSATION_ID}",
+            cookie=cookie,
+            body={"confirmation": "DELETE"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            body["deletion"],
+            {
+                "conversation_id": CONVERSATION_ID,
+                "message_count": 2,
+                "run_count": 1,
+                "candidate_files_removed": 1,
+                "secure_delete": True,
+                "wal_truncated": True,
+            },
+        )
+        self.assertNotIn(CONVERSATION_ID, self.runtime.conversations.items)
 
 
 if __name__ == "__main__":

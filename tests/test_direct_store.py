@@ -24,6 +24,16 @@ def qwythos_spec() -> DirectConversationSpec:
     )
 
 
+def private_spec() -> DirectConversationSpec:
+    return DirectConversationSpec.create(
+        provider_id="ollama_qwythos",
+        model=QWYTHOS_MODEL,
+        model_digest="b" * 64,
+        system_prompt="PRIVATE_SYSTEM_SENTINEL_7D0F1E",
+        settings=operator_managed_settings(),
+    )
+
+
 class DirectConversationStoreTests(unittest.TestCase):
     def test_create_pins_identity_and_exact_private_metadata(self) -> None:
         with d_drive_tempdir() as root:
@@ -147,6 +157,84 @@ class DirectConversationStoreTests(unittest.TestCase):
             DirectConversationStore("conversations.sqlite3")
         with self.assertRaisesRegex(StoragePolicyError, "absolute on D"):
             DirectConversationStore(r"C:\MACR\conversations.sqlite3")
+
+    def test_permanent_delete_removes_plaintext_and_truncates_wal(self) -> None:
+        with d_drive_tempdir() as root:
+            path = root / "conversations.sqlite3"
+            store = DirectConversationStore(path)
+            store.create(private_spec(), conversation_id=CONVERSATION_ID)
+            store.append_user(
+                CONVERSATION_ID,
+                "PRIVATE_USER_SENTINEL_91AC2B",
+                run_id=RUN_ID,
+            )
+            store.start_run(
+                run_id=RUN_ID,
+                conversation_id=CONVERSATION_ID,
+                user_ordinal=1,
+            )
+            store.append_assistant_atomic(
+                conversation_id=CONVERSATION_ID,
+                run_id=RUN_ID,
+                content="PRIVATE_ASSISTANT_SENTINEL_26EF3C",
+                observation_id="private-response",
+                context_estimate=10,
+                context_warning=False,
+            )
+            before = path.read_bytes()
+            self.assertIn(b"PRIVATE_USER_SENTINEL_91AC2B", before)
+
+            deletion = store.delete_permanently(
+                CONVERSATION_ID,
+                confirmation="DELETE",
+            )
+
+            self.assertEqual(deletion.conversation_id, CONVERSATION_ID)
+            self.assertEqual(deletion.message_count, 2)
+            self.assertEqual(deletion.run_ids, (RUN_ID,))
+            self.assertTrue(deletion.secure_delete)
+            self.assertTrue(deletion.wal_truncated)
+            with self.assertRaisesRegex(DirectStoreConflict, "missing"):
+                store.get(CONVERSATION_ID)
+            remaining = path.read_bytes()
+            wal = path.with_name(path.name + "-wal")
+            wal_bytes = wal.read_bytes() if wal.exists() else b""
+            for marker in (
+                b"PRIVATE_SYSTEM_SENTINEL_7D0F1E",
+                b"PRIVATE_USER_SENTINEL_91AC2B",
+                b"PRIVATE_ASSISTANT_SENTINEL_26EF3C",
+            ):
+                self.assertNotIn(marker, remaining)
+                self.assertNotIn(marker, wal_bytes)
+
+    def test_permanent_delete_requires_confirmation_and_no_active_run(self) -> None:
+        with d_drive_tempdir() as root:
+            store = DirectConversationStore(root / "conversations.sqlite3")
+            store.create(private_spec(), conversation_id=CONVERSATION_ID)
+            store.append_user(
+                CONVERSATION_ID,
+                "active content",
+                run_id=RUN_ID,
+            )
+            store.start_run(
+                run_id=RUN_ID,
+                conversation_id=CONVERSATION_ID,
+                user_ordinal=1,
+            )
+            with self.assertRaisesRegex(ValueError, "DELETE"):
+                store.delete_permanently(
+                    CONVERSATION_ID,
+                    confirmation="delete",
+                )
+            with self.assertRaisesRegex(DirectStoreConflict, "active"):
+                store.delete_permanently(
+                    CONVERSATION_ID,
+                    confirmation="DELETE",
+                )
+            self.assertEqual(
+                store.messages(CONVERSATION_ID)[0]["content"],
+                "active content",
+            )
 
 
 if __name__ == "__main__":
