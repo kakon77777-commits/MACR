@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from macr_runtime.authority import AuthorityScope
+from macr_runtime.accounting import CostClass
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import ProviderResult, ResultStatus, TaskContract
 from macr_runtime.coordination import PlanExecutionMode
@@ -227,6 +228,7 @@ class PlanRuntimeTests(unittest.TestCase):
             )
             events = services.events.read_events(run_id=result.run_id)
             capture = services.vault.read_by_run(result.run_id)
+            plan_costs = services.accounting.plan_costs(plan.plan_digest)
 
         self.assertEqual(provider.calls, 1)
         self.assertEqual(verifier.calls, 1)
@@ -240,6 +242,14 @@ class PlanRuntimeTests(unittest.TestCase):
         self.assertEqual(len(events), 3)
         self.assertEqual(events[0]["payload"]["plan_digest"], plan.plan_digest)
         self.assertEqual(events[-1]["event_type"], "plan.verification_completed")
+        self.assertEqual(
+            plan_costs[CostClass.PRODUCTION_EXECUTION_COST.value],
+            0.001,
+        )
+        self.assertEqual(
+            plan_costs[CostClass.VERIFICATION_COST.value],
+            0.0,
+        )
 
     def test_verifier_failure_does_not_rewrite_provider_or_acceptance_state(self) -> None:
         plan = executable_plan()

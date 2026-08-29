@@ -79,6 +79,11 @@ from .plan_runtime import (
     PlanRuntime,
     VerificationReport,
 )
+from .accounting import CostClass
+from .billing_port import (
+    BillObservation,
+    BillingReconciliationPort,
+)
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -106,9 +111,12 @@ from .execution import (
 __all__ = [
     "ApprovalMode",
     "BudgetMode",
+    "BillObservation",
+    "BillingReconciliationPort",
     "BudgetEvaluation",
     "ContextCapsule",
     "ContextSourceItem",
+    "CostClass",
     "CoordinationPlan",
     "DelegationClass",
     "DirectConversationSpec",

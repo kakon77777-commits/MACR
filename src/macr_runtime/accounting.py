@@ -7,7 +7,9 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,38 @@ _BILLING_STATES = frozenset(
 _CANDIDATE_STATES = frozenset({"candidate_success", "candidate_failure"})
 
 
+class CostClass(str, Enum):
+    DISCOVERY_COST = "discovery_cost"
+    PROBE_COST = "probe_cost"
+    PRODUCTION_EXECUTION_COST = "production_execution_cost"
+    VERIFICATION_COST = "verification_cost"
+    INTEGRATION_COST = "integration_cost"
+    HUMAN_CORRECTION_OBSERVATION = "human_correction_observation"
+
+
+@dataclass(frozen=True)
+class PlanCostRecord:
+    cost_id: str
+    plan_digest: str
+    run_id: str | None
+    role_digest: str | None
+    route_id: str | None
+    cost_class: CostClass
+    amount_usd: float
+    cost_kind: str
+    pricing_basis_digest: str
+    idempotency_key: str
+    observed_at: str
+
+
+@dataclass(frozen=True)
+class BudgetAccountingDecision:
+    plan_digest: str
+    total_cost_usd: float
+    allowed: bool
+    warning: str | None
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -40,6 +74,13 @@ def _non_empty(name: str, value: str, *, maximum: int = 256) -> str:
     ):
         raise ValueError(f"{name} must be a bounded non-empty string")
     return value.strip()
+
+
+def _safe_id(name: str, value: str, *, maximum: int = 256) -> str:
+    normalized = _non_empty(name, value, maximum=maximum)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", normalized):
+        raise ValueError(f"{name} must be a safe identifier")
+    return normalized
 
 
 def _uuid4(name: str, value: str) -> str:
@@ -112,7 +153,7 @@ def _canonical_json(value: dict[str, Any]) -> str:
 
 
 class AccountingStore:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(
         self,
@@ -229,6 +270,55 @@ class AccountingStore:
                     payload_sha256 TEXT NOT NULL,
                     observed_at TEXT NOT NULL
                 )""",
+                """CREATE TABLE IF NOT EXISTS plan_costs (
+                    cost_id TEXT PRIMARY KEY,
+                    plan_digest TEXT NOT NULL,
+                    run_id TEXT REFERENCES invocations(run_id),
+                    role_digest TEXT,
+                    route_id TEXT,
+                    cost_class TEXT NOT NULL,
+                    amount_usd REAL NOT NULL,
+                    cost_kind TEXT NOT NULL,
+                    pricing_basis_digest TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    UNIQUE(plan_digest, idempotency_key)
+                )""",
+                """CREATE TABLE IF NOT EXISTS plan_cost_outbox (
+                    outbox_id TEXT PRIMARY KEY,
+                    cost_id TEXT NOT NULL UNIQUE REFERENCES plan_costs(cost_id),
+                    payload_json TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS bill_observations (
+                    observation_id TEXT PRIMARY KEY,
+                    provider_id TEXT NOT NULL,
+                    provider_account_id TEXT NOT NULL
+                        REFERENCES provider_accounts(account_id),
+                    funding_source_id TEXT NOT NULL,
+                    invoice_item_id TEXT NOT NULL,
+                    plan_digest TEXT,
+                    run_id TEXT REFERENCES invocations(run_id),
+                    amount REAL NOT NULL,
+                    currency TEXT NOT NULL,
+                    tax REAL,
+                    credit REAL,
+                    payment_status TEXT NOT NULL,
+                    source_digest TEXT NOT NULL UNIQUE,
+                    metadata_digest TEXT NOT NULL,
+                    observed_at TEXT NOT NULL
+                )""",
+                """CREATE TABLE IF NOT EXISTS bill_observation_outbox (
+                    outbox_id TEXT PRIMARY KEY,
+                    observation_id TEXT NOT NULL UNIQUE
+                        REFERENCES bill_observations(observation_id),
+                    payload_json TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )""",
             )
             for statement in statements:
                 connection.execute(statement)
@@ -246,6 +336,12 @@ class AccountingStore:
                     """,
                     (self.SCHEMA_VERSION,),
                 )
+            elif row["version"] == 1:
+                connection.execute(
+                    """UPDATE accounting_schema_meta SET version = ?
+                    WHERE component = 'accounting'""",
+                    (self.SCHEMA_VERSION,),
+                )
             elif row["version"] != self.SCHEMA_VERSION:
                 raise AccountingConflict(
                     "accounting database schema version is unsupported"
@@ -256,6 +352,345 @@ class AccountingStore:
             raise
         finally:
             connection.close()
+
+    def record_plan_cost(
+        self,
+        plan_digest: str,
+        run_id: str | None,
+        cost_class: CostClass | str,
+        amount_usd: float,
+        cost_kind: str,
+        pricing_basis_digest: str,
+        *,
+        role_digest: str | None = None,
+        route_id: str | None = None,
+        idempotency_key: str,
+    ) -> PlanCostRecord:
+        plan = _digest("plan_digest", plan_digest)
+        run = _uuid4("run_id", run_id) if run_id is not None else None
+        try:
+            normalized_class = (
+                cost_class
+                if isinstance(cost_class, CostClass)
+                else CostClass(cost_class)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("cost_class is invalid") from exc
+        amount = _money("amount_usd", amount_usd)
+        kind = _safe_id("cost_kind", cost_kind)
+        basis = _digest("pricing_basis_digest", pricing_basis_digest)
+        role = _digest("role_digest", role_digest) if role_digest is not None else None
+        route = _digest("route_id", route_id) if route_id is not None else None
+        idempotency = _safe_id(
+            "idempotency_key",
+            idempotency_key,
+            maximum=512,
+        )
+        identity = {
+            "plan_digest": plan,
+            "run_id": run,
+            "role_digest": role,
+            "route_id": route,
+            "cost_class": normalized_class.value,
+            "amount_usd": amount,
+            "cost_kind": kind,
+            "pricing_basis_digest": basis,
+            "idempotency_key": idempotency,
+        }
+        cost_id = hashlib.sha256(
+            _canonical_json(identity).encode("utf-8")
+        ).hexdigest()
+        observed_at = self._current_time()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM plan_costs WHERE plan_digest = ? "
+                "AND idempotency_key = ?",
+                (plan, idempotency),
+            ).fetchone()
+            if existing is not None:
+                expected = (
+                    cost_id,
+                    run,
+                    role,
+                    route,
+                    normalized_class.value,
+                    amount,
+                    kind,
+                    basis,
+                )
+                actual = (
+                    existing["cost_id"],
+                    existing["run_id"],
+                    existing["role_digest"],
+                    existing["route_id"],
+                    existing["cost_class"],
+                    existing["amount_usd"],
+                    existing["cost_kind"],
+                    existing["pricing_basis_digest"],
+                )
+                if actual != expected:
+                    raise AccountingConflict(
+                        "plan cost conflicts with existing idempotency key"
+                    )
+                connection.commit()
+                return self._plan_cost_from_row(existing)
+            connection.execute(
+                """INSERT INTO plan_costs(
+                    cost_id, plan_digest, run_id, role_digest, route_id,
+                    cost_class, amount_usd, cost_kind,
+                    pricing_basis_digest, idempotency_key, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    cost_id,
+                    plan,
+                    run,
+                    role,
+                    route,
+                    normalized_class.value,
+                    amount,
+                    kind,
+                    basis,
+                    idempotency,
+                    observed_at,
+                ),
+            )
+            payload = {"cost_id": cost_id, **identity, "observed_at": observed_at}
+            payload_json = _canonical_json(payload)
+            payload_digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+            connection.execute(
+                """INSERT INTO plan_cost_outbox(
+                    outbox_id, cost_id, payload_json, payload_sha256,
+                    state, created_at
+                ) VALUES (?, ?, ?, ?, 'pending', ?)""",
+                (
+                    str(uuid.uuid4()),
+                    cost_id,
+                    payload_json,
+                    payload_digest,
+                    observed_at,
+                ),
+            )
+            connection.commit()
+            return PlanCostRecord(
+                cost_id=cost_id,
+                plan_digest=plan,
+                run_id=run,
+                role_digest=role,
+                route_id=route,
+                cost_class=normalized_class,
+                amount_usd=amount,
+                cost_kind=kind,
+                pricing_basis_digest=basis,
+                idempotency_key=idempotency,
+                observed_at=observed_at,
+            )
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise AccountingConflict(
+                "plan cost references missing invocation or conflicts"
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def plan_costs(self, plan_digest: str) -> dict[str, float]:
+        plan = _digest("plan_digest", plan_digest)
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                """SELECT cost_class, SUM(amount_usd) AS amount
+                FROM plan_costs WHERE plan_digest = ?
+                GROUP BY cost_class ORDER BY cost_class""",
+                (plan,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return {row["cost_class"]: float(row["amount"]) for row in rows}
+
+    def evaluate_budget(
+        self,
+        plan_digest: str,
+        profile: object,
+        *,
+        warning_threshold_usd: float | None,
+    ) -> BudgetAccountingDecision:
+        from .planning_contracts import BudgetMode, OperatorPolicyProfile
+
+        plan = _digest("plan_digest", plan_digest)
+        if not isinstance(profile, OperatorPolicyProfile):
+            raise ValueError("profile must be an OperatorPolicyProfile")
+        threshold = (
+            _money("warning_threshold_usd", warning_threshold_usd)
+            if warning_threshold_usd is not None
+            else None
+        )
+        total = sum(self.plan_costs(plan).values())
+        exceeded = threshold is not None and total > threshold
+        allowed = not (
+            profile.budget_mode is BudgetMode.ENFORCE and exceeded
+        )
+        warning = (
+            "plan cost exceeds configured warning threshold"
+            if exceeded and profile.budget_mode in {BudgetMode.WARN, BudgetMode.ENFORCE}
+            else None
+        )
+        return BudgetAccountingDecision(
+            plan_digest=plan,
+            total_cost_usd=total,
+            allowed=allowed,
+            warning=warning,
+        )
+
+    def pending_plan_cost_outbox(self) -> tuple[dict[str, Any], ...]:
+        return self._pending_generic_outbox("plan_cost_outbox")
+
+    def record_bill_observation(self, observation: object) -> bool:
+        from .billing_port import BillObservation
+
+        if not isinstance(observation, BillObservation):
+            raise ValueError("observation must be a BillObservation")
+        values = (
+            observation.provider_id,
+            observation.provider_account_id,
+            observation.funding_source_id,
+            observation.invoice_item_id,
+            observation.plan_digest,
+            observation.run_id,
+            observation.amount,
+            observation.currency,
+            observation.tax,
+            observation.credit,
+            observation.payment_status,
+            observation.source_digest,
+            observation.metadata_digest,
+            observation.observed_at,
+        )
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM bill_observations WHERE source_digest = ?",
+                (observation.source_digest,),
+            ).fetchone()
+            if existing is not None:
+                actual = tuple(existing[key] for key in (
+                    "provider_id",
+                    "provider_account_id",
+                    "funding_source_id",
+                    "invoice_item_id",
+                    "plan_digest",
+                    "run_id",
+                    "amount",
+                    "currency",
+                    "tax",
+                    "credit",
+                    "payment_status",
+                    "source_digest",
+                    "metadata_digest",
+                    "observed_at",
+                ))
+                if actual != values or existing["observation_id"] != observation.observation_id:
+                    raise AccountingConflict(
+                        "bill observation conflicts with existing source digest"
+                    )
+                connection.commit()
+                return False
+            connection.execute(
+                """INSERT INTO bill_observations(
+                    observation_id, provider_id, provider_account_id,
+                    funding_source_id, invoice_item_id, plan_digest, run_id,
+                    amount, currency, tax, credit, payment_status,
+                    source_digest, metadata_digest, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (observation.observation_id, *values),
+            )
+            payload_json = _canonical_json(observation.to_public_dict())
+            payload_digest = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+            connection.execute(
+                """INSERT INTO bill_observation_outbox(
+                    outbox_id, observation_id, payload_json, payload_sha256,
+                    state, created_at
+                ) VALUES (?, ?, ?, ?, 'pending', ?)""",
+                (
+                    str(uuid.uuid4()),
+                    observation.observation_id,
+                    payload_json,
+                    payload_digest,
+                    observation.observed_at,
+                ),
+            )
+            connection.commit()
+            return True
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise AccountingConflict(
+                "bill observation references missing account or invocation"
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def bill_observation_count(self) -> int:
+        connection = self._connect()
+        try:
+            return int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM bill_observations"
+                ).fetchone()[0]
+            )
+        finally:
+            connection.close()
+
+    def pending_bill_outbox(self) -> tuple[dict[str, Any], ...]:
+        return self._pending_generic_outbox("bill_observation_outbox")
+
+    def _pending_generic_outbox(
+        self,
+        table: str,
+    ) -> tuple[dict[str, Any], ...]:
+        if table not in {"plan_cost_outbox", "bill_observation_outbox"}:
+            raise ValueError("unsupported accounting outbox")
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                f"SELECT * FROM {table} WHERE state = 'pending' "
+                "ORDER BY created_at, outbox_id"
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(
+            {
+                **{
+                    key: row[key]
+                    for key in row.keys()
+                    if key != "payload_json"
+                },
+                "payload": json.loads(row["payload_json"]),
+            }
+            for row in rows
+        )
+
+    @staticmethod
+    def _plan_cost_from_row(row: sqlite3.Row) -> PlanCostRecord:
+        return PlanCostRecord(
+            cost_id=row["cost_id"],
+            plan_digest=row["plan_digest"],
+            run_id=row["run_id"],
+            role_digest=row["role_digest"],
+            route_id=row["route_id"],
+            cost_class=CostClass(row["cost_class"]),
+            amount_usd=row["amount_usd"],
+            cost_kind=row["cost_kind"],
+            pricing_basis_digest=row["pricing_basis_digest"],
+            idempotency_key=row["idempotency_key"],
+            observed_at=row["observed_at"],
+        )
 
     def record_dispatch(
         self,

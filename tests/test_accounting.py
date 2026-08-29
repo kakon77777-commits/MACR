@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import sqlite3
 from dataclasses import replace
 
-from macr_runtime.accounting import AccountingStore
+from macr_runtime.accounting import AccountingStore, CostClass
 from macr_runtime.errors import AccountingConflict, StoragePolicyError
 from macr_runtime.execution import (
     AuthorizationReference,
@@ -14,6 +15,7 @@ from macr_runtime.execution import (
     ProviderUsage,
     RawProviderObservation,
 )
+from macr_runtime.planning_contracts import BudgetMode, OperatorPolicyProfile
 
 from tests.support import d_drive_tempdir
 
@@ -46,9 +48,146 @@ NON_STOP_OBSERVATION = RawProviderObservation(
     answer_bytes=b"PARTIAL PRIVATE ANSWER",
     provider_state=ProviderState.INCOMPLETE,
 )
+PLAN_DIGEST = "c" * 64
+PRICING_BASIS = "d" * 64
 
 
 class AccountingStoreTests(unittest.TestCase):
+    def test_accounting_schema_one_upgrades_additively_without_invocation_rewrite(self) -> None:
+        with d_drive_tempdir() as temp:
+            database = temp / "accounting.sqlite3"
+            store = AccountingStore(database)
+            store.record_dispatch(
+                RUN_ID,
+                CONTEXT,
+                provider_id="glm_flash_worker",
+                model="glm-5.3-flash",
+                estimate_usd=0.01,
+            )
+            connection = sqlite3.connect(database)
+            for table in (
+                "bill_observation_outbox",
+                "bill_observations",
+                "plan_cost_outbox",
+                "plan_costs",
+            ):
+                connection.execute(f"DROP TABLE {table}")
+            connection.execute(
+                "UPDATE accounting_schema_meta SET version = 1 "
+                "WHERE component = 'accounting'"
+            )
+            connection.commit()
+            connection.close()
+            upgraded = AccountingStore(database)
+            invocation = upgraded.read_invocation(RUN_ID)
+            connection = sqlite3.connect(database)
+            version = connection.execute(
+                "SELECT version FROM accounting_schema_meta "
+                "WHERE component = 'accounting'"
+            ).fetchone()[0]
+            tables = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            connection.close()
+
+        self.assertEqual(version, 2)
+        self.assertEqual(invocation["provider_id"], "glm_flash_worker")
+        self.assertIn("plan_costs", tables)
+        self.assertIn("bill_observations", tables)
+
+    def test_plan_cost_classes_remain_separate_and_warn_mode_does_not_reject(self) -> None:
+        with d_drive_tempdir() as temp:
+            store = AccountingStore(temp / "accounting.sqlite3")
+            store.record_dispatch(
+                RUN_ID,
+                CONTEXT,
+                provider_id="glm_flash_worker",
+                model="glm-5.3-flash",
+                estimate_usd=0.03,
+            )
+            probe = store.record_plan_cost(
+                PLAN_DIGEST,
+                RUN_ID,
+                CostClass.PROBE_COST,
+                0.01,
+                "estimated",
+                PRICING_BASIS,
+                role_digest="e" * 64,
+                route_id="f" * 64,
+                idempotency_key="probe-one",
+            )
+            verification = store.record_plan_cost(
+                PLAN_DIGEST,
+                RUN_ID,
+                CostClass.VERIFICATION_COST,
+                0.02,
+                "observed",
+                PRICING_BASIS,
+                role_digest="e" * 64,
+                route_id="f" * 64,
+                idempotency_key="verification-one",
+            )
+            totals = store.plan_costs(PLAN_DIGEST)
+            warn = store.evaluate_budget(
+                PLAN_DIGEST,
+                OperatorPolicyProfile.owner_default(),
+                warning_threshold_usd=0.015,
+            )
+            enforce_profile = replace(
+                OperatorPolicyProfile.owner_default(),
+                budget_mode=BudgetMode.ENFORCE,
+            )
+            enforced = store.evaluate_budget(
+                PLAN_DIGEST,
+                enforce_profile,
+                warning_threshold_usd=0.015,
+            )
+            outbox = store.pending_plan_cost_outbox()
+
+        self.assertNotEqual(probe.cost_id, verification.cost_id)
+        self.assertEqual(totals[CostClass.PROBE_COST.value], 0.01)
+        self.assertEqual(totals[CostClass.VERIFICATION_COST.value], 0.02)
+        self.assertTrue(warn.allowed)
+        self.assertIsNotNone(warn.warning)
+        self.assertFalse(enforced.allowed)
+        self.assertEqual(len(outbox), 2)
+
+    def test_plan_cost_idempotency_conflict_cannot_overwrite_amount(self) -> None:
+        with d_drive_tempdir() as temp:
+            store = AccountingStore(temp / "accounting.sqlite3")
+            first = store.record_plan_cost(
+                PLAN_DIGEST,
+                None,
+                CostClass.DISCOVERY_COST,
+                0.001,
+                "estimated",
+                PRICING_BASIS,
+                idempotency_key="discovery-snapshot-one",
+            )
+            repeated = store.record_plan_cost(
+                PLAN_DIGEST,
+                None,
+                CostClass.DISCOVERY_COST,
+                0.001,
+                "estimated",
+                PRICING_BASIS,
+                idempotency_key="discovery-snapshot-one",
+            )
+            with self.assertRaisesRegex(AccountingConflict, "plan cost"):
+                store.record_plan_cost(
+                    PLAN_DIGEST,
+                    None,
+                    CostClass.DISCOVERY_COST,
+                    1.0,
+                    "estimated",
+                    PRICING_BASIS,
+                    idempotency_key="discovery-snapshot-one",
+                )
+
+        self.assertEqual(first, repeated)
     def test_rejected_non_stop_call_keeps_observed_cost(self) -> None:
         with d_drive_tempdir() as temp:
             store = AccountingStore(temp / "accounting.sqlite3")

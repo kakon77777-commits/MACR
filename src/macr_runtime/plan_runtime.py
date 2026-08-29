@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Protocol
 
+from .accounting import CostClass
 from .canonical import sha256_id
 from .contracts import ResultStatus, TaskContract
 from .coordination import CoordinationPlan, PlanExecutionMode, TopologyId
@@ -236,6 +237,17 @@ class PlanRuntime:
         )
         persistence_state = "complete"
         failure_type = None
+        accounting_state = "complete"
+        try:
+            self._record_plan_costs(
+                plan,
+                run_id,
+                verification_report,
+            )
+        except Exception as exc:
+            persistence_state = "failed"
+            failure_type = type(exc).__name__
+            accounting_state = "failed"
         try:
             self.services.events.append_standalone(
                 "plan.verification_completed",
@@ -254,12 +266,14 @@ class PlanRuntime:
                     ),
                     "verification_evidence_digest": verification_evidence,
                     "acceptance_state": AcceptanceState.PENDING.value,
+                    "plan_accounting_state": accounting_state,
                 },
                 run_id=run_id,
             )
         except Exception as exc:
             persistence_state = "failed"
-            failure_type = type(exc).__name__
+            if failure_type is None:
+                failure_type = type(exc).__name__
         return PlanExecutionResult(
             plan_digest=plan.plan_digest,
             plan_revision=plan.plan_revision,
@@ -300,6 +314,10 @@ class PlanRuntime:
             capture = self.services.vault.read_by_run(run_id)
         except Exception:
             capture = None
+        try:
+            self._record_plan_costs(plan, run_id, None)
+        except Exception:
+            pass
         if dispatched:
             try:
                 self.services.events.append_standalone(
@@ -343,6 +361,50 @@ class PlanRuntime:
             persistence_state="failed",
             failure_type=failure_type,
         )
+
+    def _record_plan_costs(
+        self,
+        plan: CoordinationPlan,
+        run_id: str,
+        verification_report: VerificationReport | None,
+    ) -> None:
+        invocation = self.services.accounting.read_invocation(run_id)
+        if invocation is None:
+            raise PlanExecutionError("plan accounting invocation is missing")
+        observed_cost = invocation.get("currency_cost_usd")
+        if observed_cost is not None:
+            basis_digest = sha256_id(
+                "pricing_basis_reference_v1",
+                {
+                    "pricing_basis_version": invocation.get(
+                        "pricing_basis_version"
+                    ),
+                    "cost_kind": invocation.get("cost_kind"),
+                },
+            )
+            self.services.accounting.record_plan_cost(
+                plan.plan_digest,
+                run_id,
+                CostClass.PRODUCTION_EXECUTION_COST,
+                observed_cost,
+                invocation.get("cost_kind") or "observed",
+                basis_digest,
+                role_digest=plan.roles[0].role_definition_digest,
+                route_id=plan.bindings[0].route_id,
+                idempotency_key=f"{run_id}:production",
+            )
+        if verification_report is not None:
+            self.services.accounting.record_plan_cost(
+                plan.plan_digest,
+                run_id,
+                CostClass.VERIFICATION_COST,
+                0.0,
+                "zero_local",
+                verification_report.graph_digest,
+                role_digest=plan.roles[0].role_definition_digest,
+                route_id=plan.bindings[0].route_id,
+                idempotency_key=f"{run_id}:verification",
+            )
 
     def _validate_plan_task_proposal(
         self,
