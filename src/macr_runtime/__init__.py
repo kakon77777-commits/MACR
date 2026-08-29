@@ -38,6 +38,14 @@ from .planning_contracts import (
 from .observatory_db import ObservatoryDatabase
 from .observatory import IngestReport, ModelObservatory
 from .model_passport import ModelPassport, ModelPassportProjector
+from .probe_registry import ProbeClass, ProbeDefinition, ProbeRegistry
+from .qualification import (
+    QualificationDecision,
+    QualificationEngine,
+    QualificationPolicy,
+    QualificationState,
+    wilson_lower_bound,
+)
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -97,7 +105,14 @@ __all__ = [
     "PrivacyLevel",
     "ProviderExecution",
     "ProviderResult",
+    "ProbeClass",
+    "ProbeDefinition",
+    "ProbeRegistry",
     "QualificationKey",
+    "QualificationDecision",
+    "QualificationEngine",
+    "QualificationPolicy",
+    "QualificationState",
     "ProviderState",
     "ProviderUsage",
     "RawProviderObservation",
@@ -119,6 +134,7 @@ __all__ = [
     "canonical_json_bytes",
     "canonical_policy_snapshot",
     "sha256_id",
+    "wilson_lower_bound",
 ]
 
 __version__ = "0.6.0a0"
