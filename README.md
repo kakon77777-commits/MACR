@@ -1,8 +1,8 @@
 # MACR Runtime v0.6.0a0 — Evidence Kernel + Direct Chat UI 0.1
 
-MACR is a migration-aware runtime for heterogeneous AI workers. The v0.6.0a0 line preserves the complete v0.5.0a4 Direct plane and begins the offline Evidence / Identity Kernel for deterministic coordination. Direct provider completion, private capture, conversation projection, coordinated candidate generation, verification, and acceptance remain separate states.
+MACR is a migration-aware runtime for heterogeneous AI workers. The v0.6.0a0 offline candidate preserves the complete v0.5.0a4 Direct plane and implements the deterministic coordination control plane through T1 bounded fan-out, constrained T2 proposals, experimental T3 cross-file verification, and blinded differential manifests. Direct provider completion, private capture, conversation projection, coordinated candidate generation, verification, and acceptance remain separate states.
 
-This alpha line preserves all a3 replay and sensitive-marker repairs. Direct Chat is a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. It does **not** implement Codex/Claude Code host adapters, bounded fan-out, Context Capsules, or the separately designed v0.6 dynamic-coordination architecture.
+This alpha line preserves all a3 replay and sensitive-marker repairs. Direct Chat remains a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. Dynamic coordination is implemented as an offline-first host control plane; no Codex/Claude Code host adapter or live v0.6 route is activated by this branch.
 
 ## Canonical D: placement
 
@@ -77,9 +77,12 @@ Operational events now live in `runtime\dispatch.sqlite3`. The former `ledger\ev
 ```powershell
 cd 'D:\Ai\work together\MACR'
 .\scripts\verify.ps1
+.\scripts\verify-v06.ps1
 ```
 
-The default suite is offline. It compiles source/tests, attacks SQLite with 1/2/3/4/8 concurrent writers, verifies lease contention and process-census controls, scans credential-shaped material and operational C/R paths, validates configuration, and runs `doctor` without contacting a provider or loading a model.
+Both suites are offline. `verify.ps1` runs the complete repository baseline. `verify-v06.ps1` adds exact schema fingerprints, the 1/2/3/4/8 T1 claim matrix, synchronized 32-process bootstrap, planner replay digest, discovery/parser, Context Capsule, identity, qualification, target-collision, accounting-privacy, cross-file, differential, census, doctor-network and clean-tree gates. It emits one deterministic `V06_SUMMARY` line and contacts no provider or local model.
+
+Current schema versions are `runtime operational SQLite 6`, `observatory SQLite 2`, and `accounting SQLite 2`.
 
 For the dedicated multiprocess replay from a source checkout:
 
@@ -182,7 +185,7 @@ Only validated JPEG/PNG bytes become artifacts. Paths, prompts, answers, source 
 
 - Direct Chat is an alpha candidate. Offline and local service gates pass, but one real multi-turn Grok conversation and one real multi-turn Qwythos conversation remain operator acceptance gates.
 - Transport-level cancellation and explicit late-result recovery are not exposed in Direct UI 0.1. There is no fake cancel control; these are required before a beta label.
-- No host adapter, automatic router, fan-out scheduler, Context Capsule, verifier decision, or acceptance transition.
+- No host adapter, automatic production router, autonomous acceptance, or activated v0.6 live route. T1/T2/T3 and differential paths are implemented and synthetically verified, but remain operator-controlled candidates.
 - Direct `operator_managed` calls are warn-only and require accounting. Privacy, credential, legacy-migration, current authority, route, and lease failures remain hard pre-network gates.
 - No provider-side hard USD cap; actual Grok cost is checked after completion and an overrun becomes `candidate_failure`.
 - No Grok search, code execution, files, images, or server-side tools.

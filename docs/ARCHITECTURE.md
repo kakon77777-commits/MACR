@@ -1,4 +1,4 @@
-# MACR v0.6.0a0 Evidence Kernel + Shared Core + Direct Chat architecture
+# MACR v0.6.0a0 Dynamic Coordination + Shared Core + Direct Chat architecture
 
 ```text
 Loopback browser (127.0.0.1, authenticated cookie)
@@ -64,10 +64,27 @@ structured return-contract validation
 one SQLite terminal event + accounting outbox
         |
         v
-materialization / verification / acceptance (not implemented)
+materialization / verification / acceptance (orthogonal; acceptance host-only)
 ```
 
-The a3 Checkpoint A shared core remains the immutable base. The a4 alpha implements Direct runtime Checkpoint B and the minimum testable local UI/launcher path from Checkpoint C. Codex or Claude Code host adapters, a fan-out scheduler, Context Capsules, transport-level Direct cancellation, and late-result recovery remain absent.
+The a3 Checkpoint A shared core remains an immutable ancestor and a4 supplies Direct runtime/UI. v0.6 adds Context Capsules, model/route identities, append-only Observatory evidence, deterministic planning, exact T0 execution, durable T1 queue/batch authority, constrained T2 proposals, T3 target ownership/cross-file verification, and blinded differential manifests. Codex or Claude Code host adapters, transport-level Direct cancellation, late-result recovery, autonomous acceptance, and an activated live v0.6 route remain absent.
+
+## Dynamic coordination boundary
+
+```text
+untrusted external observation -> immutable snapshot/evidence
+                              -> rebuildable Model Passport
+                              -> route-role qualification
+                              -> deterministic shadow plan
+                              -> exact host authority
+                              -> fenced T0/T1 execution candidate
+                              -> typed verification
+                              -> host-only acceptance
+```
+
+T1 queue members are exact ordered digests bound to provider, route, role, privacy, context class, per-member ceiling, aggregate ceiling, expiry, and an authorized dispatcher set. One member permits one provider attempt. Expired dispatch leases enter `reconciliation_required` and never auto-requeue. T2 coordinator output is an untrusted, content-free plan-revision proposal; it cannot choose a provider/model, expand Context Capsules, issue authority, accept, merge, deploy, or name a resident. T3 target paths are normalized under an exact D-drive repository identity and persisted only as digests. Same-target ownership requires one named alternative group and at most one automatic-materialization flag; verification itself always leaves materialization `none` and acceptance `pending`.
+
+Differential manifests apply one exact probe pack and verifier graph to at least three qualified route candidates. Public comparison rows contain blinded candidate IDs, verifier counts, evidence digests, and costs—never model labels. `probe-plan` and `probe-replay` are manifest/replay commands and perform no provider execution.
 
 ## Direct conversation boundary
 

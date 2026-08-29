@@ -13,6 +13,7 @@ if (-not $env:CODEX_HOME_TARGET) {
 }
 $env:MACR_TEST_TMP = Join-Path $env:MACR_STATE_ROOT 'test-tmp'
 $env:PYTHONPATH = Join-Path $repoRoot 'src'
+$env:PYTHONDONTWRITEBYTECODE = '1'
 
 & (Join-Path $PSScriptRoot 'init-state.ps1') -StateRoot $env:MACR_STATE_ROOT | Out-Null
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -31,8 +32,7 @@ $operationalTargets = @(
     (Join-Path $repoRoot 'config'),
     (Join-Path $repoRoot 'examples'),
     (Join-Path $repoRoot '.env.example'),
-    (Join-Path $repoRoot 'scripts\macr.ps1'),
-    (Join-Path $repoRoot 'scripts\init-state.ps1')
+    (Join-Path $repoRoot 'scripts')
 )
 $operationalPathMatches = rg -n -S -e '[CR]:[\\/]' -- $operationalTargets
 if ($LASTEXITCODE -eq 0 -and $operationalPathMatches) {

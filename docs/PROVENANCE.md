@@ -190,3 +190,22 @@ a4 implementation tree = 507f58b47ba58edc9457b7b443ee92caf8598f64
 ```
 
 The fresh v0.6 worktree baseline ran 309 tests with zero failures and the same two Windows symbolic-link capability skips. A read-only shared-state observation found the legacy JSONL unchanged at 41,490 bytes / 74 parsed events / SHA-256 `80AF74FB9FB20FF805E168F13A40E4DC585DA20AEA3778347FDDE6CC29128299`, with the read-only attribute set, 74 legacy-backed runtime events, a current complete 74-event source row, 114 total runtime events, and zero leases. Runtime-event totals may grow under the separately running a4 Direct service and are not an immutable v0.6 baseline input. The sealed legacy bytes/hash and complete source record are the gate; no migration, provider call, credential read, discovery request, deployment, automation, or shared-state write occurred during v0.6 baseline inspection.
+
+## v0.6 dynamic-coordination implementation train
+
+The isolated v0.6 branch implemented the offline control plane in focused, verified commits. The final pre-release-gate code subject is:
+
+```text
+branch = feature/macr-v0.6-dynamic-coordination
+commit = 13c975e90ee5283cb73142e9ab72612bba619146
+tree   = b6af1a038bfe1b733264e29aa02a44dd1cee6c9d
+```
+
+| Boundary | Commit |
+|---|---|
+| T1 durable ordered queue, exact batch authority, aggregate admission | `1a164e5dfda9977bee6c91388428c992caafbd72` |
+| T2 constrained coordinator revision proposals | `ebec124c74b068f2a9026b20e353fb2693f6bddd` |
+| T3 digest-only target ownership and cross-file verification | `f2096c99598be8a82791b7a1e3fd86eb16fda8c9` |
+| blinded differential manifest/replay harness | `13c975e90ee5283cb73142e9ab72612bba619146` |
+
+These commits add no standing provider authority and perform no discovery request, paid/local generation, real migration, seal change, merge, release, deployment, adoption, automation, or resident binding. T2 output cannot issue authority; T3 verification cannot materialize; differential public rows cannot reveal model labels. The separate final offline checkpoint records the later clean verifier/docs subject rather than rewriting these historical code commits.

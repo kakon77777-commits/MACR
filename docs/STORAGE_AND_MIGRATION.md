@@ -1,6 +1,6 @@
 # Storage and migration contract
 
-Status: active at MACR v0.6.0a0 Evidence Kernel baseline with retained Direct UI 0.1
+Status: active at MACR v0.6.0a0 offline dynamic-coordination candidate with retained Direct UI 0.1
 
 Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `D_RESIDENCE_CANONICAL`, `SECRETS_EXTERNAL`
 
@@ -41,12 +41,12 @@ OLLAMA_MODELS
 - Claude API use remains forbidden.
 - Named resident private data is outside shared MACR runtime scope.
 
-## v0.5 runtime-state layout
+## v0.6 runtime-state layout
 
 ```text
 D:\AI_RESIDENCE\AI_Runtime\macr-state\
-  runtime\dispatch.sqlite3       operational events, runs, authority, leases,
-                                 legacy-import records, candidate provenance
+  runtime\dispatch.sqlite3       operational events, runs, exact authority,
+                                 T1 queue, target leases, legacy/candidate provenance
   accounting\accounting.sqlite3 invocation accounting and local outbox
   candidates\                   immutable private candidate bytes
   ledger\events.jsonl           preserved legacy source; no new writes
@@ -61,6 +61,16 @@ D:\AI_RESIDENCE\AI_Runtime\macr-state\
 ```
 
 SQLite event and accounting databases contain bounded operational metadata, not prompts, candidate bytes, credentials, local input paths, or remote response bodies. Candidate files are create-once and referenced publicly by byte count and SHA-256 only. A transformed materialization cannot claim verbatim provenance.
+
+Current schema versions are:
+
+```text
+runtime operational SQLite 6
+observatory SQLite          2
+accounting SQLite           2
+```
+
+Runtime schema 6 adds exact batch-authority bodies, bounded queue batches/members, digest-only target claims, and digest-only fenced target-path leases. Raw target paths remain process-local normalization inputs and are never stored in runtime/accounting databases. Queue lease expiry and target-ownership expiry become visible reconciliation states; neither silently retries a provider nor grants a replacement writer.
 
 Direct archive is reversible and changes no content bytes. Permanent Direct deletion is a separate operator-confirmed path requiring exact `DELETE`. It refuses conversations with an active run, overwrites and removes unmaterialized Candidate answer files, deletes Direct conversation/message/run rows with SQLite `secure_delete=ON`, and requires a successful WAL `TRUNCATE` checkpoint. Content-free invocation accounting, operational hashes, Candidate metadata, and a deletion tombstone remain for cost/audit continuity. MACR does not claim forensic erasure from SSD wear-leveling, filesystem snapshots, external backups, provider retention, or already materialized external artifacts.
 
