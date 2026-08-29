@@ -19,6 +19,7 @@ from .contracts import (
 )
 from .runtime import MacrRuntime, RuntimeServices
 from .storage import StorageLayout
+from .canonical import aware_iso8601, canonical_json_bytes, sha256_id
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -80,7 +81,10 @@ __all__ = [
     "VerificationSpec",
     "VerificationState",
     "WorkspaceSpec",
+    "aware_iso8601",
+    "canonical_json_bytes",
     "canonical_policy_snapshot",
+    "sha256_id",
 ]
 
 __version__ = "0.6.0a0"
