@@ -223,7 +223,7 @@ class MultiprocessRuntimeTests(unittest.TestCase):
             finally:
                 connection.close()
 
-        self.assertEqual(version, 5)
+        self.assertEqual(version, 6)
         self.assertEqual(journal_mode.lower(), "wal")
 
     def test_plan_workers_claim_exact_members_once(self) -> None:

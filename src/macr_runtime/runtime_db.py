@@ -10,7 +10,7 @@ from .errors import EventStoreConflict, StoragePolicyError
 class RuntimeDatabase:
     """Connection policy and schema owner for MACR runtime coordination state."""
 
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
 
     def __init__(self, path: str | Path) -> None:
         candidate = Path(path)
@@ -337,6 +337,40 @@ class RuntimeDatabase:
                 connection.execute(
                     "UPDATE schema_meta SET version = ? WHERE component = ?",
                     (5, "runtime"),
+                )
+                version = 5
+            if version == 5:
+                migration_six = (
+                    """CREATE TABLE IF NOT EXISTS target_path_leases (
+                        lease_id TEXT PRIMARY KEY,
+                        repository_id TEXT NOT NULL,
+                        target_key TEXT NOT NULL,
+                        plan_digest TEXT NOT NULL,
+                        member_digest TEXT NOT NULL,
+                        alternative_group TEXT,
+                        materialize_automatically INTEGER NOT NULL
+                            CHECK(materialize_automatically IN (0, 1)),
+                        state TEXT NOT NULL CHECK(state IN (
+                            'active', 'released', 'reconciliation_required'
+                        )),
+                        fencing_token INTEGER NOT NULL,
+                        acquired_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL,
+                        released_at TEXT,
+                        reconciliation_evidence_digest TEXT,
+                        UNIQUE(
+                            repository_id, target_key, plan_digest,
+                            member_digest
+                        )
+                    )""",
+                    """CREATE INDEX IF NOT EXISTS target_path_active
+                    ON target_path_leases(repository_id, target_key, state)""",
+                )
+                for statement in migration_six:
+                    connection.execute(statement)
+                connection.execute(
+                    "UPDATE schema_meta SET version = ? WHERE component = ?",
+                    (6, "runtime"),
                 )
             connection.commit()
         except Exception:

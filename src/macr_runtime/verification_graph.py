@@ -165,4 +165,75 @@ class VerifierGraph:
         }
 
 
-__all__ = ["VerifierGraph", "VerifierNode"]
+@dataclass(frozen=True)
+class CrossFileVerifierComposition:
+    individual_graph: VerifierGraph
+    integration_graph: VerifierGraph
+    compiler_node_id: str
+    vector_node_id: str
+    diff_node_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.individual_graph, VerifierGraph):
+            raise ValueError("individual_graph must be a VerifierGraph")
+        if not isinstance(self.integration_graph, VerifierGraph):
+            raise ValueError("integration_graph must be a VerifierGraph")
+        compiler = _identifier("compiler_node_id", self.compiler_node_id)
+        vector = _identifier("vector_node_id", self.vector_node_id)
+        diff = _identifier("diff_node_id", self.diff_node_id)
+        by_id = {item.node_id: item for item in self.integration_graph.nodes}
+        for label, node_id in (
+            ("compiler", compiler),
+            ("vector", vector),
+            ("diff", diff),
+        ):
+            node = by_id.get(node_id)
+            if node is None:
+                raise ValueError(f"{label} verifier node is missing")
+            if not node.required:
+                raise ValueError(f"{label} verifier node must be required")
+        if not self._depends_on(by_id, vector, compiler):
+            raise ValueError("vector verifier must depend on compiler verifier")
+        if not self._depends_on(by_id, diff, compiler):
+            raise ValueError("diff verifier must depend on compiler verifier")
+        object.__setattr__(self, "compiler_node_id", compiler)
+        object.__setattr__(self, "vector_node_id", vector)
+        object.__setattr__(self, "diff_node_id", diff)
+
+    @staticmethod
+    def _depends_on(
+        by_id: dict[str, VerifierNode],
+        node_id: str,
+        ancestor_id: str,
+    ) -> bool:
+        pending = list(by_id[node_id].depends_on)
+        seen: set[str] = set()
+        while pending:
+            current = pending.pop()
+            if current == ancestor_id:
+                return True
+            if current in seen:
+                continue
+            seen.add(current)
+            pending.extend(by_id[current].depends_on)
+        return False
+
+    @property
+    def composition_digest(self) -> str:
+        return sha256_id("crossfile_verifier_composition_v1", self.to_dict())
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "individual_graph_digest": self.individual_graph.graph_digest,
+            "integration_graph_digest": self.integration_graph.graph_digest,
+            "compiler_node_id": self.compiler_node_id,
+            "vector_node_id": self.vector_node_id,
+            "diff_node_id": self.diff_node_id,
+        }
+
+
+__all__ = [
+    "CrossFileVerifierComposition",
+    "VerifierGraph",
+    "VerifierNode",
+]
