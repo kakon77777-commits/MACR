@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
+import shutil
 import sqlite3
 import unittest
 import uuid
@@ -12,6 +14,8 @@ from unittest.mock import patch
 
 from macr_runtime.cli import (
     _doctor,
+    _evidence_import,
+    _evidence_inspect,
     _glm_approve,
     _glm_preflight,
     _invoke,
@@ -75,6 +79,60 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_evidence_inspect_and_import_are_offline_content_free(self) -> None:
+        source_manifest = (
+            ROOT / "tests" / "fixtures" / "glm-a3-evidence-manifest.json"
+        )
+        source_evidence = ROOT / "tests" / "fixtures" / "glm-a3-evidence"
+        with d_drive_tempdir() as state_root:
+            manifest = state_root / source_manifest.name
+            shutil.copy2(source_manifest, manifest)
+            shutil.copytree(source_evidence, state_root / source_evidence.name)
+            expected = hashlib.sha256(manifest.read_bytes()).hexdigest()
+            inspect_output = io.StringIO()
+            import_output = io.StringIO()
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+                "CODEX_HOME_TARGET": (
+                    r"D:\AI_RESIDENCE\AI_Runtime\codex-home"
+                ),
+            }
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(inspect_output):
+                    inspect_status = _evidence_inspect(str(manifest))
+                self.assertFalse(
+                    (state_root / "observatory" / "observatory.sqlite3").exists()
+                )
+                with contextlib.redirect_stdout(import_output):
+                    import_status = _evidence_import(
+                        str(manifest),
+                        expected,
+                    )
+            connection = sqlite3.connect(
+                state_root / "observatory" / "observatory.sqlite3"
+            )
+            evidence_count = connection.execute(
+                "SELECT COUNT(*) FROM evidence_items"
+            ).fetchone()[0]
+            decision_count = connection.execute(
+                "SELECT COUNT(*) FROM qualification_decisions"
+            ).fetchone()[0]
+            connection.close()
+
+        inspected = json.loads(inspect_output.getvalue())
+        imported = json.loads(import_output.getvalue())
+        self.assertEqual(inspect_status, 0)
+        self.assertEqual(import_status, 0)
+        self.assertEqual(inspected["status"], "evidence_inspection_complete")
+        self.assertEqual(imported["status"], "evidence_import_complete")
+        self.assertFalse(inspected["network_activity"])
+        self.assertFalse(imported["network_activity"])
+        self.assertEqual(evidence_count, 3)
+        self.assertEqual(decision_count, 0)
+        self.assertNotIn(str(state_root), inspect_output.getvalue())
+        self.assertNotIn(str(state_root), import_output.getvalue())
     def test_migrate_ledger_dry_run_writes_nothing(self) -> None:
         with d_drive_tempdir() as state_root:
             source = state_root / "ledger" / "events.jsonl"

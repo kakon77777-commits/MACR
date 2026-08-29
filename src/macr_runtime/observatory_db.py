@@ -714,6 +714,17 @@ class ObservatoryDatabase:
         return tuple(persisted_subjects), route_records, observation_records
 
     def append_evidence(self, metadata: Mapping[str, Any]) -> EvidenceRecord:
+        record = self._evidence_record(metadata)
+        self._append_row(
+            "evidence_items",
+            "evidence_id",
+            record.evidence_id,
+            record.__dict__,
+        )
+        return record
+
+    @staticmethod
+    def _evidence_record(metadata: Mapping[str, Any]) -> EvidenceRecord:
         data = _mapping("evidence", metadata)
         qualification_key = _digest(
             "qualification_key",
@@ -740,13 +751,54 @@ class ObservatoryDatabase:
             identity,
         )
         record = EvidenceRecord(evidence_id=evidence_id, **identity)
-        self._append_row(
-            "evidence_items",
-            "evidence_id",
-            evidence_id,
-            record.__dict__,
-        )
         return record
+
+    def prepare_evidence(
+        self,
+        metadata: Mapping[str, Any],
+    ) -> EvidenceRecord:
+        return self._evidence_record(metadata)
+
+    def append_evidence_batch(
+        self,
+        entries: Iterable[Mapping[str, Any]],
+    ) -> tuple[EvidenceRecord, ...]:
+        records, _ = self.append_evidence_batch_with_status(entries)
+        return records
+
+    def append_evidence_batch_with_status(
+        self,
+        entries: Iterable[Mapping[str, Any]],
+    ) -> tuple[tuple[EvidenceRecord, ...], tuple[bool, ...]]:
+        if isinstance(entries, (str, bytes)):
+            raise ValueError("evidence entries must be metadata objects")
+        records = tuple(self._evidence_record(item) for item in entries)
+        connection = self.connect()
+        inserted: list[bool] = []
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for record in records:
+                inserted.append(
+                    self._append_row_connection(
+                        connection,
+                        "evidence_items",
+                        "evidence_id",
+                        record.evidence_id,
+                        record.__dict__,
+                    )
+                )
+            connection.commit()
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            raise ObservatoryConflict(
+                "evidence batch conflicts with observatory references"
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return records, tuple(inserted)
 
     def append_qualification_decision(
         self,
@@ -905,6 +957,19 @@ class ObservatoryDatabase:
         )
         return tuple(EvidenceRecord(**dict(row)) for row in rows)
 
+    def evidence_exists(self, evidence_id: str) -> bool:
+        evidence_id = _digest("evidence_id", evidence_id)
+        return (
+            self._read_one("evidence_items", "evidence_id", evidence_id)
+            is not None
+        )
+
+    def evidence_count(self) -> int:
+        return self._table_count("evidence_items")
+
+    def qualification_decision_count(self) -> int:
+        return self._table_count("qualification_decisions")
+
     def read_qualification_decisions(
         self,
         qualification_key: str,
@@ -967,7 +1032,7 @@ class ObservatoryDatabase:
         id_column: str,
         record_id: str,
         values: Mapping[str, Any],
-    ) -> None:
+    ) -> bool:
         columns = tuple(values.keys())
         existing = connection.execute(
             f"SELECT * FROM {table} WHERE {id_column} = ?",
@@ -980,10 +1045,12 @@ class ObservatoryDatabase:
                 f"VALUES ({placeholders})",
                 tuple(values[column] for column in columns),
             )
+            return True
         elif any(existing[column] != values[column] for column in columns):
             raise ObservatoryConflict(
                 f"{id_column} conflicts with append-only observatory state"
             )
+        return False
 
     @staticmethod
     def _append_subject_connection(
@@ -1042,6 +1109,17 @@ class ObservatoryDatabase:
                     f"ORDER BY {order_by}",
                     (value,),
                 ).fetchall()
+            )
+        finally:
+            connection.close()
+
+    def _table_count(self, table: str) -> int:
+        connection = self.connect()
+        try:
+            return int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone()[0]
             )
         finally:
             connection.close()

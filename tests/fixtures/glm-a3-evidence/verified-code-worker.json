@@ -1,0 +1,11 @@
+{
+  "evidence_schema": "macr-glm-a3-reviewed-v1",
+  "role_id": "verified_code_worker",
+  "outcome": "bounded_positive",
+  "terminal_state": "provider_completed",
+  "verifier_state": "verified_after_transformation",
+  "tests_passed": 31,
+  "tests_failed": 0,
+  "blind_spots": ["historical_a3_subject", "manual_integration_not_acceptance"],
+  "known_failures": ["raw_candidate_was_not_verbatim_materialization"]
+}

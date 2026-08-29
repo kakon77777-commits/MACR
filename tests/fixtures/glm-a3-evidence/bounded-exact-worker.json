@@ -1,0 +1,11 @@
+{
+  "evidence_schema": "macr-glm-a3-reviewed-v1",
+  "role_id": "bounded_exact_worker",
+  "outcome": "bounded_positive",
+  "terminal_state": "provider_completed",
+  "verifier_state": "verified",
+  "tests_passed": 8,
+  "tests_failed": 0,
+  "blind_spots": ["historical_a3_subject", "single_provider_route"],
+  "known_failures": []
+}

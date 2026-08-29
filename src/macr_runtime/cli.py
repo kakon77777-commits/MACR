@@ -14,8 +14,10 @@ from .authority import AuthorityScope
 from .config import ConnectionScope, load_provider_configs
 from .contracts import ResultStatus, TaskContract
 from .errors import MacrError
+from .evidence_import import EvidenceImporter
 from .execution import DispatchContext, DispatchOrigin, InteractionPlane
 from .legacy_ledger import LegacyLedgerImporter
+from .observatory_db import ObservatoryDatabase
 from .registry import ProviderRegistry
 from .providers.glm import GlmFlashWorkerProvider
 from .runtime import MacrRuntime, RuntimeServices
@@ -301,6 +303,83 @@ def _migrate_ledger(*, dry_run: bool, expected_count: int | None) -> int:
     return 0 if report.complete else 5
 
 
+def _evidence_inspect(manifest_path: str) -> int:
+    try:
+        report = EvidenceImporter(None).inspect(manifest_path)
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "evidence_inspection_failed",
+                    "failure_type": type(exc).__name__,
+                    "detail": (
+                        "Reviewed evidence inspection failed; paths and "
+                        "external content omitted."
+                    ),
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "evidence_inspection_complete",
+                **report.to_dict(),
+                "network_activity": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _evidence_import(manifest_path: str, expected_digest: str) -> int:
+    try:
+        layout = StorageLayout.from_environment()
+        store = ObservatoryDatabase(
+            layout.observatory_db_path,
+            layout.observatory_snapshot_root,
+        )
+        report = EvidenceImporter(store).import_manifest(
+            manifest_path,
+            expected_digest,
+        )
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "evidence_import_failed",
+                    "failure_type": type(exc).__name__,
+                    "detail": (
+                        "Reviewed evidence import failed; paths and external "
+                        "content omitted."
+                    ),
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "evidence_import_complete",
+                **report.to_dict(),
+                "network_activity": False,
+                "promotion_performed": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def _cli_policy_snapshot_sha256(
     provider_id: str,
     provider_scope: ConnectionScope,
@@ -449,6 +528,23 @@ def build_parser() -> argparse.ArgumentParser:
     validate = sub.add_parser("validate-task", help="validate and normalize a TaskContract JSON file")
     validate.add_argument("path")
 
+    evidence_inspect = sub.add_parser(
+        "evidence-inspect",
+        help="inspect a reviewed external evidence manifest without writing state",
+    )
+    evidence_inspect.add_argument("manifest")
+
+    evidence_import = sub.add_parser(
+        "evidence-import",
+        help="append a reviewed exact-digest evidence manifest without promotion",
+    )
+    evidence_import.add_argument("manifest")
+    evidence_import.add_argument(
+        "--expected-digest",
+        required=True,
+        help="required SHA-256 of the exact manifest bytes",
+    )
+
     glm_preflight = sub.add_parser(
         "glm-preflight",
         help="validate GLM delegation policy and exact-envelope approval without loading a key",
@@ -534,6 +630,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "validate-task":
         return _validate_task(args.path)
+    if args.command == "evidence-inspect":
+        return _evidence_inspect(args.manifest)
+    if args.command == "evidence-import":
+        return _evidence_import(args.manifest, args.expected_digest)
     if args.command == "glm-preflight":
         return _glm_preflight(
             args.task_path,

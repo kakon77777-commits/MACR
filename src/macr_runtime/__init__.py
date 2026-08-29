@@ -46,6 +46,7 @@ from .qualification import (
     QualificationState,
     wilson_lower_bound,
 )
+from .evidence_import import EvidenceImporter, ImportReport
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -84,6 +85,7 @@ __all__ = [
     "EolNormalization",
     "EolScope",
     "ExecutionRouteIdentity",
+    "EvidenceImporter",
     "FallbackMode",
     "IdentityStatus",
     "IngestReport",
@@ -94,6 +96,7 @@ __all__ = [
     "DispatchContext",
     "DispatchOrigin",
     "InteractionPlane",
+    "ImportReport",
     "MacrRuntime",
     "ModelSubject",
     "ModelObservatory",

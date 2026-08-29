@@ -1,0 +1,11 @@
+{
+  "evidence_schema": "macr-glm-a3-reviewed-v1",
+  "role_id": "structured_output_worker",
+  "outcome": "bounded_positive",
+  "terminal_state": "provider_completed",
+  "verifier_state": "verified",
+  "tests_passed": 5,
+  "tests_failed": 0,
+  "blind_spots": ["held_out_variants_not_replayed", "historical_a3_subject"],
+  "known_failures": ["exact_trailing_newline_failed_in_prior_subject"]
+}

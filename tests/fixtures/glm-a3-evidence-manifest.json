@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "manifest_id": "glm-a3-reviewed-evidence-v1",
+  "subject_id": "1111111111111111111111111111111111111111111111111111111111111111",
+  "route_id": "2222222222222222222222222222222222222222222222222222222222222222",
+  "operator_review_digest": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+  "authorized_bounded_roles": [
+    "bounded_exact_worker",
+    "structured_output_worker",
+    "verified_code_worker"
+  ],
+  "explicit_blind_spots": [
+    "evidence_is_bound_to_historical_a3_subject",
+    "live_v06_route_not_measured",
+    "no_architecture_reviewer_qualification"
+  ],
+  "entries": [
+    {
+      "role_id": "bounded_exact_worker",
+      "role_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "context_class": "public_text",
+      "verifier_suite_digest": "7777777777777777777777777777777777777777777777777777777777777777",
+      "probe_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "qualification_key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "observed_at": "2026-08-28T08:00:00+00:00",
+      "relative_path": "glm-a3-evidence/bounded-exact-worker.json",
+      "file_bytes": 330,
+      "file_sha256": "366dc875aea156029a5e3eb9ee14919d78ba09e2f69c231d477de0c88226ad3e",
+      "import_disposition": "bounded_evidence"
+    },
+    {
+      "role_id": "structured_output_worker",
+      "role_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+      "context_class": "public_text",
+      "verifier_suite_digest": "8888888888888888888888888888888888888888888888888888888888888888",
+      "probe_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "qualification_key": "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+      "observed_at": "2026-08-28T08:05:00+00:00",
+      "relative_path": "glm-a3-evidence/structured-output-worker.json",
+      "file_bytes": 391,
+      "file_sha256": "0fc35729e757e06f113c3a58f6227fb8080b732ded5ce93c43dc9059ee127ae6",
+      "import_disposition": "bounded_evidence"
+    },
+    {
+      "role_id": "verified_code_worker",
+      "role_digest": "5555555555555555555555555555555555555555555555555555555555555555",
+      "context_class": "public_code",
+      "verifier_suite_digest": "9999999999999999999999999999999999999999999999999999999999999999",
+      "probe_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "qualification_key": "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+      "observed_at": "2026-08-28T08:10:00+00:00",
+      "relative_path": "glm-a3-evidence/verified-code-worker.json",
+      "file_bytes": 412,
+      "file_sha256": "0b8cabbb94ef24b553d9cdb08cf5bc75fd17d9f57037df75d74f14519f97f2c1",
+      "import_disposition": "bounded_evidence"
+    },
+    {
+      "role_id": "architecture_reviewer",
+      "role_digest": "6666666666666666666666666666666666666666666666666666666666666666",
+      "context_class": "public_architecture",
+      "verifier_suite_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "probe_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "qualification_key": "3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+      "observed_at": "2026-08-28T08:15:00+00:00",
+      "relative_path": "glm-a3-evidence/architecture-reviewer.json",
+      "file_bytes": 325,
+      "file_sha256": "61342254b661714946c0b52cf3972c8e20398ef493da27683b484ac6a7c1b6ad",
+      "import_disposition": "unqualified_observation"
+    }
+  ]
+}

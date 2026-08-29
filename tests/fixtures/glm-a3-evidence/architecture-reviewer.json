@@ -1,0 +1,11 @@
+{
+  "evidence_schema": "macr-glm-a3-reviewed-v1",
+  "role_id": "architecture_reviewer",
+  "outcome": "unqualified",
+  "terminal_state": "not_measured",
+  "verifier_state": "not_measured",
+  "tests_passed": 0,
+  "tests_failed": 0,
+  "blind_spots": ["architecture_review_not_probed"],
+  "known_failures": ["role_not_proven"]
+}
