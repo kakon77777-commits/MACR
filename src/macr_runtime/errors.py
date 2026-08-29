@@ -52,3 +52,7 @@ class AccountingConflict(MacrError):
 
 class DirectStoreConflict(MacrError):
     """Direct settings, conversation, or message state violates an invariant."""
+
+
+class ObservatoryConflict(MacrError):
+    """An observatory record or private snapshot conflicts with append-only state."""

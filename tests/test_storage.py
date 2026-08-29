@@ -43,6 +43,15 @@ class StorageLayoutTests(unittest.TestCase):
             layout.direct_instance_path,
             state_root / "direct" / "instance.json",
         )
+        self.assertEqual(
+            layout.observatory_db_path,
+            state_root / "observatory" / "observatory.sqlite3",
+        )
+        self.assertEqual(
+            layout.observatory_snapshot_root,
+            state_root / "observatory" / "snapshots",
+        )
+        self.assertEqual(layout.observatory_db_path.drive.upper(), "D:")
 
     def test_state_tree_includes_v05_runtime_roots(self) -> None:
         with d_drive_tempdir() as state_root:
@@ -67,6 +76,7 @@ class StorageLayoutTests(unittest.TestCase):
                     "quarantine",
                     "direct",
                     "settings",
+                    "observatory",
                 },
             )
             self.assertTrue(all(path.is_dir() for path in roots))

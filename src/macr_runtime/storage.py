@@ -87,6 +87,18 @@ class StorageLayout:
         return Path(self.state_root) / "settings"
 
     @property
+    def observatory_root(self) -> Path:
+        return Path(self.state_root) / "observatory"
+
+    @property
+    def observatory_db_path(self) -> Path:
+        return self.observatory_root / "observatory.sqlite3"
+
+    @property
+    def observatory_snapshot_root(self) -> Path:
+        return self.observatory_root / "snapshots"
+
+    @property
     def direct_db_path(self) -> Path:
         return self.direct_root / "conversations.sqlite3"
 
@@ -112,6 +124,7 @@ class StorageLayout:
                 "quarantine",
                 "direct",
                 "settings",
+                "observatory",
             )
         )
         for path in roots:

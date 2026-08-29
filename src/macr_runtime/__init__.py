@@ -35,6 +35,7 @@ from .planning_contracts import (
     FallbackMode,
     OperatorPolicyProfile,
 )
+from .observatory_db import ObservatoryDatabase
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -85,6 +86,7 @@ __all__ = [
     "MacrRuntime",
     "ModelSubject",
     "OperatorPolicyProfile",
+    "ObservatoryDatabase",
     "MaterializationState",
     "PrivacyLevel",
     "ProviderExecution",
