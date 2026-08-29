@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "pack_id": "macr-v06-canonical",
+  "version": "1.0.0",
+  "cases": [
+    {
+      "case_id": "exact-output-control",
+      "task_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "verifier_graph_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "context_class": "public_text",
+      "cost_ceiling_usd": 0.01
+    },
+    {
+      "case_id": "structured-transform-control",
+      "task_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+      "verifier_graph_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "context_class": "public_text",
+      "cost_ceiling_usd": 0.01
+    },
+    {
+      "case_id": "mutation-negative-control",
+      "task_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+      "verifier_graph_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+      "context_class": "public_text",
+      "cost_ceiling_usd": 0.01
+    }
+  ]
+}

@@ -18,6 +18,13 @@ from .config import (
     load_provider_configs,
 )
 from .contracts import ResultStatus, TaskContract
+from .differential import (
+    DifferentialCandidateResult,
+    DifferentialRunManifest,
+    build_differential_manifest,
+    compare_differential_results,
+    strict_json_bytes,
+)
 from .errors import MacrError
 from .evidence_import import EvidenceImporter
 from .execution import DispatchContext, DispatchOrigin, InteractionPlane
@@ -639,6 +646,82 @@ def _plan_diff(left_digest: str, right_digest: str) -> int:
     return 0
 
 
+def _probe_plan(plan_path: str) -> int:
+    try:
+        document = strict_json_bytes(Path(plan_path).read_bytes())
+        manifest = build_differential_manifest(document)
+    except (OSError, TypeError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "differential_manifest_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "dispatch_performed": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "differential_manifest_ready",
+                "manifest": manifest.to_dict(),
+                "network_activity": False,
+                "dispatch_performed": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _probe_replay(manifest_path: str, result_path: str) -> int:
+    try:
+        manifest_document = strict_json_bytes(Path(manifest_path).read_bytes())
+        result_document = strict_json_bytes(Path(result_path).read_bytes())
+        if not isinstance(result_document, list):
+            raise ValueError("differential replay results must be an array")
+        manifest = DifferentialRunManifest.from_dict(manifest_document)
+        comparison = compare_differential_results(
+            manifest,
+            tuple(
+                DifferentialCandidateResult.from_dict(item)
+                for item in result_document
+            ),
+        )
+    except (OSError, TypeError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "differential_replay_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "dispatch_performed": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "differential_replay_complete",
+                "comparison": comparison.to_dict(),
+                "network_activity": False,
+                "dispatch_performed": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def _cli_policy_snapshot_sha256(
     provider_id: str,
     provider_scope: ConnectionScope,
@@ -834,6 +917,19 @@ def build_parser() -> argparse.ArgumentParser:
     plan_diff.add_argument("left_plan_digest")
     plan_diff.add_argument("right_plan_digest")
 
+    probe_plan = sub.add_parser(
+        "probe-plan",
+        help="compile one exact offline differential-run manifest",
+    )
+    probe_plan.add_argument("input")
+
+    probe_replay = sub.add_parser(
+        "probe-replay",
+        help="replay one complete blinded differential result set offline",
+    )
+    probe_replay.add_argument("manifest")
+    probe_replay.add_argument("results")
+
     glm_preflight = sub.add_parser(
         "glm-preflight",
         help="validate GLM delegation policy and exact-envelope approval without loading a key",
@@ -944,6 +1040,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.left_plan_digest,
             args.right_plan_digest,
         )
+    if args.command == "probe-plan":
+        return _probe_plan(args.input)
+    if args.command == "probe-replay":
+        return _probe_replay(args.manifest, args.results)
     if args.command == "glm-preflight":
         return _glm_preflight(
             args.task_path,
