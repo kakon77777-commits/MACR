@@ -27,6 +27,14 @@ from .model_identity import (
     QualificationKey,
     RoleDefinition,
 )
+from .planning_contracts import (
+    ApprovalMode,
+    BudgetMode,
+    ContextCapsule,
+    ContextSourceItem,
+    FallbackMode,
+    OperatorPolicyProfile,
+)
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -52,6 +60,10 @@ from .execution import (
 )
 
 __all__ = [
+    "ApprovalMode",
+    "BudgetMode",
+    "ContextCapsule",
+    "ContextSourceItem",
     "DelegationClass",
     "DirectConversationSpec",
     "DirectMessage",
@@ -61,6 +73,7 @@ __all__ = [
     "EolNormalization",
     "EolScope",
     "ExecutionRouteIdentity",
+    "FallbackMode",
     "IdentityStatus",
     "ImportMode",
     "AcceptanceState",
@@ -71,6 +84,7 @@ __all__ = [
     "InteractionPlane",
     "MacrRuntime",
     "ModelSubject",
+    "OperatorPolicyProfile",
     "MaterializationState",
     "PrivacyLevel",
     "ProviderExecution",
