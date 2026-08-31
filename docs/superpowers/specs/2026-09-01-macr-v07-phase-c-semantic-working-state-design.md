@@ -422,9 +422,19 @@ It may validate and persist a proposal but cannot advance a graph.
 Host/runtime-facing API:
 
 ```text
+attach_graph(agent_run_id, graph_id, revision, digest, ownership, authority)
 validate_patch(commit_request)
 commit_patch(commit_request, ownership_permit, authorization_reference)
 ```
+
+`attach_graph` is the only Phase C operation that binds an AgentRun to an
+existing current graph head without advancing that graph. It requires the same
+AgentRun revision/epoch, ownership, and external authority checks as commit,
+appends `agent.semantic_state_advanced`, increments AgentRun state revision, and
+updates the semantic binding in one transaction. Exact repetition is idempotent;
+a different existing binding or stale/noncurrent graph head fails. This explicit
+operation enables multiple AgentRuns to pin the same revision without silent
+follow behavior.
 
 There is no `model_output_to_db`, `force_commit`, semantic self-authorization, or
 implicit conversion from a model response to committed state.
