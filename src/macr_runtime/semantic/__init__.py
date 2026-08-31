@@ -24,7 +24,9 @@ from .graph import (
     SemanticGraphRevision,
     calculate_graph_digest,
 )
+from .database import SemanticSchema
 from .registry import SEMANTIC_REGISTRY_SCHEMA_VERSION, SemanticRegistry
+from .store import SemanticStore
 
 __all__ = [
     "ArtifactRole",
@@ -45,6 +47,8 @@ __all__ = [
     "SemanticRelation",
     "SemanticRelationType",
     "SemanticRegistry",
+    "SemanticSchema",
+    "SemanticStore",
     "SEMANTIC_GRAPH_HEAD_SCHEMA_VERSION",
     "SEMANTIC_GRAPH_REVISION_SCHEMA_VERSION",
     "SEMANTIC_REGISTRY_SCHEMA_VERSION",
