@@ -81,6 +81,12 @@ The schema is corrected to immutable `semantic_graphs` catalog plus removable
 with foreign keys enabled, proves revision/history bytes unchanged, and rebuilds
 the exact head.
 
+The atomic-core review challenged attach idempotency: the first test changed
+expected Agent revision on retry, so it did not replay the exact request.
+`semantic_attach_receipts` now resolves operation ID plus full request digest
+before stale CAS. Tests must repeat the byte-equivalent original request and
+reject conflicting operation-ID reuse with no graph/Agent/event drift.
+
 ## Authorized scope
 
 Allowed:
@@ -457,7 +463,10 @@ Tests require:
 
 - `attach_graph` binds an unbound owned AgentRun to the exact current head,
   appends one Agent semantic-binding event, increments Agent state revision once,
-  leaves graph revision unchanged, and is exact-idempotent;
+  leaves graph revision unchanged, and returns a create-once receipt;
+- the byte-equivalent original attach request returns the same receipt even though
+  its expected Agent revision is now historical; conflicting operation-ID reuse
+  fails before stale CAS and leaves all state unchanged;
 - attach rejects stale/noncurrent head, existing different binding, stale Agent
   revision/epoch/permit/token, and authority mismatch;
 - commit validates exact graph and Agent CAS plus current ownership and external

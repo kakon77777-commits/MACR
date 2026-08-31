@@ -310,6 +310,7 @@ semantic_nodes
 semantic_relations
 semantic_events
 semantic_patches
+semantic_attach_receipts
 semantic_commit_receipts
 ```
 
@@ -373,6 +374,13 @@ and status-change evidence with causal parent references.
 `semantic_commit_receipts` stores content-free local commit evidence including
 commit ID, graph revision/digest, AgentRun revision, semantic event ID, Agent event
 ID, patch digest, and commit timestamp.
+
+`semantic_attach_receipts` stores the create-once attach operation ID, full
+authority/permit/Agent-CAS/head request digest, exact resulting semantic binding,
+Agent state revision, Agent event ID, and timestamp. Attach receipt lookup occurs
+before stale Agent CAS so an identical response-loss retry returns the same
+receipt; reusing the operation ID with any different request fails with zero
+state/event drift.
 
 ## 9. Registry and semantic validation
 
