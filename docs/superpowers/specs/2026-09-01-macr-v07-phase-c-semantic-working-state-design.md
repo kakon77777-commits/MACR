@@ -186,11 +186,31 @@ When one AgentRun commits a patch to a shared graph:
 Automatic branching, merging, or rebasing is deferred. A caller that needs a
 branch must create a new graph through a future explicit operation.
 
-## 6. Phase C commit request
+## 6. Phase C proposal and commit requests
 
 The Phase A `SemanticPatch` remains proposal-only and intentionally lacks graph
-identity or commit authority. Phase C wraps it in an immutable
-`SemanticCommitRequest` containing:
+identity or commit authority. Phase C first wraps it in an immutable
+`SemanticPatchProposalRequest` containing:
+
+```text
+schema_version
+proposal_id                 UUIDv4 create-once identity
+graph_id                    UUIDv4 intended graph
+agent_run_id                UUIDv4 proposing run
+base_graph_revision         non-negative integer
+base_graph_digest           SHA-256
+registry_version            bounded version
+registry_digest             SHA-256
+patch                       existing SemanticPatch
+proposal_digest             SHA-256
+```
+
+This proposal object contains no Agent revision/epoch, ownership permit,
+AuthorizationReference, commit ID, or authority-like boolean. It may be created
+from model output only after parsing into the Phase A patch contract.
+
+The host/runtime later creates a distinct immutable `SemanticCommitRequest`
+referencing the stored proposal and containing:
 
 ```text
 schema_version
@@ -205,6 +225,7 @@ expected_agent_revision     positive integer
 expected_agent_epoch        non-negative integer
 ownership_permit_digest     SHA-256
 authorization_reference     existing AuthorizationReference
+proposal_id / proposal_digest exact stored proposal binding
 patch                       existing SemanticPatch
 request_digest              SHA-256
 ```
@@ -212,6 +233,7 @@ request_digest              SHA-256
 Hard invariants:
 
 - `patch.base_graph_digest == request.base_graph_digest`;
+- proposal ID/digest and patch digest match the exact stored proposal;
 - graph ID, base revision, base digest, registry version, and registry digest all
   match the current head;
 - AgentRun ID, expected revision/epoch, permit, and authorization reference all
@@ -414,7 +436,7 @@ queryable. An unconsumed, duplicate, missing, or cross-graph reference fails.
 Agent/model-facing API:
 
 ```text
-propose_patch(commit_request_without_runtime_authority)
+propose_patch(proposal_request)
 ```
 
 It may validate and persist a proposal but cannot advance a graph.
@@ -435,6 +457,11 @@ updates the semantic binding in one transaction. Exact repetition is idempotent;
 a different existing binding or stale/noncurrent graph head fails. This explicit
 operation enables multiple AgentRuns to pin the same revision without silent
 follow behavior.
+
+There is no conversion that copies model-supplied fields into commit authority.
+Host/runtime constructs the commit request from the stored proposal plus current
+Agent/graph observations, ownership permit, and independently supplied external
+authorization.
 
 There is no `model_output_to_db`, `force_commit`, semantic self-authorization, or
 implicit conversion from a model response to committed state.
