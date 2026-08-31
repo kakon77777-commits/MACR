@@ -289,6 +289,13 @@ epoch          0
 
 The creation event is `before_revision=0`, `after_revision=1`.
 
+The Phase A `AgentRunHeader` is also a general snapshot contract and therefore
+validates noninitial state/revision/epoch combinations. Phase B creation must not
+inherit that broader acceptance. `create_agent_run()` performs an explicit
+pre-SQL guard requiring exactly CREATED/revision 1/epoch 0. A mismatch in any one
+field fails before opening a mutation transaction and leaves every Phase B table
+unchanged.
+
 ## 9. Phase B lifecycle
 
 The single transition table allows only:
@@ -448,6 +455,10 @@ CAS without ownership because no execution owner can exist; ADMITTED, ACTIVE, an
 BLOCKED cancellation requires a current permit. No method accepts arbitrary model
 output as a state mutation command.
 
+`create_agent_run()` accepts a Phase A header only after the Phase B initial-state
+guard succeeds. Passing an otherwise valid ACTIVE header, revision other than 1,
+or epoch other than 0 is a creation error rather than a lifecycle transition.
+
 List APIs are bounded, deterministic, content-free, and cursor based. They never
 return prompt, answer, key, memory body, goal body, world payload, or local path.
 
@@ -520,6 +531,9 @@ The Phase B manifest will assign unique stable IDs to required positive and
 negative controls. At minimum it proves:
 
 - duplicate AgentRun ID rejection;
+- direct creation from an otherwise Phase-A-valid non-CREATED state, revision
+  other than 1, or epoch other than 0 rejects before SQL with zero rows in every
+  Phase B table; the exact CREATED/1/0 control writes one `0 -> 1` creation event;
 - CREATED to ACTIVE rejection;
 - terminal reopen rejection;
 - exact revision increment, skipped revision rejection, and rollback rejection;
