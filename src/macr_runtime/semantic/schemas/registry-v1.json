@@ -1,0 +1,52 @@
+{
+  "schema_version": "macr-semantic-registry/v1",
+  "registry_version": "1",
+  "node_types": [
+    "action_proposal", "ambiguity", "checkpoint", "claim", "constraint",
+    "decision", "failure", "goal", "hypothesis", "obligation",
+    "observation", "plan", "receipt", "task", "trigger", "verification",
+    "wake_condition"
+  ],
+  "relation_rules": {
+    "affects": {"source_types": ["*"], "target_types": ["*"]},
+    "blocks": {"source_types": ["ambiguity", "constraint", "failure", "obligation"], "target_types": ["action_proposal", "decision", "goal", "plan", "task"]},
+    "causes": {"source_types": ["*"], "target_types": ["*"]},
+    "constrains": {"source_types": ["constraint"], "target_types": ["action_proposal", "decision", "goal", "plan", "task"]},
+    "contradicts": {"source_types": ["claim", "hypothesis", "observation", "verification"], "target_types": ["claim", "decision", "goal", "hypothesis", "plan"]},
+    "depends_on": {"source_types": ["*"], "target_types": ["*"]},
+    "derived_from": {"source_types": ["*"], "target_types": ["*"]},
+    "describes": {"source_types": ["*"], "target_types": ["*"]},
+    "expects": {"source_types": ["action_proposal", "plan", "task"], "target_types": ["observation", "receipt", "verification"]},
+    "follows": {"source_types": ["*"], "target_types": ["*"]},
+    "motivates": {"source_types": ["ambiguity", "claim", "goal", "hypothesis", "obligation", "observation"], "target_types": ["action_proposal", "decision", "plan", "task"]},
+    "observes": {"source_types": ["observation"], "target_types": ["*"]},
+    "precedes": {"source_types": ["*"], "target_types": ["*"]},
+    "produced": {"source_types": ["action_proposal", "plan", "task"], "target_types": ["failure", "observation", "receipt"]},
+    "refutes": {"source_types": ["observation", "verification"], "target_types": ["claim", "hypothesis"]},
+    "resolves": {"source_types": ["decision", "observation", "verification"], "target_types": ["ambiguity", "failure", "obligation"]},
+    "revises": {"source_types": ["*"], "target_types": ["*"]},
+    "supports": {"source_types": ["claim", "hypothesis", "observation", "verification"], "target_types": ["claim", "decision", "goal", "hypothesis", "plan"]},
+    "supersedes": {"source_types": ["*"], "target_types": ["*"]},
+    "targets": {"source_types": ["action_proposal", "decision", "plan", "task"], "target_types": ["constraint", "goal", "observation", "task"]},
+    "verifies": {"source_types": ["verification"], "target_types": ["action_proposal", "claim", "decision", "receipt"]},
+    "waits_for": {"source_types": ["action_proposal", "plan", "task", "wake_condition"], "target_types": ["observation", "receipt", "task", "verification", "wake_condition"]}
+  },
+  "effect_types": [
+    "process.execute", "repository.branch.write", "repository.read",
+    "repository.working_tree.write", "software_domain.inspect",
+    "software_domain.pause", "software_domain.resume",
+    "software_domain.temporal_rate.write"
+  ],
+  "status_types": [
+    "active", "completed", "contested", "failed", "proposed", "refuted",
+    "resolved", "stale", "superseded", "supported", "unresolved", "verified"
+  ],
+  "verdict_types": ["diverged", "failed", "partial", "passed", "stale", "unknown"],
+  "failure_types": [
+    "ACTION_DIVERGED", "AUTHORITY_DENIED", "BUDGET_EXHAUSTED",
+    "CAPABILITY_MISSING", "CHECKPOINT_INVALID", "DEPENDENCY_FAILED",
+    "HUMAN_DECISION_REQUIRED", "MODEL_FAILURE", "PROJECTION_FAILED",
+    "PROVIDER_FAILURE", "RECONCILIATION_REQUIRED", "VERIFICATION_FAILED",
+    "WAKE_INVALID", "WORLD_STALE"
+  ]
+}
