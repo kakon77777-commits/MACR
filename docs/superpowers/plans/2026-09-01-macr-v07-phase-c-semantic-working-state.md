@@ -87,6 +87,13 @@ expected Agent revision on retry, so it did not replay the exact request.
 before stale CAS. Tests must repeat the byte-equivalent original request and
 reject conflicting operation-ID reuse with no graph/Agent/event drift.
 
+The first Task 7 membership attack used SQLite DML `LIMIT`, which is unsupported
+by the tested Windows SQLite build; that result was discarded as harness error.
+The corrected rowid-subquery attack produced the intended product RED: revision
+JSON alone did not detect missing or altered membership rows. Revision readback
+now cross-checks scalar columns, node/relation membership, and referenced record
+identity before returning an immutable revision.
+
 ## Authorized scope
 
 Allowed:
