@@ -31,6 +31,7 @@ def snapshot(agent, semantic):
                 "semantic_graph_revision_nodes",
                 "semantic_graph_revision_relations",
                 "semantic_events",
+                "semantic_attach_receipts",
                 "semantic_commit_receipts",
             )
         )
@@ -52,6 +53,28 @@ def snapshot(agent, semantic):
 
 
 class SemanticAtomicityTests(unittest.TestCase):
+    def test_attach_faults_roll_back_binding_event_and_receipt(self) -> None:
+        for marker in ("before_attach_receipt", "before_attach_commit"):
+            with self.subTest(marker=marker), d_drive_tempdir() as temp:
+                agent, semantic, header, permit, head, _, clock = active_world(temp)
+                before = snapshot(agent, semantic)
+
+                def fail_at(observed: str) -> None:
+                    if observed == marker:
+                        raise RuntimeError(f"injected:{marker}")
+
+                service = SemanticCommitService(
+                    agent.store,
+                    semantic,
+                    now=clock,
+                    fault_injector=fail_at,
+                )
+                with self.assertRaisesRegex(RuntimeError, f"injected:{marker}"):
+                    attach(service, agent, header, permit, head)
+
+                after = snapshot(agent, semantic)
+                self.assertEqual(after, before)
+
     def test_faults_between_semantic_and_agent_halves_roll_back_everything(self) -> None:
         markers = (
             "after_semantic_records",

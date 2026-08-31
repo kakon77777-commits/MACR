@@ -29,6 +29,7 @@ from .registry import SEMANTIC_REGISTRY_SCHEMA_VERSION, SemanticRegistry
 from .store import SemanticStore
 from .service import SemanticProposalRecord, SemanticProposalService
 from .commit import (
+    SemanticAttachReceipt,
     SemanticCommitReceipt,
     SemanticCommitService,
     ownership_permit_digest,
@@ -68,6 +69,7 @@ __all__ = [
     "SemanticProposalRecord",
     "SemanticProposalService",
     "SemanticCommitRequest",
+    "SemanticAttachReceipt",
     "SemanticCommitReceipt",
     "SemanticCommitService",
     "CompiledSemanticPatch",

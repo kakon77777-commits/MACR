@@ -24,6 +24,7 @@ SEMANTIC_TABLES = {
     "semantic_relations",
     "semantic_events",
     "semantic_patches",
+    "semantic_attach_receipts",
     "semantic_commit_receipts",
 }
 

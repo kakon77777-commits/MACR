@@ -204,6 +204,21 @@ _SEMANTIC_SCHEMA_STATEMENTS = (
         created_at TEXT NOT NULL,
         terminal_at TEXT
     )""",
+    """CREATE TABLE IF NOT EXISTS semantic_attach_receipts (
+        operation_id TEXT PRIMARY KEY,
+        request_digest TEXT NOT NULL UNIQUE,
+        agent_run_id TEXT NOT NULL,
+        graph_id TEXT NOT NULL,
+        graph_revision INTEGER NOT NULL CHECK(graph_revision >= 1),
+        graph_digest TEXT NOT NULL,
+        agent_state_revision INTEGER NOT NULL CHECK(agent_state_revision >= 1),
+        agent_event_id TEXT NOT NULL UNIQUE,
+        ownership_permit_digest TEXT NOT NULL,
+        authorization_digest TEXT NOT NULL,
+        receipt_digest TEXT NOT NULL,
+        receipt_json TEXT NOT NULL,
+        attached_at TEXT NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS semantic_commit_receipts (
         commit_id TEXT PRIMARY KEY,
         request_digest TEXT NOT NULL UNIQUE,

@@ -9,11 +9,13 @@ from macr_runtime.agent.service import AgentStateService
 from macr_runtime.agent.store import AgentStore
 from macr_runtime.execution import AuthorizationReference
 from macr_runtime.semantic.commit import (
+    SemanticAttachReceipt,
     SemanticCommitReceipt,
     SemanticCommitService,
     ownership_permit_digest,
 )
 from macr_runtime.semantic.errors import (
+    SemanticAgentBindingConflictError,
     SemanticCommitAuthorityInvalidError,
     SemanticPatchConflictError,
 )
@@ -107,7 +109,7 @@ class SemanticCommitTests(unittest.TestCase):
                 graph_id=GRAPH_ID,
                 graph_revision=1,
                 graph_digest=head.graph_digest,
-                expected_agent_revision=5,
+                expected_agent_revision=4,
                 expected_agent_epoch=1,
                 permit=permit,
                 authorization_reference=header.authority.reference,
@@ -118,11 +120,41 @@ class SemanticCommitTests(unittest.TestCase):
             events = agent.list_agent_events(RUN_ID)
             binding = agent.store.get_agent_semantic_binding(RUN_ID)
 
-        self.assertEqual(attached.state_revision, 5)
+        self.assertIsInstance(attached, SemanticAttachReceipt)
+        self.assertEqual(attached.agent_state_revision, 5)
         self.assertEqual(repeated, attached)
         self.assertEqual(after_head, head)
         self.assertEqual(binding, head.to_semantic_state_binding())
         self.assertEqual(len(events), 5)
+
+    def test_attach_operation_id_conflicting_reuse_fails_without_drift(self) -> None:
+        with d_drive_tempdir() as temp:
+            agent, semantic, header, permit, head, _, clock = active_world(temp)
+            service = SemanticCommitService(agent.store, semantic, now=clock)
+            receipt = attach(service, agent, header, permit, head)
+            before_agent = agent.get_agent_run(RUN_ID)
+            before_events = agent.list_agent_events(RUN_ID)
+
+            with self.assertRaises(SemanticAgentBindingConflictError):
+                service.attach_graph(
+                    agent_run_id=RUN_ID,
+                    graph_id=GRAPH_ID,
+                    graph_revision=1,
+                    graph_digest="f" * 64,
+                    expected_agent_revision=4,
+                    expected_agent_epoch=1,
+                    permit=permit,
+                    authorization_reference=header.authority.reference,
+                    operation_id=ATTACH_OPERATION_ID,
+                    agent_event_id=ATTACH_EVENT_ID,
+                )
+
+            after_agent = agent.get_agent_run(RUN_ID)
+            after_events = agent.list_agent_events(RUN_ID)
+
+        self.assertEqual(receipt.agent_state_revision, 5)
+        self.assertEqual(after_agent, before_agent)
+        self.assertEqual(after_events, before_events)
 
     def test_commit_advances_graph_and_agent_once_and_exact_repeat_returns_receipt(self) -> None:
         with d_drive_tempdir() as temp:

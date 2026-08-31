@@ -61,6 +61,59 @@ def ownership_permit_digest(permit: AgentOwnershipPermit) -> str:
     )
 
 
+def _attach_request_digest(
+    *,
+    operation_id: str,
+    agent_run_id: str,
+    graph_id: str,
+    graph_revision: int,
+    graph_digest: str,
+    expected_agent_revision: int,
+    expected_agent_epoch: int,
+    ownership_digest: str,
+    authorization_reference: AuthorizationReference,
+    agent_event_id: str,
+) -> str:
+    if not isinstance(authorization_reference, AuthorizationReference):
+        raise ValueError(
+            "authorization_reference must be an AuthorizationReference"
+        )
+    if (
+        isinstance(expected_agent_epoch, bool)
+        or not isinstance(expected_agent_epoch, int)
+        or expected_agent_epoch < 0
+    ):
+        raise ValueError("expected_agent_epoch must be a non-negative integer")
+    return canonical_record_digest(
+        "macr.semantic.attach-request.v1",
+        {
+            "operation_id": require_uuid4("operation_id", operation_id),
+            "agent_run_id": require_uuid4("agent_run_id", agent_run_id),
+            "graph_id": require_uuid4("graph_id", graph_id),
+            "graph_revision": require_positive_int(
+                "graph_revision", graph_revision
+            ),
+            "graph_digest": require_sha256("graph_digest", graph_digest),
+            "expected_agent_revision": require_positive_int(
+                "expected_agent_revision", expected_agent_revision
+            ),
+            "expected_agent_epoch": expected_agent_epoch,
+            "ownership_permit_digest": require_sha256(
+                "ownership_permit_digest", ownership_digest
+            ),
+            "authorization_reference": {
+                "source_kind": authorization_reference.source_kind,
+                "source_id": authorization_reference.source_id,
+                "digest": authorization_reference.digest,
+                "revision": authorization_reference.revision,
+                "epoch": authorization_reference.epoch,
+                "scope": authorization_reference.scope,
+            },
+            "agent_event_id": require_uuid4("agent_event_id", agent_event_id),
+        },
+    )
+
+
 @dataclass(frozen=True)
 class SemanticCommitEvent:
     semantic_event_id: str
@@ -142,6 +195,75 @@ class SemanticCommitEvent:
 
     def to_public_dict(self) -> dict[str, object]:
         return {**self._identity_dict(), "event_digest": self.event_digest}
+
+
+@dataclass(frozen=True)
+class SemanticAttachReceipt:
+    operation_id: str
+    request_digest: str
+    agent_run_id: str
+    graph_id: str
+    graph_revision: int
+    graph_digest: str
+    agent_state_revision: int
+    agent_event_id: str
+    ownership_permit_digest: str
+    authorization_digest: str
+    attached_at: str
+    receipt_digest: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        for name in ("operation_id", "agent_run_id", "graph_id", "agent_event_id"):
+            object.__setattr__(self, name, require_uuid4(name, getattr(self, name)))
+        for name in (
+            "request_digest",
+            "graph_digest",
+            "ownership_permit_digest",
+            "authorization_digest",
+        ):
+            object.__setattr__(self, name, require_sha256(name, getattr(self, name)))
+        object.__setattr__(
+            self,
+            "graph_revision",
+            require_positive_int("graph_revision", self.graph_revision),
+        )
+        object.__setattr__(
+            self,
+            "agent_state_revision",
+            require_positive_int("agent_state_revision", self.agent_state_revision),
+        )
+        object.__setattr__(
+            self,
+            "attached_at",
+            normalize_timestamp("attached_at", self.attached_at),
+        )
+        object.__setattr__(
+            self,
+            "receipt_digest",
+            canonical_record_digest(
+                "macr.semantic.attach-receipt.v1",
+                self._identity_dict(),
+            ),
+        )
+
+    def _identity_dict(self) -> dict[str, object]:
+        return {
+            "schema": "macr-semantic-attach-receipt/v1",
+            "operation_id": self.operation_id,
+            "request_digest": self.request_digest,
+            "agent_run_id": self.agent_run_id,
+            "graph_id": self.graph_id,
+            "graph_revision": self.graph_revision,
+            "graph_digest": self.graph_digest,
+            "agent_state_revision": self.agent_state_revision,
+            "agent_event_id": self.agent_event_id,
+            "ownership_permit_digest": self.ownership_permit_digest,
+            "authorization_digest": self.authorization_digest,
+            "attached_at": self.attached_at,
+        }
+
+    def to_public_dict(self) -> dict[str, object]:
+        return {**self._identity_dict(), "receipt_digest": self.receipt_digest}
 
 
 @dataclass(frozen=True)
@@ -315,11 +437,46 @@ class SemanticCommitService:
         authorization_reference: AuthorizationReference,
         operation_id: str,
         agent_event_id: str,
-    ):
+    ) -> SemanticAttachReceipt:
+        operation_id = require_uuid4("operation_id", operation_id)
+        agent_run_id = require_uuid4("agent_run_id", agent_run_id)
+        graph_id = require_uuid4("graph_id", graph_id)
+        graph_revision = require_positive_int("graph_revision", graph_revision)
+        graph_digest = require_sha256("graph_digest", graph_digest)
+        expected_agent_revision = require_positive_int(
+            "expected_agent_revision", expected_agent_revision
+        )
+        agent_event_id = require_uuid4("agent_event_id", agent_event_id)
+        permit_digest = ownership_permit_digest(permit)
+        request_digest = _attach_request_digest(
+            operation_id=operation_id,
+            agent_run_id=agent_run_id,
+            graph_id=graph_id,
+            graph_revision=graph_revision,
+            graph_digest=graph_digest,
+            expected_agent_revision=expected_agent_revision,
+            expected_agent_epoch=expected_agent_epoch,
+            ownership_digest=permit_digest,
+            authorization_reference=authorization_reference,
+            agent_event_id=agent_event_id,
+        )
         timestamp = self._time()
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM semantic_attach_receipts WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+            if existing is not None:
+                receipt = self._attach_receipt_from_row(existing)
+                if receipt.request_digest != request_digest:
+                    raise SemanticAgentBindingConflictError(
+                        "semantic attach operation ID conflicts with existing receipt"
+                    )
+                connection.commit()
+                return receipt
+
             current, binding = self._validate_agent(
                 connection,
                 agent_run_id=agent_run_id,
@@ -335,12 +492,9 @@ class SemanticCommitService:
                     "semantic graph attach head is stale"
                 )
             target = head.to_semantic_state_binding()
-            if binding == target:
-                connection.commit()
-                return current
             if binding is not None:
                 raise SemanticAgentBindingConflictError(
-                    "AgentRun is already bound to another semantic head"
+                    "AgentRun is already bound; replay the original attach operation"
                 )
             event, _ = self._agent_binding._build_event(
                 current=current,
@@ -363,8 +517,49 @@ class SemanticCommitService:
                 expected_revision=expected_agent_revision,
                 expected_epoch=expected_agent_epoch,
             )
+            self._fault("before_attach_receipt")
+            receipt = SemanticAttachReceipt(
+                operation_id=operation_id,
+                request_digest=request_digest,
+                agent_run_id=agent_run_id,
+                graph_id=head.graph_id,
+                graph_revision=target.revision,
+                graph_digest=target.digest,
+                agent_state_revision=next_projection.state_revision,
+                agent_event_id=event.event_id,
+                ownership_permit_digest=permit_digest,
+                authorization_digest=authorization_reference.digest,
+                attached_at=timestamp,
+            )
+            connection.execute(
+                """
+                INSERT INTO semantic_attach_receipts(
+                    operation_id, request_digest, agent_run_id, graph_id,
+                    graph_revision, graph_digest, agent_state_revision,
+                    agent_event_id, ownership_permit_digest,
+                    authorization_digest, receipt_digest, receipt_json,
+                    attached_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    receipt.operation_id,
+                    receipt.request_digest,
+                    receipt.agent_run_id,
+                    receipt.graph_id,
+                    receipt.graph_revision,
+                    receipt.graph_digest,
+                    receipt.agent_state_revision,
+                    receipt.agent_event_id,
+                    receipt.ownership_permit_digest,
+                    receipt.authorization_digest,
+                    receipt.receipt_digest,
+                    _json_text(receipt.to_public_dict()),
+                    receipt.attached_at,
+                ),
+            )
+            self._fault("before_attach_commit")
             connection.commit()
-            return next_projection
+            return receipt
         except Exception:
             connection.rollback()
             raise
@@ -781,6 +976,47 @@ class SemanticCommitService:
             ),
         )
         return next_head, revision
+
+    @staticmethod
+    def _attach_receipt_from_row(row) -> SemanticAttachReceipt:
+        try:
+            data = json.loads(row["receipt_json"])
+            receipt = SemanticAttachReceipt(
+                operation_id=data["operation_id"],
+                request_digest=data["request_digest"],
+                agent_run_id=data["agent_run_id"],
+                graph_id=data["graph_id"],
+                graph_revision=data["graph_revision"],
+                graph_digest=data["graph_digest"],
+                agent_state_revision=data["agent_state_revision"],
+                agent_event_id=data["agent_event_id"],
+                ownership_permit_digest=data["ownership_permit_digest"],
+                authorization_digest=data["authorization_digest"],
+                attached_at=data["attached_at"],
+            )
+            if receipt.receipt_digest != data["receipt_digest"]:
+                raise ValueError("attach receipt digest mismatch")
+            for name in (
+                "operation_id",
+                "request_digest",
+                "agent_run_id",
+                "graph_id",
+                "graph_revision",
+                "graph_digest",
+                "agent_state_revision",
+                "agent_event_id",
+                "ownership_permit_digest",
+                "authorization_digest",
+                "receipt_digest",
+                "attached_at",
+            ):
+                if row[name] != getattr(receipt, name):
+                    raise ValueError(f"attach receipt column mismatch: {name}")
+            return receipt
+        except Exception as exc:
+            raise SemanticAgentBindingConflictError(
+                "stored semantic attach receipt is invalid"
+            ) from exc
 
     @staticmethod
     def _receipt_from_row(row) -> SemanticCommitReceipt:
