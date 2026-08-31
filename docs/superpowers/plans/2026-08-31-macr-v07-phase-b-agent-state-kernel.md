@@ -190,6 +190,17 @@ No test may call a provider or use the shared Agent database. Fault injection is
 local, deterministic, and transaction-bound. No automatic retry is added merely
 to make a test green.
 
+Before any direct Python test command in this plan, set the source import boundary
+explicitly in the current PowerShell process:
+
+```powershell
+$env:PYTHONPATH = (Resolve-Path '.\src').Path
+$env:PYTHONDONTWRITEBYTECODE = '1'
+```
+
+All later `python -m unittest` commands assume this prelude. A collection failure
+caused by a missing `PYTHONPATH` is a harness failure, not a valid product RED.
+
 ---
 
 ## Task 1 — Projection, lifecycle, and typed errors
