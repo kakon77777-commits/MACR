@@ -42,6 +42,7 @@ from .events import (
     AgentStateEvent,
     apply_agent_event,
     replay_agent_events,
+    replay_semantic_binding,
 )
 from .lifecycle import require_phase_b_transition
 from .state import AgentRunProjection
@@ -199,9 +200,10 @@ class AgentStore:
                 agent_run_id, subject_digest, agent_ref,
                 initial_header_json, state, state_revision, epoch,
                 goal_ref, authority_ref, budget_ref, semantic_state_ref,
+                semantic_state_digest, semantic_state_revision,
                 active_plan_ref, latest_checkpoint_ref, parent_agent_run_id,
                 delegation_ref, state_digest, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 projection.agent_run_id,
@@ -215,6 +217,8 @@ class AgentStore:
                 header.authority.reference.source_id,
                 header.budget.ref,
                 None if header.semantic_state is None else header.semantic_state.ref,
+                None if header.semantic_state is None else header.semantic_state.digest,
+                None if header.semantic_state is None else header.semantic_state.revision,
                 None if header.active_plan is None else header.active_plan.ref,
                 None,
                 header.parent_agent_run_id,
@@ -347,6 +351,59 @@ class AgentStore:
         finally:
             connection.close()
         return projection
+
+    @staticmethod
+    def _semantic_binding_from_row(
+        row: sqlite3.Row,
+    ) -> "SemanticStateBinding | None":
+        from .contracts import SemanticStateBinding
+
+        values = (
+            row["semantic_state_ref"],
+            row["semantic_state_digest"],
+            row["semantic_state_revision"],
+        )
+        if values == (None, None, None):
+            return None
+        if any(value is None for value in values):
+            raise AgentProjectionConflictError(
+                "Agent semantic binding columns are incomplete"
+            )
+        try:
+            return SemanticStateBinding(values[0], values[1], values[2])
+        except Exception as exc:
+            raise AgentProjectionConflictError(
+                "Agent semantic binding columns are invalid"
+            ) from exc
+
+    def get_agent_semantic_binding(
+        self,
+        agent_run_id: str,
+    ) -> "SemanticStateBinding | None":
+        run_id = require_uuid4("agent_run_id", agent_run_id)
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM agent_runs WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise AgentRunNotFoundError("AgentRun was not found")
+            observed = self._semantic_binding_from_row(row)
+            events = self._load_event_chain(connection, run_id)
+            replayed = replay_semantic_binding(
+                AgentRunHeader.from_dict(
+                    _load_json("initial Agent header", row["initial_header_json"])
+                ).semantic_state,
+                events,
+            )
+        finally:
+            connection.close()
+        if observed != replayed:
+            raise AgentProjectionConflictError(
+                "Agent semantic binding does not match event history"
+            )
+        return observed
 
     @staticmethod
     def _require_matching_tail(
@@ -1267,6 +1324,11 @@ class AgentStore:
                 raw_digest = row["state_digest"]
                 try:
                     projection = self._projection_from_row(row)
+                    observed_semantic = self._semantic_binding_from_row(row)
+                    replayed_semantic = replay_semantic_binding(
+                        projection.initial_header.semantic_state,
+                        events,
+                    )
                 except Exception:
                     result = ProjectionInspection(
                         agent_run_id=run_id,
@@ -1281,7 +1343,11 @@ class AgentStore:
                         connection,
                         projection,
                     )
-                    exact = projection == replayed and indexes_match
+                    exact = (
+                        projection == replayed
+                        and indexes_match
+                        and observed_semantic == replayed_semantic
+                    )
                     result = ProjectionInspection(
                         agent_run_id=run_id,
                         status=(
@@ -1322,6 +1388,10 @@ class AgentStore:
             connection.execute("BEGIN IMMEDIATE")
             events = self._load_event_chain(connection, run_id)
             replayed = replay_agent_events(events)
+            replayed_semantic = replay_semantic_binding(
+                replayed.initial_header.semantic_state,
+                events,
+            )
             ownership = connection.execute(
                 "SELECT expires_at FROM agent_ownership WHERE agent_run_id = ?",
                 (run_id,),
@@ -1339,6 +1409,21 @@ class AgentStore:
             self._insert_projection(connection, replayed)
             self._insert_bindings(connection, replayed.initial_header)
             self._rebuild_outgoing_children(connection, run_id)
+            if replayed_semantic != replayed.initial_header.semantic_state:
+                connection.execute(
+                    """
+                    UPDATE agent_runs
+                    SET semantic_state_ref = ?, semantic_state_digest = ?,
+                        semantic_state_revision = ?
+                    WHERE agent_run_id = ?
+                    """,
+                    (
+                        None if replayed_semantic is None else replayed_semantic.ref,
+                        None if replayed_semantic is None else replayed_semantic.digest,
+                        None if replayed_semantic is None else replayed_semantic.revision,
+                        run_id,
+                    ),
+                )
             self._fault("after_projection_update")
             self._fault("before_commit")
             connection.commit()

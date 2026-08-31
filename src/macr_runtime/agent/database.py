@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
 
 from ..errors import StoragePolicyError
+from .contracts import AgentRunHeader
 from .errors import AgentProjectionConflictError
 
 
 class AgentDatabase:
     """Connection policy and schema owner for Phase B AgentRun state."""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
     _BOOTSTRAP_TIMEOUT_S = 30.0
     _BOOTSTRAP_RETRY_INTERVAL_S = 0.01
 
@@ -103,10 +105,15 @@ class AgentDatabase:
                     "INSERT INTO schema_meta(component, version) VALUES (?, ?)",
                     ("agent_runtime", self.SCHEMA_VERSION),
                 )
-            elif row["version"] != self.SCHEMA_VERSION:
+                version = self.SCHEMA_VERSION
+            else:
+                version = row["version"]
+            if version < 1 or version > self.SCHEMA_VERSION:
                 raise AgentProjectionConflictError(
                     "Agent database schema version is unsupported"
                 )
+            if version == 1:
+                self._migrate_one_to_two(connection)
             connection.execute(
                 """
                 INSERT OR IGNORE INTO agent_fencing_counter(singleton, value)
@@ -119,6 +126,79 @@ class AgentDatabase:
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _migrate_one_to_two(connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(agent_runs)")
+        }
+        if "semantic_state_digest" not in columns:
+            connection.execute(
+                "ALTER TABLE agent_runs ADD COLUMN semantic_state_digest TEXT"
+            )
+        if "semantic_state_revision" not in columns:
+            connection.execute(
+                "ALTER TABLE agent_runs ADD COLUMN semantic_state_revision INTEGER"
+            )
+
+        rows = connection.execute(
+            "SELECT agent_run_id, semantic_state_ref, initial_header_json "
+            "FROM agent_runs"
+        ).fetchall()
+        for row in rows:
+            try:
+                header_data = json.loads(row["initial_header_json"])
+                header = AgentRunHeader.from_dict(header_data)
+            except Exception as exc:
+                raise AgentProjectionConflictError(
+                    "Agent v1 header cannot be migrated"
+                ) from exc
+            binding = header.semantic_state
+            if binding is None:
+                if row["semantic_state_ref"] is not None:
+                    raise AgentProjectionConflictError(
+                        "Agent v1 semantic binding is incomplete"
+                    )
+                continue
+            if row["semantic_state_ref"] != binding.ref:
+                raise AgentProjectionConflictError(
+                    "Agent v1 semantic binding conflicts with header"
+                )
+            connection.execute(
+                """
+                UPDATE agent_runs
+                SET semantic_state_digest = ?, semantic_state_revision = ?
+                WHERE agent_run_id = ?
+                """,
+                (binding.digest, binding.revision, row["agent_run_id"]),
+            )
+
+        connection.execute("DROP INDEX IF EXISTS agent_events_by_run")
+        connection.execute(_AGENT_EVENTS_TABLE_V2_TEMP)
+        connection.execute(
+            """
+            INSERT INTO agent_events_v2(
+                sequence, event_id, agent_run_id, epoch, before_revision,
+                after_revision, event_type, payload_json, payload_digest,
+                state_digest_after, created_at
+            )
+            SELECT sequence, event_id, agent_run_id, epoch, before_revision,
+                   after_revision, event_type, payload_json, payload_digest,
+                   state_digest_after, created_at
+            FROM agent_events
+            ORDER BY sequence
+            """
+        )
+        connection.execute("DROP TABLE agent_events")
+        connection.execute("ALTER TABLE agent_events_v2 RENAME TO agent_events")
+        connection.execute(
+            "CREATE INDEX agent_events_by_run "
+            "ON agent_events(agent_run_id, sequence)"
+        )
+        connection.execute(
+            "UPDATE schema_meta SET version = 2 WHERE component = 'agent_runtime'"
+        )
 
 
 _SCHEMA_STATEMENTS = (
@@ -142,6 +222,8 @@ _SCHEMA_STATEMENTS = (
         authority_ref TEXT NOT NULL,
         budget_ref TEXT NOT NULL,
         semantic_state_ref TEXT,
+        semantic_state_digest TEXT,
+        semantic_state_revision INTEGER,
         active_plan_ref TEXT,
         latest_checkpoint_ref TEXT,
         parent_agent_run_id TEXT,
@@ -153,6 +235,15 @@ _SCHEMA_STATEMENTS = (
             (parent_agent_run_id IS NULL AND delegation_ref IS NULL)
             OR
             (parent_agent_run_id IS NOT NULL AND delegation_ref IS NOT NULL)
+        ),
+        CHECK(
+            (semantic_state_ref IS NULL
+             AND semantic_state_digest IS NULL
+             AND semantic_state_revision IS NULL)
+            OR
+            (semantic_state_ref IS NOT NULL
+             AND semantic_state_digest IS NOT NULL
+             AND semantic_state_revision >= 1)
         )
     )""",
     """CREATE INDEX IF NOT EXISTS agent_runs_by_state
@@ -167,7 +258,8 @@ _SCHEMA_STATEMENTS = (
         event_type TEXT NOT NULL CHECK(event_type IN (
             'agent.run_created', 'agent.run_admitted',
             'agent.owner_acquired', 'agent.run_activated', 'agent.blocked',
-            'agent.completed', 'agent.failed', 'agent.cancelled'
+            'agent.completed', 'agent.failed', 'agent.cancelled',
+            'agent.semantic_state_advanced'
         )),
         payload_json TEXT NOT NULL,
         payload_digest TEXT NOT NULL,
@@ -246,3 +338,25 @@ _SCHEMA_STATEMENTS = (
         value INTEGER NOT NULL CHECK(value >= 0)
     )""",
 )
+
+
+_AGENT_EVENTS_TABLE_V2_TEMP = """CREATE TABLE agent_events_v2 (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
+    agent_run_id TEXT NOT NULL,
+    epoch INTEGER NOT NULL CHECK(epoch >= 0),
+    before_revision INTEGER NOT NULL CHECK(before_revision >= 0),
+    after_revision INTEGER NOT NULL CHECK(after_revision >= 1),
+    event_type TEXT NOT NULL CHECK(event_type IN (
+        'agent.run_created', 'agent.run_admitted',
+        'agent.owner_acquired', 'agent.run_activated', 'agent.blocked',
+        'agent.completed', 'agent.failed', 'agent.cancelled',
+        'agent.semantic_state_advanced'
+    )),
+    payload_json TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    state_digest_after TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    CHECK(after_revision = before_revision + 1),
+    UNIQUE(agent_run_id, after_revision)
+)"""

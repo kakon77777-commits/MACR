@@ -20,7 +20,7 @@ from .._v07_contracts import (
     require_sha256,
     require_uuid4,
 )
-from .contracts import AgentRunHeader, AgentRunState
+from .contracts import AgentRunHeader, AgentRunState, SemanticStateBinding
 from .errors import AgentEventIntegrityError
 from .lifecycle import require_phase_b_transition
 from .state import AgentRunProjection
@@ -38,6 +38,7 @@ class AgentEventType(str, Enum):
     COMPLETED = "agent.completed"
     FAILED = "agent.failed"
     CANCELLED = "agent.cancelled"
+    SEMANTIC_STATE_ADVANCED = "agent.semantic_state_advanced"
 
 
 _REASON_EVENTS = frozenset(
@@ -59,6 +60,18 @@ _PAYLOAD_FIELDS = {
         {"owner_id", "lease_id", "fencing_token", "expires_at"}
     ),
     AgentEventType.COMPLETED: frozenset({"evidence_ref", "evidence_digest"}),
+    AgentEventType.SEMANTIC_STATE_ADVANCED: frozenset(
+        {
+            "operation_kind",
+            "operation_id",
+            "previous_binding",
+            "new_binding",
+            "proposal_digest",
+            "patch_digest",
+            "registry_digest",
+            "authorization_digest",
+        }
+    ),
 }
 _FORBIDDEN_KEYS = frozenset(
     {
@@ -184,6 +197,49 @@ def _validated_payload(
             "evidence_digest": require_sha256(
                 "evidence_digest",
                 data["evidence_digest"],
+            ),
+        }
+    elif event_type is AgentEventType.SEMANTIC_STATE_ADVANCED:
+        operation_kind = require_non_empty(
+            "operation_kind", data["operation_kind"], max_bytes=32
+        )
+        if operation_kind not in {"attach", "commit"}:
+            raise ValueError("operation_kind must be attach or commit")
+        previous_raw = data["previous_binding"]
+        previous = (
+            None
+            if previous_raw is None
+            else SemanticStateBinding.from_dict(previous_raw)
+        )
+        new_binding = SemanticStateBinding.from_dict(data["new_binding"])
+        proposal = (
+            None
+            if data["proposal_digest"] is None
+            else require_sha256("proposal_digest", data["proposal_digest"])
+        )
+        patch = (
+            None
+            if data["patch_digest"] is None
+            else require_sha256("patch_digest", data["patch_digest"])
+        )
+        if operation_kind == "attach" and (proposal is not None or patch is not None):
+            raise ValueError("attach cannot carry proposal or patch digest")
+        if operation_kind == "commit" and (proposal is None or patch is None):
+            raise ValueError("commit requires proposal and patch digests")
+        normalized = {
+            "operation_kind": operation_kind,
+            "operation_id": require_uuid4("operation_id", data["operation_id"]),
+            "previous_binding": (
+                None if previous is None else previous.to_public_dict()
+            ),
+            "new_binding": new_binding.to_public_dict(),
+            "proposal_digest": proposal,
+            "patch_digest": patch,
+            "registry_digest": require_sha256(
+                "registry_digest", data["registry_digest"]
+            ),
+            "authorization_digest": require_sha256(
+                "authorization_digest", data["authorization_digest"]
             ),
         }
     else:  # pragma: no cover - closed enum and mapping make this unreachable
@@ -380,6 +436,12 @@ def apply_agent_event(
             if event.epoch != current.epoch + 1:
                 raise AgentEventIntegrityError("owner acquisition must advance epoch")
             target = current.state
+        elif event.event_type is AgentEventType.SEMANTIC_STATE_ADVANCED:
+            if event.epoch != current.epoch:
+                raise AgentEventIntegrityError(
+                    "semantic binding event epoch does not match current epoch"
+                )
+            target = current.state
         else:
             if event.epoch != current.epoch:
                 raise AgentEventIntegrityError("Agent event epoch does not match current epoch")
@@ -418,4 +480,34 @@ def replay_agent_events(events: Iterable[AgentStateEvent]) -> AgentRunProjection
         current = apply_agent_event(current, event)
     if not observed or current is None:
         raise AgentEventIntegrityError("Agent event chain is empty")
+    return current
+
+
+def replay_semantic_binding(
+    initial_binding: SemanticStateBinding | None,
+    events: Iterable[AgentStateEvent],
+) -> SemanticStateBinding | None:
+    if initial_binding is not None and not isinstance(
+        initial_binding, SemanticStateBinding
+    ):
+        raise ValueError("initial_binding must be SemanticStateBinding or None")
+    current = initial_binding
+    for event in events:
+        if not isinstance(event, AgentStateEvent):
+            raise ValueError("events must contain AgentStateEvent values")
+        if event.event_type is not AgentEventType.SEMANTIC_STATE_ADVANCED:
+            continue
+        previous_raw = event.payload["previous_binding"]
+        previous = (
+            None
+            if previous_raw is None
+            else SemanticStateBinding.from_dict(public_json_value(previous_raw))
+        )
+        if previous != current:
+            raise AgentEventIntegrityError(
+                "semantic binding event previous binding does not match"
+            )
+        current = SemanticStateBinding.from_dict(
+            public_json_value(event.payload["new_binding"])
+        )
     return current

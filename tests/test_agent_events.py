@@ -55,6 +55,7 @@ class AgentEventTests(unittest.TestCase):
                 "agent.completed",
                 "agent.failed",
                 "agent.cancelled",
+                "agent.semantic_state_advanced",
             },
         )
 

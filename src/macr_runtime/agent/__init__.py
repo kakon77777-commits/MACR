@@ -26,6 +26,7 @@ from .events import (
 from .lifecycle import PHASE_B_TRANSITIONS, require_phase_b_transition
 from .ownership import AgentOwnershipPermit, AgentOwnershipStore
 from .service import AgentStateService
+from .semantic_binding import AgentSemanticBindingPort
 from .state import (
     AGENT_PROJECTION_SCHEMA_VERSION,
     AgentRunProjection,
@@ -47,6 +48,7 @@ __all__ = [
     "AgentOwnershipPermit",
     "AgentOwnershipStore",
     "AgentRunProjection",
+    "AgentSemanticBindingPort",
     "AgentRunHeader",
     "AgentRunIdentity",
     "AgentRunState",
