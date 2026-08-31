@@ -92,18 +92,21 @@ _SEMANTIC_SCHEMA_STATEMENTS = (
         graph_id TEXT PRIMARY KEY,
         graph_ref TEXT NOT NULL UNIQUE,
         scope_ref TEXT NOT NULL,
-        current_revision INTEGER NOT NULL CHECK(current_revision >= 1),
-        current_graph_digest TEXT NOT NULL,
         registry_version TEXT NOT NULL
             REFERENCES semantic_registry_versions(registry_version),
         registry_digest TEXT NOT NULL,
         created_by_agent_run_id TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        head_json TEXT NOT NULL
+        created_at TEXT NOT NULL
     )""",
     """CREATE INDEX IF NOT EXISTS semantic_graphs_by_scope
     ON semantic_graphs(scope_ref, graph_id)""",
+    """CREATE TABLE IF NOT EXISTS semantic_graph_heads (
+        graph_id TEXT PRIMARY KEY REFERENCES semantic_graphs(graph_id),
+        current_revision INTEGER NOT NULL CHECK(current_revision >= 1),
+        current_graph_digest TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        head_json TEXT NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS semantic_graph_revisions (
         graph_id TEXT NOT NULL REFERENCES semantic_graphs(graph_id),
         graph_revision INTEGER NOT NULL CHECK(graph_revision >= 1),

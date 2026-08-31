@@ -121,6 +121,52 @@ class SemanticStoreTests(unittest.TestCase):
             with self.assertRaises(SemanticGraphNotFoundError):
                 store.get_graph_head("66666666-6666-4666-8666-666666666666")
 
+    def test_head_projection_deletes_with_foreign_keys_and_rebuilds_without_history_drift(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "agent.sqlite3"
+            AgentStore(path).create_agent_run(make_header())
+            store = SemanticStore(AgentDatabase(path))
+            head = store.create_graph(
+                graph_id=GRAPH_A,
+                scope_ref="project:phase-c",
+                created_by_agent_run_id=RUN_ID,
+                created_at="2026-09-01T00:00:00+00:00",
+            )
+            connection = store.database.connect()
+            try:
+                before = tuple(
+                    connection.execute(
+                        "SELECT * FROM semantic_graph_revisions "
+                        "WHERE graph_id = ? ORDER BY graph_revision",
+                        (GRAPH_A,),
+                    ).fetchone()
+                )
+                connection.execute(
+                    "DELETE FROM semantic_graph_heads WHERE graph_id = ?",
+                    (GRAPH_A,),
+                )
+                catalog = connection.execute(
+                    "SELECT COUNT(*) FROM semantic_graphs WHERE graph_id = ?",
+                    (GRAPH_A,),
+                ).fetchone()[0]
+                retained = tuple(
+                    connection.execute(
+                        "SELECT * FROM semantic_graph_revisions "
+                        "WHERE graph_id = ? ORDER BY graph_revision",
+                        (GRAPH_A,),
+                    ).fetchone()
+                )
+            finally:
+                connection.close()
+
+            rebuilt = store.rebuild_graph_head(GRAPH_A)
+            loaded = store.get_graph_head(GRAPH_A)
+
+        self.assertEqual(catalog, 1)
+        self.assertEqual(retained, before)
+        self.assertEqual(rebuilt, head)
+        self.assertEqual(loaded, head)
+
     def test_local_path_scope_rejects_before_graph_write_and_database_is_content_free(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "agent.sqlite3"

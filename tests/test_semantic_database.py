@@ -16,6 +16,7 @@ from tests.support import d_drive_tempdir
 SEMANTIC_TABLES = {
     "semantic_registry_versions",
     "semantic_graphs",
+    "semantic_graph_heads",
     "semantic_graph_revisions",
     "semantic_graph_revision_nodes",
     "semantic_graph_revision_relations",

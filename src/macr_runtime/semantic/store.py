@@ -86,21 +86,31 @@ class SemanticStore:
             connection.execute(
                 """
                 INSERT INTO semantic_graphs(
-                    graph_id, graph_ref, scope_ref, current_revision,
-                    current_graph_digest, registry_version, registry_digest,
-                    created_by_agent_run_id, created_at, updated_at, head_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    graph_id, graph_ref, scope_ref, registry_version,
+                    registry_digest, created_by_agent_run_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     head.graph_id,
                     head.graph_ref,
                     head.scope_ref,
-                    head.graph_revision,
-                    head.graph_digest,
                     head.registry_version,
                     head.registry_digest,
                     head.created_by_agent_run_id,
                     head.created_at,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO semantic_graph_heads(
+                    graph_id, current_revision, current_graph_digest,
+                    updated_at, head_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    head.graph_id,
+                    head.graph_revision,
+                    head.graph_digest,
                     head.updated_at,
                     _json_text(head.to_public_dict()),
                 ),
@@ -141,7 +151,16 @@ class SemanticStore:
         connection = self.database.connect()
         try:
             row = connection.execute(
-                "SELECT * FROM semantic_graphs WHERE graph_id = ?",
+                """
+                SELECT g.graph_id, g.graph_ref, g.scope_ref,
+                       g.registry_version, g.registry_digest,
+                       g.created_by_agent_run_id, g.created_at,
+                       h.current_revision, h.current_graph_digest,
+                       h.updated_at, h.head_json
+                FROM semantic_graphs AS g
+                JOIN semantic_graph_heads AS h ON h.graph_id = g.graph_id
+                WHERE g.graph_id = ?
+                """,
                 (selected,),
             ).fetchone()
         finally:
@@ -165,6 +184,76 @@ class SemanticStore:
                 "semantic graph head projection conflicts"
             )
         return head
+
+    def rebuild_graph_head(self, graph_id: str) -> SemanticGraphHead:
+        selected = require_uuid4("graph_id", graph_id)
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            graph = connection.execute(
+                "SELECT * FROM semantic_graphs WHERE graph_id = ?",
+                (selected,),
+            ).fetchone()
+            if graph is None:
+                raise SemanticGraphNotFoundError("semantic graph was not found")
+            revision_row = connection.execute(
+                """
+                SELECT revision_json FROM semantic_graph_revisions
+                WHERE graph_id = ?
+                ORDER BY graph_revision DESC
+                LIMIT 1
+                """,
+                (selected,),
+            ).fetchone()
+            if revision_row is None:
+                raise SemanticGraphNotFoundError(
+                    "semantic graph has no immutable revision"
+                )
+            revision = SemanticGraphRevision.from_dict(
+                json.loads(revision_row["revision_json"])
+            )
+            head = SemanticGraphHead(
+                graph_id=graph["graph_id"],
+                scope_ref=graph["scope_ref"],
+                graph_revision=revision.graph_revision,
+                registry_version=graph["registry_version"],
+                registry_digest=graph["registry_digest"],
+                active_node_record_digests=revision.active_node_record_digests,
+                active_relation_digests=revision.active_relation_digests,
+                created_by_agent_run_id=graph["created_by_agent_run_id"],
+                created_at=graph["created_at"],
+                updated_at=revision.committed_at,
+            )
+            if head.graph_digest != revision.graph_digest:
+                raise SemanticGraphDigestMismatchError(
+                    "semantic graph revision cannot rebuild head"
+                )
+            connection.execute(
+                "DELETE FROM semantic_graph_heads WHERE graph_id = ?",
+                (selected,),
+            )
+            connection.execute(
+                """
+                INSERT INTO semantic_graph_heads(
+                    graph_id, current_revision, current_graph_digest,
+                    updated_at, head_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    head.graph_id,
+                    head.graph_revision,
+                    head.graph_digest,
+                    head.updated_at,
+                    _json_text(head.to_public_dict()),
+                ),
+            )
+            connection.commit()
+            return head
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def get_graph_revision(
         self,
