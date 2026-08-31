@@ -383,22 +383,32 @@ class AgentStore:
         run_id = require_uuid4("agent_run_id", agent_run_id)
         connection = self.database.connect()
         try:
-            row = connection.execute(
-                "SELECT * FROM agent_runs WHERE agent_run_id = ?",
-                (run_id,),
-            ).fetchone()
-            if row is None:
-                raise AgentRunNotFoundError("AgentRun was not found")
-            observed = self._semantic_binding_from_row(row)
-            events = self._load_event_chain(connection, run_id)
-            replayed = replay_semantic_binding(
-                AgentRunHeader.from_dict(
-                    _load_json("initial Agent header", row["initial_header_json"])
-                ).semantic_state,
-                events,
+            return self._get_agent_semantic_binding_on_connection(
+                connection, run_id
             )
         finally:
             connection.close()
+
+    def _get_agent_semantic_binding_on_connection(
+        self,
+        connection: sqlite3.Connection,
+        agent_run_id: str,
+    ) -> "SemanticStateBinding | None":
+        run_id = require_uuid4("agent_run_id", agent_run_id)
+        row = connection.execute(
+            "SELECT * FROM agent_runs WHERE agent_run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise AgentRunNotFoundError("AgentRun was not found")
+        observed = self._semantic_binding_from_row(row)
+        events = self._load_event_chain(connection, run_id)
+        replayed = replay_semantic_binding(
+            AgentRunHeader.from_dict(
+                _load_json("initial Agent header", row["initial_header_json"])
+            ).semantic_state,
+            events,
+        )
         if observed != replayed:
             raise AgentProjectionConflictError(
                 "Agent semantic binding does not match event history"

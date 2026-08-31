@@ -361,6 +361,91 @@ class SemanticStore:
                 "semantic graph revision record is invalid"
             ) from exc
 
+    @staticmethod
+    def _active_nodes_on_connection(
+        connection,
+        graph_id: str,
+        graph_revision: int,
+    ) -> tuple[SemanticNode, ...]:
+        rows = connection.execute(
+            """
+            SELECT n.record_json
+            FROM semantic_graph_revision_nodes AS m
+            JOIN semantic_nodes AS n
+              ON n.graph_id = m.graph_id
+             AND n.record_digest = m.record_digest
+            WHERE m.graph_id = ? AND m.graph_revision = ?
+            ORDER BY m.record_digest
+            """,
+            (graph_id, graph_revision),
+        ).fetchall()
+        try:
+            return tuple(
+                SemanticNode.from_dict(json.loads(row["record_json"]))
+                for row in rows
+            )
+        except Exception as exc:
+            raise SemanticGraphDigestMismatchError(
+                "semantic node membership is invalid"
+            ) from exc
+
+    @staticmethod
+    def _active_relations_on_connection(
+        connection,
+        graph_id: str,
+        graph_revision: int,
+    ) -> tuple[SemanticRelation, ...]:
+        rows = connection.execute(
+            """
+            SELECT r.relation_json
+            FROM semantic_graph_revision_relations AS m
+            JOIN semantic_relations AS r
+              ON r.graph_id = m.graph_id
+             AND r.relation_digest = m.relation_digest
+            WHERE m.graph_id = ? AND m.graph_revision = ?
+            ORDER BY m.relation_digest
+            """,
+            (graph_id, graph_revision),
+        ).fetchall()
+        try:
+            return tuple(
+                SemanticRelation.from_dict(json.loads(row["relation_json"]))
+                for row in rows
+            )
+        except Exception as exc:
+            raise SemanticGraphDigestMismatchError(
+                "semantic relation membership is invalid"
+            ) from exc
+
+    def _graph_snapshot_on_connection(
+        self,
+        connection,
+        graph_id: str,
+        graph_revision: int,
+    ) -> tuple[
+        SemanticGraphRevision,
+        tuple[SemanticNode, ...],
+        tuple[SemanticRelation, ...],
+    ]:
+        revision = self._revision_on_connection(
+            connection, graph_id, graph_revision
+        )
+        nodes = self._active_nodes_on_connection(
+            connection, graph_id, graph_revision
+        )
+        relations = self._active_relations_on_connection(
+            connection, graph_id, graph_revision
+        )
+        if tuple(item.record_digest for item in nodes) != revision.active_node_record_digests:
+            raise SemanticGraphDigestMismatchError(
+                "semantic node snapshot conflicts with revision"
+            )
+        if tuple(item.relation_digest for item in relations) != revision.active_relation_digests:
+            raise SemanticGraphDigestMismatchError(
+                "semantic relation snapshot conflicts with revision"
+            )
+        return revision, nodes, relations
+
     def list_graphs(
         self,
         *,
@@ -404,29 +489,11 @@ class SemanticStore:
         )
         connection = self.database.connect()
         try:
-            rows = connection.execute(
-                """
-                SELECT n.record_json
-                FROM semantic_graph_revision_nodes AS m
-                JOIN semantic_nodes AS n
-                  ON n.graph_id = m.graph_id
-                 AND n.record_digest = m.record_digest
-                WHERE m.graph_id = ? AND m.graph_revision = ?
-                ORDER BY m.record_digest
-                """,
-                (head.graph_id, revision),
-            ).fetchall()
+            return self._active_nodes_on_connection(
+                connection, head.graph_id, revision
+            )
         finally:
             connection.close()
-        try:
-            return tuple(
-                SemanticNode.from_dict(json.loads(row["record_json"]))
-                for row in rows
-            )
-        except Exception as exc:
-            raise SemanticGraphDigestMismatchError(
-                "semantic node membership is invalid"
-            ) from exc
 
     def get_active_relations(
         self,
@@ -442,29 +509,11 @@ class SemanticStore:
         )
         connection = self.database.connect()
         try:
-            rows = connection.execute(
-                """
-                SELECT r.relation_json
-                FROM semantic_graph_revision_relations AS m
-                JOIN semantic_relations AS r
-                  ON r.graph_id = m.graph_id
-                 AND r.relation_digest = m.relation_digest
-                WHERE m.graph_id = ? AND m.graph_revision = ?
-                ORDER BY m.relation_digest
-                """,
-                (head.graph_id, revision),
-            ).fetchall()
+            return self._active_relations_on_connection(
+                connection, head.graph_id, revision
+            )
         finally:
             connection.close()
-        try:
-            return tuple(
-                SemanticRelation.from_dict(json.loads(row["relation_json"]))
-                for row in rows
-            )
-        except Exception as exc:
-            raise SemanticGraphDigestMismatchError(
-                "semantic relation membership is invalid"
-            ) from exc
 
     def save_proposal(self, record: "SemanticProposalRecord") -> "SemanticProposalRecord":
         from .service import SemanticProposalRecord

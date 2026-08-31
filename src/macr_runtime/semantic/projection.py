@@ -414,6 +414,9 @@ class SemanticContextProjector:
         self.agent_store = agent_store
         self.semantic_store = semantic_store
 
+    def _after_binding_read(self) -> None:
+        """Test seam after the snapshot-pinning read; production is a no-op."""
+
     def project(self, request: SemanticContextRequest) -> SemanticContextProjection:
         if not isinstance(request, SemanticContextRequest):
             raise ValueError("request must be a SemanticContextRequest")
@@ -422,17 +425,28 @@ class SemanticContextProjector:
             request.graph_digest,
             request.graph_revision,
         )
+        connection = self.agent_store.database.connect()
         try:
-            observed_binding = self.agent_store.get_agent_semantic_binding(
-                request.agent_run_id
+            connection.execute("BEGIN")
+            observed_binding = (
+                self.agent_store._get_agent_semantic_binding_on_connection(
+                    connection, request.agent_run_id
+                )
             )
-            revision = self.semantic_store.get_graph_revision(
-                request.graph_id, request.graph_revision
+            self._after_binding_read()
+            revision, nodes, relations = (
+                self.semantic_store._graph_snapshot_on_connection(
+                    connection, request.graph_id, request.graph_revision
+                )
             )
+            connection.commit()
         except Exception as exc:
+            connection.rollback()
             raise SemanticProjectionConflictError(
                 "semantic context source evidence is invalid"
             ) from exc
+        finally:
+            connection.close()
         if observed_binding != expected_binding:
             raise SemanticProjectionConflictError(
                 "AgentRun is not pinned to requested semantic revision"
@@ -441,12 +455,6 @@ class SemanticContextProjector:
             raise SemanticProjectionConflictError(
                 "semantic context graph digest conflicts"
             )
-        nodes = self.semantic_store.get_active_nodes(
-            request.graph_id, graph_revision=request.graph_revision
-        )
-        relations = self.semantic_store.get_active_relations(
-            request.graph_id, graph_revision=request.graph_revision
-        )
         return self._select(request, nodes, relations)
 
     @staticmethod

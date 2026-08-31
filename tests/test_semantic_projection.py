@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import threading
 import unittest
 from datetime import datetime, timezone
 
@@ -19,6 +20,7 @@ from macr_runtime.semantic.contracts import (
     SemanticRelationType,
 )
 from macr_runtime.semantic.errors import (
+    SemanticGraphDigestMismatchError,
     SemanticProjectionConflictError,
     SemanticProjectionIncompleteError,
 )
@@ -203,6 +205,52 @@ def context_request(
 
 
 class SemanticProjectionTests(unittest.TestCase):
+    def test_interleaved_membership_fault_never_mixes_snapshot_evidence(self) -> None:
+        ready = threading.Event()
+        resume = threading.Event()
+
+        class PausingProjector(SemanticContextProjector):
+            def _after_binding_read(self) -> None:
+                ready.set()
+                if not resume.wait(timeout=10):
+                    raise RuntimeError("snapshot interleaving timed out")
+
+        with d_drive_tempdir() as temp:
+            agent, semantic, head, _ = committed_world(temp)
+            projector = PausingProjector(agent.store, semantic)
+            outcome: dict[str, object] = {}
+
+            def run_projection() -> None:
+                try:
+                    outcome["projection"] = projector.project(context_request(head))
+                except Exception as exc:
+                    outcome["error"] = exc
+
+            worker = threading.Thread(target=run_projection)
+            worker.start()
+            self.assertTrue(ready.wait(timeout=10))
+            connection = semantic.database.connect()
+            try:
+                connection.execute(
+                    "DELETE FROM semantic_graph_revision_nodes WHERE rowid = "
+                    "(SELECT rowid FROM semantic_graph_revision_nodes "
+                    "WHERE graph_id = ? AND graph_revision = 2 "
+                    "ORDER BY rowid LIMIT 1)",
+                    (GRAPH_ID,),
+                )
+            finally:
+                connection.close()
+            resume.set()
+            worker.join(timeout=10)
+            self.assertFalse(worker.is_alive())
+            with self.assertRaises(SemanticGraphDigestMismatchError):
+                semantic.get_graph_revision(GRAPH_ID, 2)
+
+        self.assertNotIn("error", outcome)
+        projection = outcome["projection"]
+        self.assertEqual([item.node_id for item in projection.nodes], ["goal:one", "plan:one"])
+        self.assertEqual(len(projection.relations), 1)
+
     def test_goal_plan_projection_is_deterministic_round_trippable_and_read_only(self) -> None:
         with d_drive_tempdir() as temp:
             agent, semantic, head, _ = committed_world(temp)
