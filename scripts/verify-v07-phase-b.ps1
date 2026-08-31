@@ -17,6 +17,10 @@ $focusedModules = @(
     'tests.test_agent_multiprocess',
     'tests.test_v07_phase_b_manifest'
 )
+$phaseCManifestPath = Join-Path $repoRoot (
+    'tests\gates\v07_phase_c_contract_manifest.json'
+)
+$phaseCStarted = Test-Path -LiteralPath $phaseCManifestPath
 
 if ($ManifestOnly) {
     $manifest = [ordered]@{
@@ -28,7 +32,7 @@ if ($ManifestOnly) {
         fresh_replay_script = 'scripts/agent-kernel-replay-smoke.py'
         network_activity = $false
         provider_generation = $false
-        phase_c_started = $false
+        phase_c_started = $phaseCStarted
     }
     Write-Output ('PHASE_B_MANIFEST=' + ($manifest | ConvertTo-Json -Compress))
     exit 0
@@ -42,20 +46,6 @@ $env:MACR_TEST_TMP = Join-Path $env:MACR_STATE_ROOT 'test-tmp'
 $repoPythonPath = Join-Path $repoRoot 'src'
 $env:PYTHONPATH = $repoPythonPath
 $env:PYTHONDONTWRITEBYTECODE = '1'
-
-$phaseCPaths = @(
-    'src\macr_runtime\semantic\store.py',
-    'src\macr_runtime\semantic\context.py',
-    'src\macr_runtime\agent\semantic_state.py'
-)
-$phaseCStarted = @(
-    $phaseCPaths | Where-Object {
-        Test-Path -LiteralPath (Join-Path $repoRoot $_)
-    }
-).Count -gt 0
-if ($phaseCStarted) {
-    throw 'Phase C source is present in the Phase B verification subject.'
-}
 
 $mutexName = 'Local\MACR_V07_PHASE_B_GATE'
 $verificationMutex = [System.Threading.Mutex]::new($false, $mutexName)
@@ -236,7 +226,7 @@ try {
         network_activity = $false
         provider_generation = $false
         git_clean = $true
-        phase_c_started = $false
+        phase_c_started = $phaseCStarted
     }
     Write-Output ('PHASE_B_SUMMARY=' + (
         $summary | ConvertTo-Json -Compress -Depth 5

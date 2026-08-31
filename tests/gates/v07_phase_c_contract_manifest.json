@@ -55,7 +55,9 @@
 
     {"id":"PC-ARCH-01","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_architecture_manifest_matches_exact_modules_and_imports"},
     {"id":"PC-ARCH-02","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_phase_c_public_exports_and_phase_d_absence_are_exact"},
-    {"id":"PC-ARCH-03","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_structural_smoke_is_offline_source_independent_and_reconstructs"},
-    {"id":"PC-ARCH-04","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_semantic_import_is_lazy_for_providers_direct_and_observation"}
+    {"id":"PC-ARCH-03","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_structural_smoke_contract_is_offline_and_reconstructs_from_source"},
+    {"id":"PC-ARCH-04","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_semantic_import_is_lazy_for_providers_direct_and_observation"},
+    {"id":"PC-ARCH-05","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_phase_c_wrapper_reports_exact_offline_subject"},
+    {"id":"PC-ARCH-06","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_phase_b_wrapper_detects_phase_c_manifest_instead_of_rejecting_source"}
   ]
 }

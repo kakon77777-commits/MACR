@@ -278,7 +278,7 @@ class V07PhaseBManifestTests(unittest.TestCase):
         )
         self.assertFalse(payload["network_activity"])
         self.assertFalse(payload["provider_generation"])
-        self.assertFalse(payload["phase_c_started"])
+        self.assertTrue(payload["phase_c_started"])
 
     def test_phase_a_wrapper_detects_phase_b_instead_of_hardcoding_false(self) -> None:
         source = (ROOT / "scripts/verify-v07-phase-a.ps1").read_text(encoding="utf-8")

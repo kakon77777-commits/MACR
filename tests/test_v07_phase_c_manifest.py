@@ -4,6 +4,7 @@ import ast
 import importlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -35,6 +36,78 @@ def resolve_import(module_name: str, node: ast.ImportFrom) -> str:
 
 
 class V07PhaseCManifestTests(unittest.TestCase):
+    def test_phase_c_wrapper_reports_exact_offline_subject(self) -> None:
+        script = ROOT / "scripts/verify-v07-phase-c.ps1"
+        source = script.read_text(encoding="utf-8")
+        for required in (
+            "pip wheel",
+            "--no-deps",
+            "--no-index",
+            "MACR_INSTALL_TARGET",
+            "installed_import_isolated",
+            "python -S",
+        ):
+            self.assertIn(required, source)
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        self.assertIsNotNone(powershell)
+        completed = subprocess.run(
+            [powershell, "-NoProfile", "-File", str(script), "-ManifestOnly"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        lines = [line for line in completed.stdout.splitlines() if line]
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("PHASE_C_MANIFEST="))
+        payload = json.loads(lines[0].removeprefix("PHASE_C_MANIFEST="))
+        self.assertEqual(
+            payload["contract_manifest"],
+            "tests/gates/v07_phase_c_contract_manifest.json",
+        )
+        self.assertEqual(
+            payload["architecture_manifest"],
+            "tests/gates/v07_phase_c_architecture_manifest.json",
+        )
+        self.assertEqual(payload["phase_b_gate"], "scripts/verify-v07-phase-b.ps1")
+        self.assertEqual(
+            payload["fresh_replay_script"],
+            "scripts/semantic-working-state-replay-smoke.py",
+        )
+        self.assertIn("tests.test_semantic_projection", payload["focused_modules"])
+        self.assertIn("tests.test_v07_phase_c_manifest", payload["focused_modules"])
+        self.assertFalse(payload["network_activity"])
+        self.assertFalse(payload["provider_generation"])
+        self.assertFalse(payload["phase_d_started"])
+
+    def test_phase_b_wrapper_detects_phase_c_manifest_instead_of_rejecting_source(self) -> None:
+        source = (ROOT / "scripts/verify-v07-phase-b.ps1").read_text(encoding="utf-8")
+        self.assertIn("v07_phase_c_contract_manifest.json", source)
+        self.assertNotIn("Phase C source is present in the Phase B verification subject", source)
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        completed = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-File",
+                str(ROOT / "scripts/verify-v07-phase-b.ps1"),
+                "-ManifestOnly",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        line = next(
+            item for item in completed.stdout.splitlines()
+            if item.startswith("PHASE_B_MANIFEST=")
+        )
+        self.assertTrue(json.loads(line.removeprefix("PHASE_B_MANIFEST="))["phase_c_started"])
+
     def test_contract_manifest_ids_families_and_bindings_are_unique(self) -> None:
         manifest = load_json(CONTRACT_MANIFEST)
         required = manifest["required"]
@@ -158,7 +231,7 @@ class V07PhaseCManifestTests(unittest.TestCase):
         for relative in load_json(ARCHITECTURE_MANIFEST)["phase_d_forbidden_paths"]:
             self.assertFalse((ROOT / relative).exists(), relative)
 
-    def test_structural_smoke_is_offline_source_independent_and_reconstructs(self) -> None:
+    def test_structural_smoke_contract_is_offline_and_reconstructs_from_source(self) -> None:
         manifest = load_json(ARCHITECTURE_MANIFEST)
         script = ROOT / manifest["fresh_replay_script"]
         source = script.read_text(encoding="utf-8")
