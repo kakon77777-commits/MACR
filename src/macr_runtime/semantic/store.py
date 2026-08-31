@@ -268,11 +268,35 @@ class SemanticStore:
         try:
             row = connection.execute(
                 """
-                SELECT revision_json FROM semantic_graph_revisions
+                SELECT * FROM semantic_graph_revisions
                 WHERE graph_id = ? AND graph_revision = ?
                 """,
                 (selected, revision),
             ).fetchone()
+            node_rows = connection.execute(
+                """
+                SELECT m.node_id, m.record_digest, n.record_json
+                FROM semantic_graph_revision_nodes AS m
+                LEFT JOIN semantic_nodes AS n
+                  ON n.graph_id = m.graph_id
+                 AND n.record_digest = m.record_digest
+                WHERE m.graph_id = ? AND m.graph_revision = ?
+                ORDER BY m.record_digest
+                """,
+                (selected, revision),
+            ).fetchall()
+            relation_rows = connection.execute(
+                """
+                SELECT m.relation_id, m.relation_digest, r.relation_json
+                FROM semantic_graph_revision_relations AS m
+                LEFT JOIN semantic_relations AS r
+                  ON r.graph_id = m.graph_id
+                 AND r.relation_digest = m.relation_digest
+                WHERE m.graph_id = ? AND m.graph_revision = ?
+                ORDER BY m.relation_digest
+                """,
+                (selected, revision),
+            ).fetchall()
         finally:
             connection.close()
         if row is None:
@@ -280,7 +304,48 @@ class SemanticStore:
                 "semantic graph revision was not found"
             )
         try:
-            return SemanticGraphRevision.from_dict(json.loads(row["revision_json"]))
+            observed = SemanticGraphRevision.from_dict(
+                json.loads(row["revision_json"])
+            )
+            for name in (
+                "graph_id",
+                "graph_revision",
+                "graph_digest",
+                "parent_revision",
+                "parent_graph_digest",
+                "patch_digest",
+                "registry_version",
+                "registry_digest",
+                "committed_at",
+                "revision_digest",
+            ):
+                if row[name] != getattr(observed, name):
+                    raise ValueError(f"semantic revision column mismatch: {name}")
+            node_digests = tuple(item["record_digest"] for item in node_rows)
+            relation_digests = tuple(
+                item["relation_digest"] for item in relation_rows
+            )
+            if node_digests != observed.active_node_record_digests:
+                raise ValueError("semantic node membership conflicts with revision")
+            if relation_digests != observed.active_relation_digests:
+                raise ValueError("semantic relation membership conflicts with revision")
+            for item in node_rows:
+                node = SemanticNode.from_dict(json.loads(item["record_json"]))
+                if (
+                    node.node_id != item["node_id"]
+                    or node.record_digest != item["record_digest"]
+                ):
+                    raise ValueError("semantic node membership record mismatch")
+            for item in relation_rows:
+                relation = SemanticRelation.from_dict(
+                    json.loads(item["relation_json"])
+                )
+                if (
+                    relation.relation_id != item["relation_id"]
+                    or relation.relation_digest != item["relation_digest"]
+                ):
+                    raise ValueError("semantic relation membership record mismatch")
+            return observed
         except Exception as exc:
             raise SemanticGraphDigestMismatchError(
                 "semantic graph revision record is invalid"

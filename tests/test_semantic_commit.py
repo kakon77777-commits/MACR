@@ -17,6 +17,8 @@ from macr_runtime.semantic.commit import (
 from macr_runtime.semantic.errors import (
     SemanticAgentBindingConflictError,
     SemanticCommitAuthorityInvalidError,
+    SemanticCommitPermitInvalidError,
+    SemanticGraphHeadStaleError,
     SemanticPatchConflictError,
 )
 from macr_runtime.semantic.patch import SemanticCommitRequest
@@ -94,6 +96,124 @@ def attach(commit_service, agent, header, permit, head):
 
 
 class SemanticCommitTests(unittest.TestCase):
+    def test_attach_rejects_noncurrent_head_without_drift(self) -> None:
+        with d_drive_tempdir() as temp:
+            agent, semantic, header, permit, head, _, clock = active_world(temp)
+            service = SemanticCommitService(agent.store, semantic, now=clock)
+            before = (agent.get_agent_run(RUN_ID), agent.list_agent_events(RUN_ID))
+
+            with self.assertRaises(SemanticGraphHeadStaleError):
+                service.attach_graph(
+                    agent_run_id=RUN_ID,
+                    graph_id=GRAPH_ID,
+                    graph_revision=1,
+                    graph_digest="f" * 64,
+                    expected_agent_revision=4,
+                    expected_agent_epoch=1,
+                    permit=permit,
+                    authorization_reference=header.authority.reference,
+                    operation_id=ATTACH_OPERATION_ID,
+                    agent_event_id=ATTACH_EVENT_ID,
+                )
+
+            after = (agent.get_agent_run(RUN_ID), agent.list_agent_events(RUN_ID))
+            after_head = semantic.get_graph_head(GRAPH_ID)
+
+        self.assertEqual(after, before)
+        self.assertEqual(after_head, head)
+
+    def test_attach_rejects_stale_agent_cas_or_permit_without_drift(self) -> None:
+        cases = (
+            ("revision", 3, 1, None),
+            ("epoch", 4, 0, None),
+            (
+                "permit",
+                4,
+                1,
+                lambda permit: dataclasses.replace(
+                    permit, fencing_token=permit.fencing_token + 1
+                ),
+            ),
+        )
+        for name, expected_revision, expected_epoch, mutate in cases:
+            with self.subTest(case=name), d_drive_tempdir() as temp:
+                agent, semantic, header, permit, head, _, clock = active_world(temp)
+                service = SemanticCommitService(agent.store, semantic, now=clock)
+                selected_permit = permit if mutate is None else mutate(permit)
+                before = (
+                    agent.get_agent_run(RUN_ID),
+                    agent.list_agent_events(RUN_ID),
+                    semantic.get_graph_head(GRAPH_ID),
+                )
+
+                with self.assertRaises(SemanticCommitPermitInvalidError):
+                    service.attach_graph(
+                        agent_run_id=RUN_ID,
+                        graph_id=GRAPH_ID,
+                        graph_revision=1,
+                        graph_digest=head.graph_digest,
+                        expected_agent_revision=expected_revision,
+                        expected_agent_epoch=expected_epoch,
+                        permit=selected_permit,
+                        authorization_reference=header.authority.reference,
+                        operation_id=ATTACH_OPERATION_ID,
+                        agent_event_id=ATTACH_EVENT_ID,
+                    )
+
+                after = (
+                    agent.get_agent_run(RUN_ID),
+                    agent.list_agent_events(RUN_ID),
+                    semantic.get_graph_head(GRAPH_ID),
+                )
+                self.assertEqual(after, before)
+
+    def test_attach_rejects_wrong_authority_and_second_graph_binding(self) -> None:
+        with d_drive_tempdir() as temp:
+            agent, semantic, header, permit, head, _, clock = active_world(temp)
+            service = SemanticCommitService(agent.store, semantic, now=clock)
+            forged = dataclasses.replace(header.authority.reference, digest="f" * 64)
+            with self.assertRaises(SemanticCommitAuthorityInvalidError):
+                service.attach_graph(
+                    agent_run_id=RUN_ID,
+                    graph_id=GRAPH_ID,
+                    graph_revision=1,
+                    graph_digest=head.graph_digest,
+                    expected_agent_revision=4,
+                    expected_agent_epoch=1,
+                    permit=permit,
+                    authorization_reference=forged,
+                    operation_id=ATTACH_OPERATION_ID,
+                    agent_event_id=ATTACH_EVENT_ID,
+                )
+
+            attach(service, agent, header, permit, head)
+            second_id = "14141414-1414-4414-8414-141414141414"
+            second = semantic.create_graph(
+                graph_id=second_id,
+                scope_ref="project:phase-c-second",
+                created_by_agent_run_id=RUN_ID,
+                created_at="2026-09-01T01:00:00+00:00",
+            )
+            before = (agent.get_agent_run(RUN_ID), agent.list_agent_events(RUN_ID))
+
+            with self.assertRaises(SemanticAgentBindingConflictError):
+                service.attach_graph(
+                    agent_run_id=RUN_ID,
+                    graph_id=second_id,
+                    graph_revision=1,
+                    graph_digest=second.graph_digest,
+                    expected_agent_revision=5,
+                    expected_agent_epoch=1,
+                    permit=permit,
+                    authorization_reference=header.authority.reference,
+                    operation_id="15151515-1515-4515-8515-151515151515",
+                    agent_event_id="16161616-1616-4616-8616-161616161616",
+                )
+
+            after = (agent.get_agent_run(RUN_ID), agent.list_agent_events(RUN_ID))
+
+        self.assertEqual(after, before)
+
     def test_attach_binds_current_head_once_without_advancing_graph(self) -> None:
         with d_drive_tempdir() as temp:
             agent, semantic, header, permit, head, _, clock = active_world(temp)
