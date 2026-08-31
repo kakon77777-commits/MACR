@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:evemisslab:macr:action-contracts:v1",
+  "title": "MACR v0.7 Action Contracts v1",
+  "oneOf": [
+    {"$ref": "#/$defs/EffectSet"},
+    {"$ref": "#/$defs/CapabilityRef"},
+    {"$ref": "#/$defs/BudgetEnvelope"},
+    {"$ref": "#/$defs/ActionProposal"},
+    {"$ref": "#/$defs/ActionAdmission"},
+    {"$ref": "#/$defs/CommandIntent"},
+    {"$ref": "#/$defs/ActionAttempt"},
+    {"$ref": "#/$defs/ActuationReceipt"},
+    {"$ref": "#/$defs/ActionVerification"},
+    {"$ref": "#/$defs/ReconciliationRecord"}
+  ],
+  "$defs": {
+    "Sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "NonEmpty": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "EffectName": {
+      "enum": [
+        "repository.read", "repository.working_tree.write", "repository.branch.write",
+        "process.execute", "software_domain.inspect", "software_domain.pause",
+        "software_domain.resume", "software_domain.temporal_rate.write"
+      ]
+    },
+    "EffectSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effects", "effect_digest"],
+      "properties": {
+        "effects": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/EffectName"}},
+        "effect_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "CapabilityAvailability": {
+      "enum": ["available", "unavailable", "degraded", "disabled", "unsupported"]
+    },
+    "CapabilityRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability_id", "provider", "operation", "effect_profile_ref", "adapter_version", "availability_state", "capability_digest"],
+      "properties": {
+        "capability_id": {"$ref": "#/$defs/NonEmpty"},
+        "provider": {"$ref": "#/$defs/NonEmpty"},
+        "operation": {"$ref": "#/$defs/NonEmpty"},
+        "effect_profile_ref": {"$ref": "#/$defs/NonEmpty"},
+        "adapter_version": {"$ref": "#/$defs/NonEmpty"},
+        "availability_state": {"$ref": "#/$defs/CapabilityAvailability"},
+        "capability_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "BudgetEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["budget_id", "agent_run_id", "provider_calls", "currency_cost_usd", "wall_clock_seconds", "child_agent_count", "revision", "budget_digest"],
+      "properties": {
+        "budget_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "provider_calls": {"type": "integer", "minimum": 0},
+        "currency_cost_usd": {"type": "number", "minimum": 0},
+        "wall_clock_seconds": {"type": "number", "minimum": 0},
+        "child_agent_count": {"type": "integer", "minimum": 0},
+        "revision": {"type": "integer", "minimum": 1},
+        "budget_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "AdmissionDecision": {
+      "enum": ["allow", "allow_with_verify", "require_approval", "defer", "deny", "escalate"]
+    },
+    "AuthorizationReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_kind", "source_id", "digest", "revision", "epoch", "scope"],
+      "properties": {
+        "source_kind": {"$ref": "#/$defs/NonEmpty"},
+        "source_id": {"$ref": "#/$defs/NonEmpty"},
+        "digest": {"$ref": "#/$defs/Sha256"},
+        "revision": {"type": "integer", "minimum": 1},
+        "epoch": {"type": "integer", "minimum": 0},
+        "scope": {"$ref": "#/$defs/NonEmpty"}
+      }
+    },
+    "ActionProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "agent_run_id", "agent_run_epoch", "goal_ref", "plan_ref", "task_ref", "operation", "target_ref", "parameters_ref", "declared_effects", "basis_refs", "preconditions", "expected_result_ref", "rollback_policy_ref", "verification_policy_ref", "provenance_ref", "proposal_digest"],
+      "properties": {
+        "action_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "agent_run_epoch": {"type": "integer", "minimum": 0},
+        "goal_ref": {"$ref": "#/$defs/NonEmpty"},
+        "plan_ref": {"$ref": "#/$defs/NonEmpty"},
+        "task_ref": {"$ref": "#/$defs/NonEmpty"},
+        "operation": {"$ref": "#/$defs/NonEmpty"},
+        "target_ref": {"$ref": "#/$defs/NonEmpty"},
+        "parameters_ref": {"$ref": "#/$defs/NonEmpty"},
+        "declared_effects": {"$ref": "#/$defs/EffectSet"},
+        "basis_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "preconditions": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "expected_result_ref": {"$ref": "#/$defs/NonEmpty"},
+        "rollback_policy_ref": {"$ref": "#/$defs/NonEmpty"},
+        "verification_policy_ref": {"$ref": "#/$defs/NonEmpty"},
+        "provenance_ref": {"$ref": "#/$defs/NonEmpty"},
+        "proposal_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ActionAdmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "proposal_digest", "decision", "effective_effects", "capability_refs", "authorization", "budget_digest", "budget_revision", "world_basis_digest", "policy_snapshot_digest", "admission_digest"],
+      "properties": {
+        "action_id": {"$ref": "#/$defs/NonEmpty"},
+        "proposal_digest": {"$ref": "#/$defs/Sha256"},
+        "decision": {"$ref": "#/$defs/AdmissionDecision"},
+        "effective_effects": {"$ref": "#/$defs/EffectSet"},
+        "capability_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/CapabilityRef"}},
+        "authorization": {"$ref": "#/$defs/AuthorizationReference"},
+        "budget_digest": {"$ref": "#/$defs/Sha256"},
+        "budget_revision": {"type": "integer", "minimum": 1},
+        "world_basis_digest": {"$ref": "#/$defs/Sha256"},
+        "policy_snapshot_digest": {"$ref": "#/$defs/Sha256"},
+        "admission_digest": {"$ref": "#/$defs/Sha256"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"decision": {"enum": ["allow", "allow_with_verify"]}}, "required": ["decision"]},
+          "then": {"properties": {"capability_refs": {"minItems": 1}}}
+        }
+      ]
+    },
+    "CommandIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command_intent_id", "action_ref", "operation", "target_ref", "parameter_ref", "effective_effects", "admission_ref", "idempotency_ref", "verification_policy_ref", "command_digest"],
+      "properties": {
+        "command_intent_id": {"$ref": "#/$defs/NonEmpty"},
+        "action_ref": {"$ref": "#/$defs/NonEmpty"},
+        "operation": {"$ref": "#/$defs/NonEmpty"},
+        "target_ref": {"$ref": "#/$defs/NonEmpty"},
+        "parameter_ref": {"$ref": "#/$defs/NonEmpty"},
+        "effective_effects": {"$ref": "#/$defs/EffectSet"},
+        "admission_ref": {"$ref": "#/$defs/NonEmpty"},
+        "idempotency_ref": {"$ref": "#/$defs/NonEmpty"},
+        "verification_policy_ref": {"$ref": "#/$defs/NonEmpty"},
+        "command_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ActionAttemptState": {"enum": ["created", "dispatching", "dispatched", "receipt_captured", "failed"]},
+    "ActionAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempt_id", "action_ref", "command_ref", "provider_ref", "state", "started_at", "finished_at", "provider_operation_id", "attempt_digest"],
+      "properties": {
+        "attempt_id": {"type": "string", "format": "uuid"},
+        "action_ref": {"$ref": "#/$defs/NonEmpty"},
+        "command_ref": {"$ref": "#/$defs/NonEmpty"},
+        "provider_ref": {"$ref": "#/$defs/NonEmpty"},
+        "state": {"$ref": "#/$defs/ActionAttemptState"},
+        "started_at": {"type": "string", "format": "date-time"},
+        "finished_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "provider_operation_id": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "attempt_digest": {"$ref": "#/$defs/Sha256"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"enum": ["receipt_captured", "failed"]}}, "required": ["state"]},
+          "then": {"properties": {"finished_at": {"type": "string", "format": "date-time"}}}
+        },
+        {
+          "if": {"properties": {"state": {"enum": ["created", "dispatching", "dispatched"]}}, "required": ["state"]},
+          "then": {"properties": {"finished_at": {"type": "null"}}}
+        }
+      ]
+    },
+    "ReceiptStatus": {"enum": ["accepted", "applying", "confirmed", "partial", "failed", "rolled_back", "compensated", "expired"]},
+    "ActuationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_id", "action_ref", "command_ref", "attempt_id", "provider", "provider_operation_id", "status", "reported_result_ref", "observed_cost_ref", "duration_ms", "evidence_refs", "receipt_digest"],
+      "properties": {
+        "receipt_id": {"$ref": "#/$defs/NonEmpty"},
+        "action_ref": {"$ref": "#/$defs/NonEmpty"},
+        "command_ref": {"$ref": "#/$defs/NonEmpty"},
+        "attempt_id": {"type": "string", "format": "uuid"},
+        "provider": {"$ref": "#/$defs/NonEmpty"},
+        "provider_operation_id": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "status": {"$ref": "#/$defs/ReceiptStatus"},
+        "reported_result_ref": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "observed_cost_ref": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "duration_ms": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+        "evidence_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "receipt_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "VerificationVerdict": {"enum": ["passed", "failed", "partial", "diverged", "unknown", "stale"]},
+    "ActionVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verification_id", "action_ref", "verification_kind", "basis_refs", "verdict", "evidence_refs", "verifier_ref", "verification_digest"],
+      "properties": {
+        "verification_id": {"$ref": "#/$defs/NonEmpty"},
+        "action_ref": {"$ref": "#/$defs/NonEmpty"},
+        "verification_kind": {"$ref": "#/$defs/NonEmpty"},
+        "basis_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "verdict": {"$ref": "#/$defs/VerificationVerdict"},
+        "evidence_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "verifier_ref": {"$ref": "#/$defs/NonEmpty"},
+        "verification_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ReconciliationClassification": {"enum": ["not_executed", "executed_as_expected", "executed_differently", "partially_executed", "state_unknown", "compensation_required"]},
+    "ReconciliationRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reconciliation_id", "agent_run_id", "action_id", "classification", "evidence_refs", "resolved_by", "authority_ref", "resolved_at", "resolution_digest"],
+      "properties": {
+        "reconciliation_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "action_id": {"$ref": "#/$defs/NonEmpty"},
+        "classification": {"$ref": "#/$defs/ReconciliationClassification"},
+        "evidence_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "resolved_by": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "authority_ref": {"anyOf": [{"$ref": "#/$defs/AuthorizationReference"}, {"type": "null"}]},
+        "resolved_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "resolution_digest": {"$ref": "#/$defs/Sha256"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"classification": {"const": "state_unknown"}}, "required": ["classification"]},
+          "then": {"properties": {"resolved_by": {"type": "null"}, "authority_ref": {"type": "null"}, "resolved_at": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"classification": {"not": {"const": "state_unknown"}}}, "required": ["classification"]},
+          "then": {"properties": {"resolved_by": {"$ref": "#/$defs/NonEmpty"}, "authority_ref": {"$ref": "#/$defs/AuthorizationReference"}, "resolved_at": {"type": "string", "format": "date-time"}}}
+        }
+      ]
+    }
+  }
+}
