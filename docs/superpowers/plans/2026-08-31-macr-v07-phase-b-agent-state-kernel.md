@@ -77,6 +77,15 @@ existing transaction; an earlier or equal expiry is rejected with no lease,
 token, epoch, revision, projection, or event drift. This challenge remains
 retained even after its control turns green.
 
+The first fresh installed-wheel replay exposed a structural dependency that
+source-tree tests did not: importing `macr_runtime.agent` executed the eager root
+package exports, which imported provider runtime and required Pillow before the
+Agent package could load. Phase B must not hide provider dependencies behind root
+package initialization. The minimal repair is a backward-compatible lazy root
+export map, guarded by both a `python -S` Agent import control and a normal legacy
+root-export equivalence control. Installing Pillow into the fresh target would
+mask the dependency and is not an accepted repair.
+
 ## Target and authority
 
 Authorized target:
@@ -689,7 +698,8 @@ tests/gates/v07_phase_b_contract_manifest.json
 tests/gates/v07_phase_b_architecture_manifest.json
 tests/test_v07_phase_b_manifest.py
 scripts/agent-kernel-replay-smoke.py
-pyproject.toml
+src/macr_runtime/__init__.py
+src/macr_runtime/agent/__init__.py
 ```
 
 ### RED
@@ -704,6 +714,9 @@ Manifest tests require:
 - no source path outside the declared support set is needed by the smoke subject;
 - all public database/event/result shapes are recursively content-free;
 - the package contains every Agent kernel module;
+- importing `macr_runtime.agent` under `python -S` does not import provider or
+  runtime modules, while legacy root exports still resolve normally and retain
+  object identity;
 - a local wheel installed with `--no-deps` into a new D-drive target can run the
   smoke from a D-drive working directory outside the repository.
 
@@ -737,7 +750,7 @@ directory, and Agent database all under the current D-drive test directory.
 Commit:
 
 ```powershell
-git add tests/gates/v07_phase_b_contract_manifest.json tests/gates/v07_phase_b_architecture_manifest.json tests/test_v07_phase_b_manifest.py scripts/agent-kernel-replay-smoke.py pyproject.toml
+git add tests/gates/v07_phase_b_contract_manifest.json tests/gates/v07_phase_b_architecture_manifest.json tests/test_v07_phase_b_manifest.py scripts/agent-kernel-replay-smoke.py src/macr_runtime/__init__.py src/macr_runtime/agent/__init__.py
 git commit -m "test(agent): prove Phase B structural closure"
 ```
 
