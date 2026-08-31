@@ -120,6 +120,8 @@ Responsibilities:
   - require_non_negative_number(name: str, value: object) -> int | float
   - require_json_value(name: str, value: object) -> object
   - require_json_object(name: str, value: object) -> dict[str, object]
+  - freeze_json_value(name: str, value: object) -> object
+  - public_json_value(value: object) -> object
   - require_closed_mapping(name: str, value: object, required: frozenset[str], optional: frozenset[str]) -> dict[str, object]
   - require_string_tuple(name: str, values: object, maximum: int = 128, unique: bool = True) -> tuple[str, ...]
   - canonical_record_digest(namespace: str, payload: object) -> str
@@ -147,6 +149,14 @@ class V07ContractSupportTests(unittest.TestCase):
     def test_integer_validators_reject_boolean(self):
         with self.assertRaises(ValueError):
             require_positive_int("revision", True)
+
+    def test_frozen_json_cannot_drift_after_identity_is_created(self):
+        source = {"nested": {"values": [1, 2]}}
+        frozen = freeze_json_value("payload", source)
+        before = canonical_record_digest("macr.v07.frozen.v1", frozen)
+        source["nested"]["values"].append(3)
+        self.assertEqual(public_json_value(frozen), {"nested": {"values": [1, 2]}})
+        self.assertEqual(canonical_record_digest("macr.v07.frozen.v1", frozen), before)
 ~~~
 
 - [ ] **Step 2: Run the support tests and confirm RED**

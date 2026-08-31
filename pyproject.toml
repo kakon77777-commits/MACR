@@ -20,4 +20,13 @@ macr = "macr_runtime.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-macr_runtime = ["direct_ui/*.html", "direct_ui/*.js", "direct_ui/*.css"]
+macr_runtime = [
+  "direct_ui/*.html",
+  "direct_ui/*.js",
+  "direct_ui/*.css",
+  "agent/schemas/*.json",
+  "semantic/schemas/*.json",
+  "observation/schemas/*.json",
+  "action/schemas/*.json",
+  "temporal/schemas/*.json",
+]
