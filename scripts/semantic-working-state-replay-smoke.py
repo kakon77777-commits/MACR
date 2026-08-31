@@ -295,6 +295,27 @@ def run(database_path: str) -> dict[str, object]:
         reopened_agent_store, reopened_semantic
     ).project(context_request)
     rebuilt_bytes = rebuilt_projection.canonical_bytes()
+    reopened_commits = SemanticCommitService(
+        reopened_agent_store, reopened_semantic, now=clock
+    )
+    reopened_attach_receipt = reopened_commits.attach_graph(
+        agent_run_id=RUN_ID,
+        graph_id=GRAPH_ID,
+        graph_revision=1,
+        graph_digest=initial.graph_digest,
+        expected_agent_revision=4,
+        expected_agent_epoch=1,
+        permit=permit,
+        authorization_reference=header.authority.reference,
+        operation_id="40000000-0000-4000-8000-000000000001",
+        agent_event_id="10000000-0000-4000-8000-000000000005",
+    )
+    reopened_commit_receipt = reopened_commits.commit_patch(
+        commit_request,
+        permit=permit,
+        semantic_event_id="60000000-0000-4000-8000-000000000001",
+        agent_event_id="10000000-0000-4000-8000-000000000006",
+    )
 
     if head != rebuilt_head:
         raise RuntimeError("semantic graph head reconstruction differs")
@@ -302,7 +323,15 @@ def run(database_path: str) -> dict[str, object]:
         raise RuntimeError("Agent semantic binding reconstruction differs")
     if projection_bytes != rebuilt_bytes:
         raise RuntimeError("semantic context reconstruction differs")
-    if attach_receipt.graph_revision != 1 or commit_receipt.graph_revision != 2:
+    if (
+        reopened_attach_receipt != attach_receipt
+        or reopened_commit_receipt != commit_receipt
+    ):
+        raise RuntimeError("semantic receipt readback differs after reopen")
+    if (
+        reopened_attach_receipt.graph_revision != 1
+        or reopened_commit_receipt.graph_revision != 2
+    ):
         raise RuntimeError("semantic receipts do not bind the expected revisions")
 
     connection = reopened_semantic.database.connect()
@@ -325,8 +354,8 @@ def run(database_path: str) -> dict[str, object]:
             "head": rebuilt_head.to_public_dict(),
             "projection_digest": rebuilt_projection.projection_digest,
             "event_ids": event_ids,
-            "attach_receipt_digest": attach_receipt.receipt_digest,
-            "commit_receipt_digest": commit_receipt.receipt_digest,
+            "attach_receipt": reopened_attach_receipt.to_public_dict(),
+            "commit_receipt": reopened_commit_receipt.to_public_dict(),
         },
     )
     return {
@@ -344,8 +373,8 @@ def run(database_path: str) -> dict[str, object]:
         "agent_event_count": len(events),
         "semantic_binding_event_count": semantic_binding_event_count,
         "agent_event_ids": event_ids,
-        "attach_receipt_digest": attach_receipt.receipt_digest,
-        "commit_receipt_digest": commit_receipt.receipt_digest,
+        "attach_receipt_digest": reopened_attach_receipt.receipt_digest,
+        "commit_receipt_digest": reopened_commit_receipt.receipt_digest,
         "projection_digest": rebuilt_projection.projection_digest,
         "replay_digest": replay_digest,
         "reconstruction_equivalent": True,
