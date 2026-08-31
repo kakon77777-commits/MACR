@@ -196,6 +196,7 @@ _SEMANTIC_SCHEMA_STATEMENTS = (
         patch_id TEXT NOT NULL,
         patch_digest TEXT NOT NULL,
         proposal_json TEXT NOT NULL,
+        compiled_digest TEXT,
         state TEXT NOT NULL CHECK(state IN (
             'proposed', 'validation_failed', 'committed'
         )),

@@ -14,6 +14,8 @@ from .errors import (
     SemanticGraphNotFoundError,
 )
 from .graph import SemanticGraphHead, SemanticGraphRevision
+from .contracts import SemanticNode, SemanticRelation
+from .patch import SemanticPatchProposalRequest
 from .registry import SemanticRegistry
 
 
@@ -312,3 +314,171 @@ class SemanticStore:
         finally:
             connection.close()
         return tuple(self.get_graph_head(row["graph_id"]) for row in rows)
+
+    def get_active_nodes(
+        self,
+        graph_id: str,
+        *,
+        graph_revision: int | None = None,
+    ) -> tuple[SemanticNode, ...]:
+        head = self.get_graph_head(graph_id)
+        revision = (
+            head.graph_revision
+            if graph_revision is None
+            else require_positive_int("graph_revision", graph_revision)
+        )
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT n.record_json
+                FROM semantic_graph_revision_nodes AS m
+                JOIN semantic_nodes AS n
+                  ON n.graph_id = m.graph_id
+                 AND n.record_digest = m.record_digest
+                WHERE m.graph_id = ? AND m.graph_revision = ?
+                ORDER BY m.record_digest
+                """,
+                (head.graph_id, revision),
+            ).fetchall()
+        finally:
+            connection.close()
+        try:
+            return tuple(
+                SemanticNode.from_dict(json.loads(row["record_json"]))
+                for row in rows
+            )
+        except Exception as exc:
+            raise SemanticGraphDigestMismatchError(
+                "semantic node membership is invalid"
+            ) from exc
+
+    def get_active_relations(
+        self,
+        graph_id: str,
+        *,
+        graph_revision: int | None = None,
+    ) -> tuple[SemanticRelation, ...]:
+        head = self.get_graph_head(graph_id)
+        revision = (
+            head.graph_revision
+            if graph_revision is None
+            else require_positive_int("graph_revision", graph_revision)
+        )
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                """
+                SELECT r.relation_json
+                FROM semantic_graph_revision_relations AS m
+                JOIN semantic_relations AS r
+                  ON r.graph_id = m.graph_id
+                 AND r.relation_digest = m.relation_digest
+                WHERE m.graph_id = ? AND m.graph_revision = ?
+                ORDER BY m.relation_digest
+                """,
+                (head.graph_id, revision),
+            ).fetchall()
+        finally:
+            connection.close()
+        try:
+            return tuple(
+                SemanticRelation.from_dict(json.loads(row["relation_json"]))
+                for row in rows
+            )
+        except Exception as exc:
+            raise SemanticGraphDigestMismatchError(
+                "semantic relation membership is invalid"
+            ) from exc
+
+    def save_proposal(self, record: "SemanticProposalRecord") -> "SemanticProposalRecord":
+        from .service import SemanticProposalRecord
+
+        if not isinstance(record, SemanticProposalRecord):
+            raise ValueError("record must be a SemanticProposalRecord")
+        proposal = record.proposal
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT * FROM semantic_patches WHERE proposal_id = ?",
+                (proposal.proposal_id,),
+            ).fetchone()
+            if existing is not None:
+                observed = self._proposal_from_row(existing)
+                if observed == record:
+                    connection.commit()
+                    return observed
+                raise SemanticPatchConflictError(
+                    "semantic proposal ID conflicts with existing record"
+                )
+            connection.execute(
+                """
+                INSERT INTO semantic_patches(
+                    proposal_id, proposal_digest, graph_id, agent_run_id,
+                    base_graph_revision, base_graph_digest, registry_version,
+                    registry_digest, patch_id, patch_digest, proposal_json,
+                    compiled_digest, state, failure_code, created_at, terminal_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal.proposal_id,
+                    proposal.proposal_digest,
+                    proposal.graph_id,
+                    proposal.agent_run_id,
+                    proposal.base_graph_revision,
+                    proposal.base_graph_digest,
+                    proposal.registry_version,
+                    proposal.registry_digest,
+                    proposal.patch.patch_id,
+                    proposal.patch.patch_digest,
+                    _json_text(proposal.to_public_dict()),
+                    record.compiled_digest,
+                    record.state,
+                    record.failure_code,
+                    record.created_at,
+                    record.terminal_at,
+                ),
+            )
+            connection.commit()
+            return record
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def get_proposal(self, proposal_id: str) -> "SemanticProposalRecord":
+        selected = require_uuid4("proposal_id", proposal_id)
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM semantic_patches WHERE proposal_id = ?",
+                (selected,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise SemanticGraphNotFoundError("semantic proposal was not found")
+        return self._proposal_from_row(row)
+
+    @staticmethod
+    def _proposal_from_row(row) -> "SemanticProposalRecord":
+        from .service import SemanticProposalRecord
+
+        try:
+            proposal = SemanticPatchProposalRequest.from_dict(
+                json.loads(row["proposal_json"])
+            )
+            return SemanticProposalRecord(
+                proposal=proposal,
+                state=row["state"],
+                compiled_digest=row["compiled_digest"],
+                failure_code=row["failure_code"],
+                created_at=row["created_at"],
+                terminal_at=row["terminal_at"],
+            )
+        except Exception as exc:
+            raise SemanticPatchConflictError(
+                "stored semantic proposal is invalid"
+            ) from exc
