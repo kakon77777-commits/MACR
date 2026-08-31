@@ -716,6 +716,12 @@ class AgentStore:
                 (permit.agent_run_id,),
             ).fetchone()
             self._require_permit_row(row, permit, observed_at=observed_at)
+            if datetime.fromisoformat(renewed.expires_at) <= datetime.fromisoformat(
+                row["expires_at"]
+            ):
+                raise AgentOwnershipConflictError(
+                    "Agent ownership renewal must extend the current lease"
+                )
             projection = connection.execute(
                 "SELECT state_revision, epoch FROM agent_runs WHERE agent_run_id = ?",
                 (permit.agent_run_id,),

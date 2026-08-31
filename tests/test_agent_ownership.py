@@ -141,6 +141,31 @@ class AgentOwnershipTests(unittest.TestCase):
             with self.assertRaisesRegex(AgentLeaseExpiredError, "expired"):
                 service.renew_agent_run(renewed, ttl_seconds=20)
 
+    def test_renew_cannot_shorten_lease_and_has_no_state_or_event_drift(self) -> None:
+        start = datetime(2026, 8, 31, 1, 0, tzinfo=timezone.utc)
+        clock = Clock(start)
+        with d_drive_tempdir() as temp:
+            service = admitted_service(temp, clock)
+            permit = service.acquire_agent_run(
+                RUN_ID,
+                "owner:one",
+                expected_revision=2,
+                expected_epoch=0,
+                ttl_seconds=300,
+            )
+            before_projection = service.get_agent_run(RUN_ID)
+            before_events = service.list_agent_events(RUN_ID)
+
+            with self.assertRaisesRegex(
+                AgentOwnershipConflictError,
+                "extend",
+            ):
+                service.renew_agent_run(permit, ttl_seconds=10)
+
+            self.assertEqual(service.get_agent_ownership(RUN_ID), permit)
+            self.assertEqual(service.get_agent_run(RUN_ID), before_projection)
+            self.assertEqual(service.list_agent_events(RUN_ID), before_events)
+
     def test_release_requires_exact_permit_and_reacquire_creates_new_epoch(self) -> None:
         start = datetime(2026, 8, 31, 1, 0, tzinfo=timezone.utc)
         clock = Clock(start)
