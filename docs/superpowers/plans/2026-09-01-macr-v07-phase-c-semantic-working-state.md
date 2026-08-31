@@ -94,6 +94,14 @@ JSON alone did not detect missing or altered membership rows. Revision readback
 now cross-checks scalar columns, node/relation membership, and referenced record
 identity before returning an immutable revision.
 
+The Task 7 Twin then reopened structural closure because head rebuild still read
+revision JSON directly and could recreate a head from membership evidence that
+normal revision readback rejected. The repair extracts one connection-bound exact
+revision validator used by both read and rebuild. Node and relation missing/tamper
+attacks now delete the head, require rebuild refusal, and prove zero attempted-
+rebuild drift beside the deliberately corrupted evidence; the intact rebuild
+control remains green.
+
 ## Authorized scope
 
 Allowed:
