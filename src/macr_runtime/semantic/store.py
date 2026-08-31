@@ -200,7 +200,7 @@ class SemanticStore:
                 raise SemanticGraphNotFoundError("semantic graph was not found")
             revision_row = connection.execute(
                 """
-                SELECT revision_json FROM semantic_graph_revisions
+                SELECT graph_revision FROM semantic_graph_revisions
                 WHERE graph_id = ?
                 ORDER BY graph_revision DESC
                 LIMIT 1
@@ -211,8 +211,10 @@ class SemanticStore:
                 raise SemanticGraphNotFoundError(
                     "semantic graph has no immutable revision"
                 )
-            revision = SemanticGraphRevision.from_dict(
-                json.loads(revision_row["revision_json"])
+            revision = self._revision_on_connection(
+                connection,
+                selected,
+                revision_row["graph_revision"],
             )
             head = SemanticGraphHead(
                 graph_id=graph["graph_id"],
@@ -266,13 +268,28 @@ class SemanticStore:
         revision = require_positive_int("graph_revision", graph_revision)
         connection = self.database.connect()
         try:
-            row = connection.execute(
-                """
-                SELECT * FROM semantic_graph_revisions
-                WHERE graph_id = ? AND graph_revision = ?
-                """,
-                (selected, revision),
-            ).fetchone()
+            return self._revision_on_connection(connection, selected, revision)
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _revision_on_connection(
+        connection,
+        graph_id: str,
+        graph_revision: int,
+    ) -> SemanticGraphRevision:
+        row = connection.execute(
+            """
+            SELECT * FROM semantic_graph_revisions
+            WHERE graph_id = ? AND graph_revision = ?
+            """,
+            (graph_id, graph_revision),
+        ).fetchone()
+        if row is None:
+            raise SemanticGraphNotFoundError(
+                "semantic graph revision was not found"
+            )
+        try:
             node_rows = connection.execute(
                 """
                 SELECT m.node_id, m.record_digest, n.record_json
@@ -283,7 +300,7 @@ class SemanticStore:
                 WHERE m.graph_id = ? AND m.graph_revision = ?
                 ORDER BY m.record_digest
                 """,
-                (selected, revision),
+                (graph_id, graph_revision),
             ).fetchall()
             relation_rows = connection.execute(
                 """
@@ -295,15 +312,8 @@ class SemanticStore:
                 WHERE m.graph_id = ? AND m.graph_revision = ?
                 ORDER BY m.relation_digest
                 """,
-                (selected, revision),
+                (graph_id, graph_revision),
             ).fetchall()
-        finally:
-            connection.close()
-        if row is None:
-            raise SemanticGraphNotFoundError(
-                "semantic graph revision was not found"
-            )
-        try:
             observed = SemanticGraphRevision.from_dict(
                 json.loads(row["revision_json"])
             )
