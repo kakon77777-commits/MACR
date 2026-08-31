@@ -5,8 +5,9 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .._v07_contracts import (
     require_non_negative_int,
@@ -14,20 +15,30 @@ from .._v07_contracts import (
     require_uuid4,
 )
 from ..canonical import canonical_json_bytes
-from .contracts import AgentRunHeader, AgentRunState
+from .contracts import (
+    AgentRunHeader,
+    AgentRunState,
+    is_terminal_agent_run_state,
+)
 from .database import AgentDatabase
 from .errors import (
+    AgentLeaseExpiredError,
     AgentProjectionConflictError,
     AgentOwnershipConflictError,
     AgentRunAlreadyExistsError,
     AgentRunNotFoundError,
     IllegalAgentRunTransitionError,
+    StaleAgentFencingTokenError,
     StaleAgentRunEpochError,
     StaleAgentRunRevisionError,
 )
 from .events import AgentEventType, AgentStateEvent, apply_agent_event
 from .lifecycle import require_phase_b_transition
 from .state import AgentRunProjection
+
+
+if TYPE_CHECKING:
+    from .ownership import AgentOwnershipPermit
 
 
 FaultInjector = Callable[[str], None]
@@ -421,6 +432,443 @@ class AgentStore:
             if cursor.rowcount != 1:
                 raise AgentProjectionConflictError(
                     "Agent projection compare-and-swap failed"
+                )
+            self._fault("after_projection_update")
+            self._fault("before_commit")
+            connection.commit()
+            return next_projection
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _acquire_ownership(
+        self,
+        agent_run_id: str,
+        *,
+        owner_id: str,
+        expected_revision: int,
+        expected_epoch: int,
+        observed_at: str,
+        expires_at: str,
+        lease_id: str,
+        event_id: str | None,
+    ) -> "AgentOwnershipPermit":
+        from .ownership import AgentOwnershipPermit
+
+        run_id = require_uuid4("agent_run_id", agent_run_id)
+        selected_revision = require_positive_int(
+            "expected_revision",
+            expected_revision,
+        )
+        selected_epoch = require_non_negative_int("expected_epoch", expected_epoch)
+        candidate = AgentOwnershipPermit(
+            agent_run_id=run_id,
+            owner_id=owner_id,
+            lease_id=lease_id,
+            fencing_token=1,
+            epoch=max(1, selected_epoch + 1),
+            revision=selected_revision + 1,
+            acquired_at=observed_at,
+            expires_at=expires_at,
+        )
+        observed = datetime.fromisoformat(candidate.acquired_at)
+
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM agent_runs WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise AgentRunNotFoundError("AgentRun was not found")
+            current = self._projection_from_row(row)
+            self._require_matching_tail(connection, current)
+            if current.state_revision != selected_revision:
+                raise StaleAgentRunRevisionError("AgentRun revision is stale")
+            if current.epoch != selected_epoch:
+                raise StaleAgentRunEpochError("AgentRun epoch is stale")
+            if current.state not in {
+                AgentRunState.ADMITTED,
+                AgentRunState.ACTIVE,
+                AgentRunState.BLOCKED,
+            }:
+                raise IllegalAgentRunTransitionError(
+                    "AgentRun state cannot acquire ownership"
+                )
+
+            ownership = connection.execute(
+                "SELECT * FROM agent_ownership WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if ownership is not None:
+                if datetime.fromisoformat(ownership["expires_at"]) <= observed:
+                    connection.execute(
+                        "DELETE FROM agent_ownership WHERE agent_run_id = ?",
+                        (run_id,),
+                    )
+                    ownership = None
+                elif ownership["owner_id"] == candidate.owner_id:
+                    connection.commit()
+                    return self._permit_from_row(
+                        ownership,
+                        revision=current.state_revision,
+                    )
+                else:
+                    raise AgentOwnershipConflictError(
+                        "AgentRun is held by another owner"
+                    )
+
+            connection.execute(
+                "UPDATE agent_fencing_counter SET value = value + 1 "
+                "WHERE singleton = 1"
+            )
+            fencing_token = connection.execute(
+                "SELECT value FROM agent_fencing_counter WHERE singleton = 1"
+            ).fetchone()[0]
+            next_projection = AgentRunProjection(
+                initial_header=current.initial_header,
+                state=current.state,
+                state_revision=current.state_revision + 1,
+                epoch=current.epoch + 1,
+                updated_at=candidate.acquired_at,
+            )
+            permit = AgentOwnershipPermit(
+                agent_run_id=run_id,
+                owner_id=candidate.owner_id,
+                lease_id=candidate.lease_id,
+                fencing_token=fencing_token,
+                epoch=next_projection.epoch,
+                revision=next_projection.state_revision,
+                acquired_at=candidate.acquired_at,
+                expires_at=candidate.expires_at,
+            )
+            event = AgentStateEvent(
+                event_id=str(uuid.uuid4()) if event_id is None else event_id,
+                agent_run_id=run_id,
+                epoch=next_projection.epoch,
+                before_revision=current.state_revision,
+                after_revision=next_projection.state_revision,
+                event_type=AgentEventType.OWNER_ACQUIRED,
+                payload={
+                    "owner_id": permit.owner_id,
+                    "lease_id": permit.lease_id,
+                    "fencing_token": permit.fencing_token,
+                    "expires_at": permit.expires_at,
+                },
+                state_digest_after=next_projection.state_digest,
+                created_at=permit.acquired_at,
+            )
+            if apply_agent_event(current, event) != next_projection:
+                raise AgentProjectionConflictError(
+                    "ownership event does not produce Agent projection"
+                )
+
+            self._fault("before_event_insert")
+            self._insert_event(connection, event)
+            self._fault("after_event_insert")
+            cursor = connection.execute(
+                """
+                UPDATE agent_runs
+                SET state_revision = ?, epoch = ?, state_digest = ?, updated_at = ?
+                WHERE agent_run_id = ? AND state_revision = ? AND epoch = ?
+                """,
+                (
+                    next_projection.state_revision,
+                    next_projection.epoch,
+                    next_projection.state_digest,
+                    next_projection.updated_at,
+                    run_id,
+                    selected_revision,
+                    selected_epoch,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise AgentProjectionConflictError(
+                    "Agent ownership compare-and-swap failed"
+                )
+            connection.execute(
+                """
+                INSERT INTO agent_ownership(
+                    agent_run_id, owner_id, lease_id, fencing_token, epoch,
+                    acquired_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    permit.agent_run_id,
+                    permit.owner_id,
+                    permit.lease_id,
+                    permit.fencing_token,
+                    permit.epoch,
+                    permit.acquired_at,
+                    permit.expires_at,
+                ),
+            )
+            self._fault("after_projection_update")
+            self._fault("before_commit")
+            connection.commit()
+            return permit
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _permit_from_row(
+        row: sqlite3.Row,
+        *,
+        revision: int,
+    ) -> "AgentOwnershipPermit":
+        from .ownership import AgentOwnershipPermit
+
+        return AgentOwnershipPermit(
+            agent_run_id=row["agent_run_id"],
+            owner_id=row["owner_id"],
+            lease_id=row["lease_id"],
+            fencing_token=row["fencing_token"],
+            epoch=row["epoch"],
+            revision=revision,
+            acquired_at=row["acquired_at"],
+            expires_at=row["expires_at"],
+        )
+
+    @staticmethod
+    def _require_permit_row(
+        row: sqlite3.Row | None,
+        permit: "AgentOwnershipPermit",
+        *,
+        observed_at: str | None,
+    ) -> None:
+        if row is None:
+            raise AgentOwnershipConflictError("AgentRun has no current owner")
+        if row["fencing_token"] != permit.fencing_token:
+            raise StaleAgentFencingTokenError("Agent ownership fencing token is stale")
+        if row["epoch"] != permit.epoch:
+            raise StaleAgentRunEpochError("Agent ownership epoch is stale")
+        if (
+            row["owner_id"] != permit.owner_id
+            or row["lease_id"] != permit.lease_id
+            or row["agent_run_id"] != permit.agent_run_id
+        ):
+            raise AgentOwnershipConflictError("Agent ownership permit does not match")
+        if observed_at is not None and datetime.fromisoformat(
+            row["expires_at"]
+        ) <= datetime.fromisoformat(observed_at):
+            raise AgentLeaseExpiredError("Agent ownership lease has expired")
+
+    def _read_ownership(
+        self,
+        agent_run_id: str,
+    ) -> "AgentOwnershipPermit | None":
+        run_id = require_uuid4("agent_run_id", agent_run_id)
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                "SELECT * FROM agent_ownership WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            projection_row = connection.execute(
+                "SELECT state_revision FROM agent_runs WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if projection_row is None:
+                raise AgentProjectionConflictError(
+                    "Agent ownership has no projection"
+                )
+            return self._permit_from_row(
+                row,
+                revision=projection_row["state_revision"],
+            )
+        finally:
+            connection.close()
+
+    def _renew_ownership(
+        self,
+        permit: "AgentOwnershipPermit",
+        *,
+        observed_at: str,
+        expires_at: str,
+    ) -> "AgentOwnershipPermit":
+        from .ownership import AgentOwnershipPermit
+
+        if not isinstance(permit, AgentOwnershipPermit):
+            raise ValueError("permit must be an AgentOwnershipPermit")
+        renewed = AgentOwnershipPermit(
+            agent_run_id=permit.agent_run_id,
+            owner_id=permit.owner_id,
+            lease_id=permit.lease_id,
+            fencing_token=permit.fencing_token,
+            epoch=permit.epoch,
+            revision=permit.revision,
+            acquired_at=permit.acquired_at,
+            expires_at=expires_at,
+        )
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM agent_ownership WHERE agent_run_id = ?",
+                (permit.agent_run_id,),
+            ).fetchone()
+            self._require_permit_row(row, permit, observed_at=observed_at)
+            projection = connection.execute(
+                "SELECT state_revision, epoch FROM agent_runs WHERE agent_run_id = ?",
+                (permit.agent_run_id,),
+            ).fetchone()
+            if projection is None:
+                raise AgentProjectionConflictError(
+                    "Agent ownership has no projection"
+                )
+            if projection["epoch"] != permit.epoch:
+                raise StaleAgentRunEpochError("AgentRun epoch is stale")
+            connection.execute(
+                "UPDATE agent_ownership SET expires_at = ? WHERE agent_run_id = ?",
+                (renewed.expires_at, permit.agent_run_id),
+            )
+            connection.commit()
+            return AgentOwnershipPermit(
+                agent_run_id=renewed.agent_run_id,
+                owner_id=renewed.owner_id,
+                lease_id=renewed.lease_id,
+                fencing_token=renewed.fencing_token,
+                epoch=renewed.epoch,
+                revision=projection["state_revision"],
+                acquired_at=renewed.acquired_at,
+                expires_at=renewed.expires_at,
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _release_ownership(self, permit: "AgentOwnershipPermit") -> bool:
+        from .ownership import AgentOwnershipPermit
+
+        if not isinstance(permit, AgentOwnershipPermit):
+            raise ValueError("permit must be an AgentOwnershipPermit")
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM agent_ownership WHERE agent_run_id = ?",
+                (permit.agent_run_id,),
+            ).fetchone()
+            self._require_permit_row(row, permit, observed_at=None)
+            connection.execute(
+                "DELETE FROM agent_ownership WHERE agent_run_id = ?",
+                (permit.agent_run_id,),
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _transition_owned(
+        self,
+        permit: "AgentOwnershipPermit",
+        *,
+        expected_states: frozenset[AgentRunState],
+        target_state: AgentRunState,
+        expected_revision: int,
+        expected_epoch: int,
+        event_type: AgentEventType,
+        payload: dict[str, object],
+        created_at: str,
+        event_id: str | None = None,
+    ) -> AgentRunProjection:
+        from .ownership import AgentOwnershipPermit
+
+        if not isinstance(permit, AgentOwnershipPermit):
+            raise ValueError("permit must be an AgentOwnershipPermit")
+        selected_revision = require_positive_int(
+            "expected_revision",
+            expected_revision,
+        )
+        selected_epoch = require_non_negative_int("expected_epoch", expected_epoch)
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM agent_runs WHERE agent_run_id = ?",
+                (permit.agent_run_id,),
+            ).fetchone()
+            if row is None:
+                raise AgentRunNotFoundError("AgentRun was not found")
+            current = self._projection_from_row(row)
+            self._require_matching_tail(connection, current)
+            if current.state_revision != selected_revision:
+                raise StaleAgentRunRevisionError("AgentRun revision is stale")
+            if current.epoch != selected_epoch:
+                raise StaleAgentRunEpochError("AgentRun epoch is stale")
+            ownership = connection.execute(
+                "SELECT * FROM agent_ownership WHERE agent_run_id = ?",
+                (permit.agent_run_id,),
+            ).fetchone()
+            self._require_permit_row(ownership, permit, observed_at=created_at)
+            if current.state not in expected_states:
+                raise IllegalAgentRunTransitionError(
+                    "AgentRun state does not match the named owned operation"
+                )
+            require_phase_b_transition(current.state, target_state)
+            next_projection = AgentRunProjection(
+                initial_header=current.initial_header,
+                state=target_state,
+                state_revision=current.state_revision + 1,
+                epoch=current.epoch,
+                updated_at=created_at,
+            )
+            event = AgentStateEvent(
+                event_id=str(uuid.uuid4()) if event_id is None else event_id,
+                agent_run_id=permit.agent_run_id,
+                epoch=next_projection.epoch,
+                before_revision=current.state_revision,
+                after_revision=next_projection.state_revision,
+                event_type=event_type,
+                payload=payload,
+                state_digest_after=next_projection.state_digest,
+                created_at=created_at,
+            )
+            if apply_agent_event(current, event) != next_projection:
+                raise AgentProjectionConflictError(
+                    "owned Agent event does not produce projection"
+                )
+
+            self._fault("before_event_insert")
+            self._insert_event(connection, event)
+            self._fault("after_event_insert")
+            cursor = connection.execute(
+                """
+                UPDATE agent_runs
+                SET state = ?, state_revision = ?, state_digest = ?, updated_at = ?
+                WHERE agent_run_id = ? AND state_revision = ? AND epoch = ?
+                """,
+                (
+                    next_projection.state.value,
+                    next_projection.state_revision,
+                    next_projection.state_digest,
+                    next_projection.updated_at,
+                    permit.agent_run_id,
+                    selected_revision,
+                    selected_epoch,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise AgentProjectionConflictError(
+                    "owned Agent compare-and-swap failed"
+                )
+            if is_terminal_agent_run_state(next_projection.state):
+                connection.execute(
+                    "DELETE FROM agent_ownership WHERE agent_run_id = ?",
+                    (permit.agent_run_id,),
                 )
             self._fault("after_projection_update")
             self._fault("before_commit")

@@ -163,6 +163,133 @@ class AgentServiceTests(unittest.TestCase):
         ):
             self.assertFalse(hasattr(service, forbidden), forbidden)
 
+    def test_owned_lifecycle_reaches_terminal_and_releases_ownership(self) -> None:
+        start = datetime(2026, 8, 31, 1, 0, tzinfo=timezone.utc)
+        clock = Clock(start)
+        with d_drive_tempdir() as temp:
+            service = AgentStateService(
+                AgentStore(temp / "agent.sqlite3"),
+                now=clock,
+            )
+            service.create_agent_run(make_header())
+            service.admit_agent_run(
+                RUN_ID,
+                expected_revision=1,
+                expected_epoch=0,
+                reason_code="INITIAL_ADMISSION",
+                reason_digest="a" * 64,
+            )
+            permit = service.acquire_agent_run(
+                RUN_ID,
+                "owner:one",
+                expected_revision=2,
+                expected_epoch=0,
+                ttl_seconds=300,
+            )
+            active = service.activate_agent_run(
+                permit,
+                expected_revision=3,
+                expected_epoch=1,
+                reason_code="OWNER_READY",
+                reason_digest="b" * 64,
+            )
+            blocked = service.block_agent_run(
+                permit,
+                expected_revision=4,
+                expected_epoch=1,
+                reason_code="DEPENDENCY_UNAVAILABLE",
+                reason_digest="c" * 64,
+            )
+            active_again = service.activate_agent_run(
+                permit,
+                expected_revision=5,
+                expected_epoch=1,
+                reason_code="DEPENDENCY_READY",
+                reason_digest="d" * 64,
+            )
+            completed = service.complete_agent_run(
+                permit,
+                expected_revision=6,
+                expected_epoch=1,
+                evidence_ref="evidence:phase-b-test",
+                evidence_digest="e" * 64,
+            )
+            events = service.list_agent_events(RUN_ID)
+            ownership = service.get_agent_ownership(RUN_ID)
+
+        self.assertEqual(active.state, AgentRunState.ACTIVE)
+        self.assertEqual(blocked.state, AgentRunState.BLOCKED)
+        self.assertEqual(active_again.state, AgentRunState.ACTIVE)
+        self.assertEqual(completed.state, AgentRunState.COMPLETED)
+        self.assertEqual(completed.state_revision, 7)
+        self.assertIsNone(ownership)
+        self.assertEqual(
+            tuple(record.event.event_type for record in events),
+            (
+                AgentEventType.RUN_CREATED,
+                AgentEventType.RUN_ADMITTED,
+                AgentEventType.OWNER_ACQUIRED,
+                AgentEventType.RUN_ACTIVATED,
+                AgentEventType.BLOCKED,
+                AgentEventType.RUN_ACTIVATED,
+                AgentEventType.COMPLETED,
+            ),
+        )
+
+    def test_owned_fail_and_cancel_paths_are_terminal_and_release_ownership(self) -> None:
+        start = datetime(2026, 8, 31, 1, 0, tzinfo=timezone.utc)
+        for terminal in (AgentRunState.FAILED, AgentRunState.CANCELLED):
+            with self.subTest(terminal=terminal.value), d_drive_tempdir() as temp:
+                service = AgentStateService(
+                    AgentStore(temp / "agent.sqlite3"),
+                    now=Clock(start),
+                )
+                service.create_agent_run(make_header())
+                service.admit_agent_run(
+                    RUN_ID,
+                    expected_revision=1,
+                    expected_epoch=0,
+                    reason_code="INITIAL_ADMISSION",
+                    reason_digest="a" * 64,
+                )
+                permit = service.acquire_agent_run(
+                    RUN_ID,
+                    "owner:one",
+                    expected_revision=2,
+                    expected_epoch=0,
+                    ttl_seconds=300,
+                )
+                revision = 3
+                if terminal is AgentRunState.CANCELLED:
+                    service.activate_agent_run(
+                        permit,
+                        expected_revision=revision,
+                        expected_epoch=1,
+                        reason_code="OWNER_READY",
+                        reason_digest="b" * 64,
+                    )
+                    revision += 1
+                    result = service.cancel_agent_run(
+                        RUN_ID,
+                        permit=permit,
+                        expected_revision=revision,
+                        expected_epoch=1,
+                        reason_code="OPERATOR_CANCEL",
+                        reason_digest="c" * 64,
+                    )
+                else:
+                    result = service.fail_agent_run(
+                        permit,
+                        expected_revision=revision,
+                        expected_epoch=1,
+                        reason_code="HOST_FAILURE",
+                        reason_digest="d" * 64,
+                    )
+                ownership = service.get_agent_ownership(RUN_ID)
+
+            self.assertEqual(result.state, terminal)
+            self.assertIsNone(ownership)
+
     def test_missing_run_failure_is_typed_and_sanitized(self) -> None:
         with d_drive_tempdir() as temp:
             service = AgentStateService(AgentStore(temp / "agent.sqlite3"))
