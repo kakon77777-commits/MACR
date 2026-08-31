@@ -70,6 +70,13 @@ controls with no mutation delta in any Phase B table, and one exact
 `before_revision=0 -> after_revision=1` positive witness. The challenge remains in
 the record as resolved design input; it is not rewritten as initial agreement.
 
+The Task 6 event-boundary review challenged renewal monotonicity: calculating a
+new expiry as `now + ttl` can shorten an existing valid lease. The affected scope
+is reopened narrowly. Renewal must require `new_expiry > stored_expiry` inside the
+existing transaction; an earlier or equal expiry is rejected with no lease,
+token, epoch, revision, projection, or event drift. This challenge remains
+retained even after its control turns green.
+
 ## Target and authority
 
 Authorized target:
@@ -518,6 +525,8 @@ Tests define:
 - exact same-owner unexpired acquire is idempotent;
 - competing owner refuses without event, epoch, revision, or token drift;
 - renew preserves token/epoch/revision and expired renew refuses;
+- renew with an earlier or equal proposed expiry refuses and leaves lease, token,
+  epoch, revision, projection, and event history unchanged;
 - release requires exact owner, lease ID, epoch, and token;
 - reacquire after release or expiry creates a new epoch and larger token;
 - stale permit, stale epoch, stale token, and wrong lease reject before write;
@@ -562,6 +571,7 @@ delta. A Twin `CHALLENGE` reopens only the affected slice.
 **Create/modify:**
 
 ```text
+src/macr_runtime/agent/events.py
 src/macr_runtime/agent/store.py
 tests/test_agent_rebuild.py
 ```
@@ -606,7 +616,7 @@ git diff --check
 Commit:
 
 ```powershell
-git add src/macr_runtime/agent/store.py tests/test_agent_rebuild.py
+git add src/macr_runtime/agent/events.py src/macr_runtime/agent/store.py tests/test_agent_rebuild.py
 git commit -m "feat(agent): rebuild Agent projections from events"
 ```
 
