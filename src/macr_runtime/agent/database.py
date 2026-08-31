@@ -224,10 +224,8 @@ _SCHEMA_STATEMENTS = (
         PRIMARY KEY(agent_run_id, binding_digest)
     )""",
     """CREATE TABLE IF NOT EXISTS agent_children (
-        parent_agent_run_id TEXT NOT NULL REFERENCES agent_runs(agent_run_id)
-            ON DELETE CASCADE,
-        child_agent_run_id TEXT NOT NULL REFERENCES agent_runs(agent_run_id)
-            ON DELETE CASCADE,
+        parent_agent_run_id TEXT NOT NULL,
+        child_agent_run_id TEXT NOT NULL,
         delegation_ref TEXT NOT NULL,
         PRIMARY KEY(parent_agent_run_id, child_agent_run_id)
     )""",

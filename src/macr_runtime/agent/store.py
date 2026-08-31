@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from .._v07_contracts import (
     normalize_timestamp,
+    public_json_value,
     require_non_negative_int,
     require_positive_int,
     require_uuid4,
@@ -299,9 +300,17 @@ class AgentStore:
                 ),
             )
         if header.parent_agent_run_id is not None:
+            parent = connection.execute(
+                "SELECT 1 FROM agent_runs WHERE agent_run_id = ?",
+                (header.parent_agent_run_id,),
+            ).fetchone()
+            if parent is None:
+                raise AgentProjectionConflictError(
+                    "Agent child lineage parent projection is missing"
+                )
             connection.execute(
                 """
-                INSERT INTO agent_children(
+                INSERT OR IGNORE INTO agent_children(
                     parent_agent_run_id, child_agent_run_id, delegation_ref
                 ) VALUES (?, ?, ?)
                 """,
@@ -311,6 +320,17 @@ class AgentStore:
                     header.delegation_ref,
                 ),
             )
+            lineage = connection.execute(
+                """
+                SELECT delegation_ref FROM agent_children
+                WHERE parent_agent_run_id = ? AND child_agent_run_id = ?
+                """,
+                (header.parent_agent_run_id, run_id),
+            ).fetchone()
+            if lineage is None or lineage["delegation_ref"] != header.delegation_ref:
+                raise AgentProjectionConflictError(
+                    "Agent child lineage conflicts with creation header"
+                )
 
     def get_agent_run(self, agent_run_id: str) -> AgentRunProjection:
         run_id = require_uuid4("agent_run_id", agent_run_id)
@@ -1147,14 +1167,17 @@ class AgentStore:
         child_rows = connection.execute(
             """
             SELECT parent_agent_run_id, child_agent_run_id, delegation_ref
-            FROM agent_children WHERE child_agent_run_id = ?
-            ORDER BY parent_agent_run_id
+            FROM agent_children
+            WHERE child_agent_run_id = ? OR parent_agent_run_id = ?
+            ORDER BY parent_agent_run_id, child_agent_run_id
             """,
-            (run_id,),
+            (run_id, run_id),
         ).fetchall()
-        expected_children = []
+        expected_children: set[tuple[object, ...]] = set(
+            AgentStore._expected_outgoing_children(connection, run_id)
+        )
         if header.parent_agent_run_id is not None:
-            expected_children.append(
+            expected_children.add(
                 (
                     header.parent_agent_run_id,
                     run_id,
@@ -1166,8 +1189,59 @@ class AgentStore:
             and [tuple(row) for row in world_rows] == expected_worlds
             and [tuple(row) for row in memory_rows] == expected_memories
             and [tuple(row) for row in plan_rows] == expected_plans
-            and [tuple(row) for row in child_rows] == expected_children
+            and {tuple(row) for row in child_rows} == expected_children
         )
+
+    @staticmethod
+    def _expected_outgoing_children(
+        connection: sqlite3.Connection,
+        parent_agent_run_id: str,
+    ) -> tuple[tuple[str, str, str], ...]:
+        rows = connection.execute(
+            """
+            SELECT * FROM agent_events
+            WHERE event_type = 'agent.run_created'
+            ORDER BY sequence
+            """
+        ).fetchall()
+        expected: list[tuple[str, str, str]] = []
+        for row in rows:
+            event = AgentStore._event_from_row(row)
+            header = AgentRunHeader.from_dict(
+                public_json_value(event.payload["initial_header"])
+            )
+            if header.parent_agent_run_id == parent_agent_run_id:
+                expected.append(
+                    (
+                        parent_agent_run_id,
+                        header.identity.agent_run_id,
+                        header.delegation_ref,
+                    )
+                )
+        return tuple(expected)
+
+    @staticmethod
+    def _rebuild_outgoing_children(
+        connection: sqlite3.Connection,
+        parent_agent_run_id: str,
+    ) -> None:
+        expected = AgentStore._expected_outgoing_children(
+            connection,
+            parent_agent_run_id,
+        )
+        connection.execute(
+            "DELETE FROM agent_children WHERE parent_agent_run_id = ?",
+            (parent_agent_run_id,),
+        )
+        for parent_id, child_id, delegation_ref in expected:
+            connection.execute(
+                """
+                INSERT INTO agent_children(
+                    parent_agent_run_id, child_agent_run_id, delegation_ref
+                ) VALUES (?, ?, ?)
+                """,
+                (parent_id, child_id, delegation_ref),
+            )
 
     def inspect_projection(self, agent_run_id: str) -> ProjectionInspection:
         run_id = require_uuid4("agent_run_id", agent_run_id)
@@ -1264,6 +1338,7 @@ class AgentStore:
             )
             self._insert_projection(connection, replayed)
             self._insert_bindings(connection, replayed.initial_header)
+            self._rebuild_outgoing_children(connection, run_id)
             self._fault("after_projection_update")
             self._fault("before_commit")
             connection.commit()

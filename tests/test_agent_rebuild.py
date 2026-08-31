@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import unittest
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from macr_runtime.canonical import canonical_json_bytes
 from tests.support import d_drive_tempdir
 from tests.test_agent_service import Clock
 from tests.test_agent_state import RUN_ID, make_header
+from tests.test_agent_store import RUN_TWO, with_run_id
 
 
 def completed_service(temp) -> tuple[AgentStateService, object]:
@@ -62,6 +64,16 @@ def completed_service(temp) -> tuple[AgentStateService, object]:
 
 
 class AgentRebuildTests(unittest.TestCase):
+    @staticmethod
+    def _parent_and_child_headers():
+        parent = make_header()
+        child = dataclasses.replace(
+            with_run_id(make_header(), RUN_TWO),
+            parent_agent_run_id=RUN_ID,
+            delegation_ref="delegation:phase-b-child",
+        )
+        return parent, child
+
     def test_inspection_is_read_only_and_reports_exact_match(self) -> None:
         with d_drive_tempdir() as temp:
             service, completed = completed_service(temp)
@@ -278,6 +290,81 @@ class AgentRebuildTests(unittest.TestCase):
             inspection = service.store.inspect_projection(RUN_ID)
 
         self.assertEqual(inspection.status, ProjectionInspectionStatus.CONFLICT)
+
+    def test_parent_rebuild_preserves_or_reconstructs_outgoing_child_lineage(self) -> None:
+        parent, child = self._parent_and_child_headers()
+        with d_drive_tempdir() as temp:
+            store = AgentStore(temp / "agent.sqlite3")
+            store.create_agent_run(parent)
+            store.create_agent_run(child)
+            connection = store.database.connect()
+            try:
+                connection.execute(
+                    "DELETE FROM agent_runs WHERE agent_run_id = ?",
+                    (RUN_ID,),
+                )
+            finally:
+                connection.close()
+
+            rebuilt = store.rebuild_projection(RUN_ID)
+            inspection = store.inspect_projection(RUN_ID)
+            connection = store.database.connect()
+            try:
+                lineage = connection.execute(
+                    "SELECT parent_agent_run_id, child_agent_run_id, delegation_ref "
+                    "FROM agent_children WHERE parent_agent_run_id = ?",
+                    (RUN_ID,),
+                ).fetchall()
+            finally:
+                connection.close()
+
+        self.assertEqual(rebuilt.agent_run_id, RUN_ID)
+        self.assertEqual(inspection.status, ProjectionInspectionStatus.EXACT_MATCH)
+        self.assertEqual(
+            [tuple(row) for row in lineage],
+            [(RUN_ID, RUN_TWO, "delegation:phase-b-child")],
+        )
+
+    def test_missing_or_tampered_outgoing_lineage_is_discriminated(self) -> None:
+        for mutation in ("missing", "tampered"):
+            with self.subTest(mutation=mutation), d_drive_tempdir() as temp:
+                parent, child = self._parent_and_child_headers()
+                store = AgentStore(temp / "agent.sqlite3")
+                store.create_agent_run(parent)
+                store.create_agent_run(child)
+                connection = store.database.connect()
+                try:
+                    if mutation == "missing":
+                        connection.execute(
+                            "DELETE FROM agent_children "
+                            "WHERE parent_agent_run_id = ? AND child_agent_run_id = ?",
+                            (RUN_ID, RUN_TWO),
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE agent_children SET delegation_ref = ? "
+                            "WHERE parent_agent_run_id = ? AND child_agent_run_id = ?",
+                            ("delegation:tampered", RUN_ID, RUN_TWO),
+                        )
+                finally:
+                    connection.close()
+
+                conflict = store.inspect_projection(RUN_ID)
+                store.rebuild_projection(RUN_ID)
+                exact = store.inspect_projection(RUN_ID)
+                connection = store.database.connect()
+                try:
+                    delegation = connection.execute(
+                        "SELECT delegation_ref FROM agent_children "
+                        "WHERE parent_agent_run_id = ? AND child_agent_run_id = ?",
+                        (RUN_ID, RUN_TWO),
+                    ).fetchone()[0]
+                finally:
+                    connection.close()
+
+            self.assertEqual(conflict.status, ProjectionInspectionStatus.CONFLICT)
+            self.assertEqual(exact.status, ProjectionInspectionStatus.EXACT_MATCH)
+            self.assertEqual(delegation, "delegation:phase-b-child")
 
 
 if __name__ == "__main__":
