@@ -144,7 +144,7 @@ targets and sharing relationships.
 
 ### 5.2 Graph revision
 
-A new graph begins at revision 0 with an empty active membership set and a
+A new graph begins at revision 1 with an empty active membership set and a
 registry-bound empty digest. Each successful patch produces exactly one new
 revision:
 
@@ -197,7 +197,7 @@ schema_version
 proposal_id                 UUIDv4 create-once identity
 graph_id                    UUIDv4 intended graph
 agent_run_id                UUIDv4 proposing run
-base_graph_revision         non-negative integer
+base_graph_revision         positive integer
 base_graph_digest           SHA-256
 registry_version            bounded version
 registry_digest             SHA-256
@@ -457,6 +457,11 @@ updates the semantic binding in one transaction. Exact repetition is idempotent;
 a different existing binding or stale/noncurrent graph head fails. This explicit
 operation enables multiple AgentRuns to pin the same revision without silent
 follow behavior.
+
+Revision 1 is deliberate: the existing Phase A `SemanticStateBinding` requires a
+positive revision, so an empty graph head must already be bindable without a
+special zero-revision exception. The first committed patch advances revision 1
+to revision 2.
 
 There is no conversion that copies model-supplied fields into commit authority.
 Host/runtime constructs the commit request from the stored proposal plus current
