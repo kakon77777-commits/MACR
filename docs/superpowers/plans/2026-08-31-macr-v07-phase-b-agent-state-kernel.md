@@ -86,6 +86,14 @@ export map, guarded by both a `python -S` Agent import control and a normal lega
 root-export equivalence control. Installing Pillow into the fresh target would
 mask the dependency and is not an accepted repair.
 
+The structural-closure review then challenged parent lineage replay: cascading
+`agent_children` on parent projection deletion loses outgoing child relationships,
+and a parent header cannot enumerate its children. `agent_children` is therefore
+treated as an immutable lineage index derived from child creation events, not as
+projection-owned state. Parent inspection compares outgoing rows with retained
+child events; parent rebuild preserves or reconstructs them. Missing and tampered
+lineage receive falsifying witnesses.
+
 ## Target and authority
 
 Authorized target:
@@ -599,6 +607,10 @@ Tests require:
 - rebuild replays in memory before mutation and never edits events;
 - deleting only the disposable projection and binding indexes rebuilds
   byte-equivalent canonical public state and state digest;
+- parent projection deletion/rebuild preserves or reconstructs every outgoing
+  child relation from the child's retained creation event;
+- missing or tampered outgoing child lineage is detected and explicit rebuild
+  restores only the event-derived relation;
 - a bad chain leaves the existing projection untouched.
 
 Run:

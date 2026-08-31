@@ -219,8 +219,12 @@ They preserve complete initial-header reconstruction without storing goal text,
 memory text, world payloads, plans, prompts, answers, or local file paths.
 
 `agent_children` stores parent/child occurrence references and a bounded
-delegation reference. Phase B can persist a supplied parent relationship but does
-not create or join child runs.
+delegation reference. It is an immutable lineage index derived from each child's
+creation event, not a row owned by either rebuildable projection. Deleting or
+rebuilding a parent projection must not cascade-delete outgoing child lineage;
+inspection and explicit rebuild derive the exact expected relation from retained
+child creation events. Phase B can persist a supplied parent relationship but
+does not create or join child runs.
 
 ### 7.3 `agent_events`
 
@@ -546,6 +550,8 @@ negative controls. At minimum it proves:
 - event/projection atomic rollback at injected pre-commit boundaries;
 - event gap, duplicate revision, digest tampering, and illegal replay rejection;
 - projection deletion and byte-equivalent event rebuild;
+- rebuilding a parent preserves or reconstructs outgoing child lineage from the
+  child's creation event; missing or tampered lineage is detected;
 - active lease blocks rebuild;
 - public reads and database scans contain no prompt, answer, key, memory body,
   local path, or raw goal/world content;
