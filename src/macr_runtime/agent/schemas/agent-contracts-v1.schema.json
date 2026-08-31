@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:evemisslab:macr:agent-contracts:v1",
+  "title": "MACR v0.7 Agent Contracts v1",
+  "oneOf": [
+    {"$ref": "#/$defs/AgentRunHeader"},
+    {"$ref": "#/$defs/AgentRunIdentity"},
+    {"$ref": "#/$defs/GoalBinding"},
+    {"$ref": "#/$defs/AuthorityBinding"},
+    {"$ref": "#/$defs/BudgetBinding"},
+    {"$ref": "#/$defs/SemanticStateBinding"},
+    {"$ref": "#/$defs/PlanBinding"},
+    {"$ref": "#/$defs/WorldBindingRef"},
+    {"$ref": "#/$defs/MemoryBindingRef"}
+  ],
+  "$defs": {
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "NonEmpty": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "VersionedBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref", "digest", "revision", "binding_digest"],
+      "properties": {
+        "ref": {"$ref": "#/$defs/NonEmpty"},
+        "digest": {"$ref": "#/$defs/Sha256"},
+        "revision": {"type": "integer", "minimum": 1},
+        "binding_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "GoalBinding": {"$ref": "#/$defs/VersionedBinding"},
+    "BudgetBinding": {"$ref": "#/$defs/VersionedBinding"},
+    "SemanticStateBinding": {"$ref": "#/$defs/VersionedBinding"},
+    "PlanBinding": {"$ref": "#/$defs/VersionedBinding"},
+    "WorldBindingRef": {"$ref": "#/$defs/VersionedBinding"},
+    "DispatchOrigin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "identifier_kind", "native_id"],
+      "properties": {
+        "host": {"$ref": "#/$defs/NonEmpty"},
+        "identifier_kind": {"$ref": "#/$defs/NonEmpty"},
+        "native_id": {"$ref": "#/$defs/NonEmpty"}
+      }
+    },
+    "AuthorityBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_kind",
+        "source_id",
+        "digest",
+        "revision",
+        "epoch",
+        "scope",
+        "binding_digest"
+      ],
+      "properties": {
+        "source_kind": {"$ref": "#/$defs/NonEmpty"},
+        "source_id": {"$ref": "#/$defs/NonEmpty"},
+        "digest": {"$ref": "#/$defs/Sha256"},
+        "revision": {"type": "integer", "minimum": 1},
+        "epoch": {"type": "integer", "minimum": 0},
+        "scope": {"$ref": "#/$defs/NonEmpty"},
+        "binding_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "MemoryBindingRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memory_system_id",
+        "profile_id",
+        "subject_ref",
+        "head_ref",
+        "head_digest",
+        "access_policy_ref",
+        "projection_policy_ref",
+        "binding_digest"
+      ],
+      "properties": {
+        "memory_system_id": {"$ref": "#/$defs/NonEmpty"},
+        "profile_id": {"$ref": "#/$defs/NonEmpty"},
+        "subject_ref": {"$ref": "#/$defs/NonEmpty"},
+        "head_ref": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "head_digest": {"anyOf": [{"$ref": "#/$defs/Sha256"}, {"type": "null"}]},
+        "access_policy_ref": {"$ref": "#/$defs/NonEmpty"},
+        "projection_policy_ref": {"$ref": "#/$defs/NonEmpty"},
+        "binding_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "AgentRunIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_run_id", "subject_digest"],
+      "properties": {
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "subject_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "AgentRunHeader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "identity",
+        "agent_ref",
+        "origin",
+        "state",
+        "state_revision",
+        "epoch",
+        "goal",
+        "authority",
+        "budget",
+        "semantic_state",
+        "active_plan",
+        "world_bindings",
+        "memory_bindings",
+        "parent_agent_run_id",
+        "delegation_ref",
+        "created_at"
+      ],
+      "properties": {
+        "schema_version": {"const": "macr-agent-run/v1"},
+        "identity": {"$ref": "#/$defs/AgentRunIdentity"},
+        "agent_ref": {"$ref": "#/$defs/NonEmpty"},
+        "origin": {"$ref": "#/$defs/DispatchOrigin"},
+        "state": {
+          "enum": [
+            "created",
+            "admitted",
+            "active",
+            "waiting",
+            "suspended",
+            "waking",
+            "blocked",
+            "reconciliation_required",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "state_revision": {"type": "integer", "minimum": 1},
+        "epoch": {"type": "integer", "minimum": 0},
+        "goal": {"$ref": "#/$defs/GoalBinding"},
+        "authority": {"$ref": "#/$defs/AuthorityBinding"},
+        "budget": {"$ref": "#/$defs/BudgetBinding"},
+        "semantic_state": {
+          "anyOf": [{"$ref": "#/$defs/SemanticStateBinding"}, {"type": "null"}]
+        },
+        "active_plan": {
+          "anyOf": [{"$ref": "#/$defs/PlanBinding"}, {"type": "null"}]
+        },
+        "world_bindings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/WorldBindingRef"},
+          "uniqueItems": true,
+          "maxItems": 128
+        },
+        "memory_bindings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/MemoryBindingRef"},
+          "uniqueItems": true,
+          "maxItems": 128
+        },
+        "parent_agent_run_id": {
+          "anyOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]
+        },
+        "delegation_ref": {
+          "anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]
+        },
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}
