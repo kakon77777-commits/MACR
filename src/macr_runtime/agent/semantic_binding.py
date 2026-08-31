@@ -15,7 +15,7 @@ from .state import AgentRunProjection
 from .store import AgentStore
 
 
-class AgentSemanticBindingPort:
+class _AgentSemanticBindingPort:
     """Connection-bound Agent half of a Phase C semantic transaction."""
 
     def __init__(self, store: AgentStore) -> None:
@@ -23,7 +23,7 @@ class AgentSemanticBindingPort:
             raise ValueError("store must be an AgentStore")
         self.store = store
 
-    def build_event(
+    def _build_event(
         self,
         *,
         current: AgentRunProjection,
@@ -83,7 +83,7 @@ class AgentSemanticBindingPort:
             )
         return event, next_projection
 
-    def commit_on_connection(
+    def _commit_on_connection(
         self,
         connection: sqlite3.Connection,
         *,

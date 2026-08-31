@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import unittest
 
+import macr_runtime.agent as agent_package
 from macr_runtime.agent.contracts import SemanticStateBinding
 from macr_runtime.agent.errors import AgentEventIntegrityError
 from macr_runtime.agent.events import AgentEventType, replay_semantic_binding
-from macr_runtime.agent.semantic_binding import AgentSemanticBindingPort
+from macr_runtime.agent.semantic_binding import _AgentSemanticBindingPort
 from macr_runtime.agent.store import AgentStore, ProjectionInspectionStatus
 from macr_runtime.semantic.graph import SemanticGraphHead
 from macr_runtime.semantic.registry import SemanticRegistry
@@ -61,8 +62,8 @@ class AgentSemanticBindingTests(unittest.TestCase):
         with d_drive_tempdir() as temp:
             store = AgentStore(temp / "agent.sqlite3")
             current = store.create_agent_run(make_header())
-            port = AgentSemanticBindingPort(store)
-            event, next_projection = port.build_event(
+            port = _AgentSemanticBindingPort(store)
+            event, next_projection = port._build_event(
                 current=current,
                 previous_binding=None,
                 new_binding=binding,
@@ -78,7 +79,7 @@ class AgentSemanticBindingTests(unittest.TestCase):
             connection = store.database.connect()
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                committed = port.commit_on_connection(
+                committed = port._commit_on_connection(
                     connection,
                     current=current,
                     event=event,
@@ -108,9 +109,9 @@ class AgentSemanticBindingTests(unittest.TestCase):
         with d_drive_tempdir() as temp:
             store = AgentStore(temp / "agent.sqlite3")
             current = store.create_agent_run(make_header())
-            port = AgentSemanticBindingPort(store)
+            port = _AgentSemanticBindingPort(store)
 
-            attach, _ = port.build_event(
+            attach, _ = port._build_event(
                 current=current,
                 previous_binding=None,
                 new_binding=binding,
@@ -124,7 +125,7 @@ class AgentSemanticBindingTests(unittest.TestCase):
                 event_id=EVENT_ID,
             )
             with self.assertRaisesRegex(ValueError, "proposal.*patch"):
-                port.build_event(
+                port._build_event(
                     current=current,
                     previous_binding=None,
                     new_binding=binding,
@@ -146,7 +147,7 @@ class AgentSemanticBindingTests(unittest.TestCase):
         with d_drive_tempdir() as temp:
             store = AgentStore(temp / "agent.sqlite3")
             current = store.create_agent_run(make_header())
-            event, _ = AgentSemanticBindingPort(store).build_event(
+            event, _ = _AgentSemanticBindingPort(store)._build_event(
                 current=current,
                 previous_binding=None,
                 new_binding=binding,
@@ -174,8 +175,8 @@ class AgentSemanticBindingTests(unittest.TestCase):
         with d_drive_tempdir() as temp:
             store = AgentStore(temp / "agent.sqlite3")
             current = store.create_agent_run(make_header())
-            port = AgentSemanticBindingPort(store)
-            event, _ = port.build_event(
+            port = _AgentSemanticBindingPort(store)
+            event, _ = port._build_event(
                 current=current,
                 previous_binding=None,
                 new_binding=binding,
@@ -191,7 +192,7 @@ class AgentSemanticBindingTests(unittest.TestCase):
             connection = store.database.connect()
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                port.commit_on_connection(
+                port._commit_on_connection(
                     connection,
                     current=current,
                     event=event,
@@ -224,6 +225,10 @@ class AgentSemanticBindingTests(unittest.TestCase):
         self.assertEqual(conflict.status, ProjectionInspectionStatus.CONFLICT)
         self.assertEqual(exact.status, ProjectionInspectionStatus.EXACT_MATCH)
         self.assertEqual(restored, binding)
+
+    def test_connection_bound_binding_mutator_is_not_public_api(self) -> None:
+        self.assertNotIn("AgentSemanticBindingPort", agent_package.__all__)
+        self.assertFalse(hasattr(agent_package, "AgentSemanticBindingPort"))
 
 
 if __name__ == "__main__":
