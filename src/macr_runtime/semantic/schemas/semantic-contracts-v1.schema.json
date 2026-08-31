@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:evemisslab:macr:semantic-contracts:v1",
+  "title": "MACR v0.7 Semantic Contracts v1",
+  "oneOf": [
+    {"$ref": "#/$defs/SemanticProfileRef"},
+    {"$ref": "#/$defs/ExternalSemanticBinding"},
+    {"$ref": "#/$defs/SemanticProvenance"},
+    {"$ref": "#/$defs/SemanticNode"},
+    {"$ref": "#/$defs/SemanticRelation"},
+    {"$ref": "#/$defs/SemanticEvent"},
+    {"$ref": "#/$defs/SemanticPatch"}
+  ],
+  "$defs": {
+    "Sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "NonEmpty": {"type": "string", "minLength": 1, "maxLength": 512},
+    "SemanticNodeType": {
+      "enum": [
+        "goal", "trigger", "observation", "claim", "hypothesis", "plan",
+        "task", "action_proposal", "constraint", "decision", "receipt",
+        "verification", "checkpoint", "failure", "wake_condition",
+        "ambiguity", "obligation"
+      ]
+    },
+    "ClaimStatus": {
+      "enum": [
+        "proposed", "active", "supported", "contested", "verified",
+        "refuted", "stale", "superseded", "unresolved"
+      ]
+    },
+    "ResolutionStatus": {"enum": ["unresolved", "resolved"]},
+    "SemanticLifecycleStatus": {
+      "enum": ["proposed", "active", "stale", "superseded", "completed", "failed"]
+    },
+    "SemanticRelationType": {
+      "enum": [
+        "supports", "contradicts", "depends_on", "derived_from", "observes",
+        "describes", "constrains", "motivates", "targets", "affects",
+        "expects", "produced", "verifies", "refutes", "supersedes",
+        "revises", "blocks", "resolves", "causes", "precedes", "follows",
+        "waits_for"
+      ]
+    },
+    "BindingKind": {
+      "enum": ["reference", "projection", "derived", "transformation"]
+    },
+    "ArtifactRole": {
+      "enum": [
+        "canonical_source",
+        "canonical_derived",
+        "derived_rebuildable",
+        "projection",
+        "cache_index",
+        "legacy_compatibility"
+      ]
+    },
+    "SemanticProfileRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "system_id", "profile_id", "profile_version", "registry_ref",
+        "registry_revision", "registry_digest", "decoder_contract_ref",
+        "binding_digest"
+      ],
+      "properties": {
+        "system_id": {"$ref": "#/$defs/NonEmpty"},
+        "profile_id": {"$ref": "#/$defs/NonEmpty"},
+        "profile_version": {"$ref": "#/$defs/NonEmpty"},
+        "registry_ref": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "registry_revision": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "registry_digest": {"anyOf": [{"$ref": "#/$defs/Sha256"}, {"type": "null"}]},
+        "decoder_contract_ref": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "binding_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ExternalSemanticBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semantic_ref", "profile", "external_object_ref",
+        "external_object_digest", "binding_kind", "artifact_role",
+        "binding_digest"
+      ],
+      "properties": {
+        "semantic_ref": {"$ref": "#/$defs/NonEmpty"},
+        "profile": {"$ref": "#/$defs/SemanticProfileRef"},
+        "external_object_ref": {"$ref": "#/$defs/NonEmpty"},
+        "external_object_digest": {"$ref": "#/$defs/Sha256"},
+        "binding_kind": {"$ref": "#/$defs/BindingKind"},
+        "artifact_role": {"$ref": "#/$defs/ArtifactRole"},
+        "binding_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "SemanticProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "origin_kind", "origin_ref", "source_refs", "agent_run_id",
+        "created_by_ref", "created_at", "provenance_digest"
+      ],
+      "properties": {
+        "origin_kind": {"$ref": "#/$defs/NonEmpty"},
+        "origin_ref": {"$ref": "#/$defs/NonEmpty"},
+        "source_refs": {"type": "array", "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true},
+        "agent_run_id": {"anyOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]},
+        "created_by_ref": {"$ref": "#/$defs/NonEmpty"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "provenance_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "SemanticNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_id", "node_type", "payload", "scope_ref", "status", "effects",
+        "constraints", "policy", "provenance", "temporal", "external_bindings",
+        "content_digest", "record_digest"
+      ],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/NonEmpty"},
+        "node_type": {"$ref": "#/$defs/SemanticNodeType"},
+        "payload": {"type": "object"},
+        "scope_ref": {"$ref": "#/$defs/NonEmpty"},
+        "status": {"type": "string"},
+        "effects": {"type": "array", "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true},
+        "constraints": {"type": "array", "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true},
+        "policy": {"type": "object"},
+        "provenance": {"$ref": "#/$defs/SemanticProvenance"},
+        "temporal": {"type": "object"},
+        "external_bindings": {"type": "array", "items": {"$ref": "#/$defs/ExternalSemanticBinding"}, "uniqueItems": true},
+        "content_digest": {"$ref": "#/$defs/Sha256"},
+        "record_digest": {"$ref": "#/$defs/Sha256"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"node_type": {"enum": ["claim", "hypothesis"]}},
+            "required": ["node_type"]
+          },
+          "then": {"properties": {"status": {"$ref": "#/$defs/ClaimStatus"}}}
+        },
+        {
+          "if": {
+            "properties": {"node_type": {"enum": ["ambiguity", "obligation"]}},
+            "required": ["node_type"]
+          },
+          "then": {"properties": {"status": {"$ref": "#/$defs/ResolutionStatus"}}}
+        },
+        {
+          "if": {
+            "properties": {
+              "node_type": {
+                "not": {"enum": ["claim", "hypothesis", "ambiguity", "obligation"]}
+              }
+            },
+            "required": ["node_type"]
+          },
+          "then": {
+            "properties": {"status": {"$ref": "#/$defs/SemanticLifecycleStatus"}}
+          }
+        }
+      ]
+    },
+    "SemanticRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relation_id", "source_ref", "relation_type", "target_ref", "qualifiers", "provenance", "relation_digest"],
+      "properties": {
+        "relation_id": {"$ref": "#/$defs/NonEmpty"},
+        "source_ref": {"$ref": "#/$defs/NonEmpty"},
+        "relation_type": {"$ref": "#/$defs/SemanticRelationType"},
+        "target_ref": {"$ref": "#/$defs/NonEmpty"},
+        "qualifiers": {"type": "object"},
+        "provenance": {"$ref": "#/$defs/SemanticProvenance"},
+        "relation_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "SemanticEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event_id", "event_type", "subject_refs", "parent_event_refs", "payload", "provenance", "created_at", "event_digest"],
+      "properties": {
+        "event_id": {"$ref": "#/$defs/NonEmpty"},
+        "event_type": {"enum": ["proposal", "status_change", "correction", "resolution", "patch_proposal"]},
+        "subject_refs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true},
+        "parent_event_refs": {"type": "array", "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true},
+        "payload": {"type": "object"},
+        "provenance": {"$ref": "#/$defs/SemanticProvenance"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "event_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "SemanticPatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["patch_id", "base_graph_digest", "add_nodes", "add_relations", "status_updates", "supersession_refs", "producer_ref", "patch_digest"],
+      "properties": {
+        "patch_id": {"$ref": "#/$defs/NonEmpty"},
+        "base_graph_digest": {"$ref": "#/$defs/Sha256"},
+        "add_nodes": {"type": "array", "items": {"$ref": "#/$defs/SemanticNode"}, "uniqueItems": true},
+        "add_relations": {"type": "array", "items": {"$ref": "#/$defs/SemanticRelation"}, "uniqueItems": true},
+        "status_updates": {"type": "array", "items": {"type": "object"}, "uniqueItems": true},
+        "supersession_refs": {"type": "array", "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true},
+        "producer_ref": {"$ref": "#/$defs/NonEmpty"},
+        "patch_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    }
+  }
+}
