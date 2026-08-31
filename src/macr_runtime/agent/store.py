@@ -5,11 +5,13 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .._v07_contracts import (
+    normalize_timestamp,
     require_non_negative_int,
     require_positive_int,
     require_uuid4,
@@ -22,17 +24,24 @@ from .contracts import (
 )
 from .database import AgentDatabase
 from .errors import (
+    AgentEventIntegrityError,
     AgentLeaseExpiredError,
     AgentProjectionConflictError,
     AgentOwnershipConflictError,
     AgentRunAlreadyExistsError,
     AgentRunNotFoundError,
     IllegalAgentRunTransitionError,
+    AgentRebuildBlockedError,
     StaleAgentFencingTokenError,
     StaleAgentRunEpochError,
     StaleAgentRunRevisionError,
 )
-from .events import AgentEventType, AgentStateEvent, apply_agent_event
+from .events import (
+    AgentEventType,
+    AgentStateEvent,
+    apply_agent_event,
+    replay_agent_events,
+)
 from .lifecycle import require_phase_b_transition
 from .state import AgentRunProjection
 
@@ -48,6 +57,22 @@ FaultInjector = Callable[[str], None]
 class AgentEventRecord:
     sequence: int
     event: AgentStateEvent
+
+
+class ProjectionInspectionStatus(str, Enum):
+    EXACT_MATCH = "exact_match"
+    MISSING = "missing"
+    CONFLICT = "conflict"
+
+
+@dataclass(frozen=True)
+class ProjectionInspection:
+    agent_run_id: str
+    status: ProjectionInspectionStatus
+    event_count: int
+    replay_state_digest: str
+    projection_state_digest: str | None
+    reason_code: str | None
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -983,28 +1008,268 @@ class AgentStore:
             connection.close()
         records: list[AgentEventRecord] = []
         for row in rows:
-            try:
-                event = AgentStateEvent.from_dict(
-                    {
-                        "schema_version": "macr-agent-event/v1",
-                        "event_id": row["event_id"],
-                        "agent_run_id": row["agent_run_id"],
-                        "epoch": row["epoch"],
-                        "before_revision": row["before_revision"],
-                        "after_revision": row["after_revision"],
-                        "event_type": row["event_type"],
-                        "payload": _load_json(
-                            "Agent event payload",
-                            row["payload_json"],
-                        ),
-                        "payload_digest": row["payload_digest"],
-                        "state_digest_after": row["state_digest_after"],
-                        "created_at": row["created_at"],
-                    }
+            records.append(
+                AgentEventRecord(
+                    row["sequence"],
+                    self._event_from_row(row),
                 )
-            except AgentProjectionConflictError:
-                raise
-            except Exception as exc:
-                raise AgentProjectionConflictError("Agent event row is invalid") from exc
-            records.append(AgentEventRecord(row["sequence"], event))
+            )
         return tuple(records)
+
+    @staticmethod
+    def _event_from_row(row: sqlite3.Row) -> AgentStateEvent:
+        try:
+            return AgentStateEvent.from_dict(
+                {
+                    "schema_version": "macr-agent-event/v1",
+                    "event_id": row["event_id"],
+                    "agent_run_id": row["agent_run_id"],
+                    "epoch": row["epoch"],
+                    "before_revision": row["before_revision"],
+                    "after_revision": row["after_revision"],
+                    "event_type": row["event_type"],
+                    "payload": _load_json(
+                        "Agent event payload",
+                        row["payload_json"],
+                    ),
+                    "payload_digest": row["payload_digest"],
+                    "state_digest_after": row["state_digest_after"],
+                    "created_at": row["created_at"],
+                }
+            )
+        except Exception as exc:
+            raise AgentEventIntegrityError("Agent event row failed integrity validation") from exc
+
+    def _load_event_chain(
+        self,
+        connection: sqlite3.Connection,
+        agent_run_id: str,
+    ) -> tuple[AgentStateEvent, ...]:
+        rows = connection.execute(
+            """
+            SELECT * FROM agent_events
+            WHERE agent_run_id = ?
+            ORDER BY sequence
+            """,
+            (agent_run_id,),
+        ).fetchall()
+        if not rows:
+            projection = connection.execute(
+                "SELECT 1 FROM agent_runs WHERE agent_run_id = ?",
+                (agent_run_id,),
+            ).fetchone()
+            if projection is None:
+                raise AgentRunNotFoundError("AgentRun was not found")
+            raise AgentEventIntegrityError("Agent projection has no event chain")
+        return tuple(self._event_from_row(row) for row in rows)
+
+    @staticmethod
+    def _binding_indexes_match(
+        connection: sqlite3.Connection,
+        projection: AgentRunProjection,
+    ) -> bool:
+        header = projection.initial_header
+        run_id = projection.agent_run_id
+        goal_rows = connection.execute(
+            """
+            SELECT goal_ref, goal_digest, goal_revision, binding_digest
+            FROM agent_goals WHERE agent_run_id = ?
+            ORDER BY binding_digest
+            """,
+            (run_id,),
+        ).fetchall()
+        expected_goal = [
+            (
+                header.goal.ref,
+                header.goal.digest,
+                header.goal.revision,
+                header.goal.binding_digest,
+            )
+        ]
+        world_rows = connection.execute(
+            """
+            SELECT world_ref, world_digest, world_revision, binding_digest
+            FROM agent_world_bindings WHERE agent_run_id = ?
+            ORDER BY binding_digest
+            """,
+            (run_id,),
+        ).fetchall()
+        expected_worlds = sorted(
+            (
+                item.ref,
+                item.digest,
+                item.revision,
+                item.binding_digest,
+            )
+            for item in header.world_bindings
+        )
+        memory_rows = connection.execute(
+            """
+            SELECT memory_system_id, profile_id, subject_ref, head_ref,
+                   head_digest, access_policy_ref, projection_policy_ref,
+                   binding_digest
+            FROM agent_memory_bindings WHERE agent_run_id = ?
+            ORDER BY binding_digest
+            """,
+            (run_id,),
+        ).fetchall()
+        expected_memories = sorted(
+            (
+                item.memory_system_id,
+                item.profile_id,
+                item.subject_ref,
+                item.head_ref,
+                item.head_digest,
+                item.access_policy_ref,
+                item.projection_policy_ref,
+                item.binding_digest,
+            )
+            for item in header.memory_bindings
+        )
+        plan_rows = connection.execute(
+            """
+            SELECT plan_ref, plan_digest, plan_revision, binding_digest
+            FROM agent_plan_bindings WHERE agent_run_id = ?
+            ORDER BY binding_digest
+            """,
+            (run_id,),
+        ).fetchall()
+        expected_plans = []
+        if header.active_plan is not None:
+            expected_plans.append(
+                (
+                    header.active_plan.ref,
+                    header.active_plan.digest,
+                    header.active_plan.revision,
+                    header.active_plan.binding_digest,
+                )
+            )
+        child_rows = connection.execute(
+            """
+            SELECT parent_agent_run_id, child_agent_run_id, delegation_ref
+            FROM agent_children WHERE child_agent_run_id = ?
+            ORDER BY parent_agent_run_id
+            """,
+            (run_id,),
+        ).fetchall()
+        expected_children = []
+        if header.parent_agent_run_id is not None:
+            expected_children.append(
+                (
+                    header.parent_agent_run_id,
+                    run_id,
+                    header.delegation_ref,
+                )
+            )
+        return (
+            [tuple(row) for row in goal_rows] == expected_goal
+            and [tuple(row) for row in world_rows] == expected_worlds
+            and [tuple(row) for row in memory_rows] == expected_memories
+            and [tuple(row) for row in plan_rows] == expected_plans
+            and [tuple(row) for row in child_rows] == expected_children
+        )
+
+    def inspect_projection(self, agent_run_id: str) -> ProjectionInspection:
+        run_id = require_uuid4("agent_run_id", agent_run_id)
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN")
+            events = self._load_event_chain(connection, run_id)
+            replayed = replay_agent_events(events)
+            row = connection.execute(
+                "SELECT * FROM agent_runs WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                result = ProjectionInspection(
+                    agent_run_id=run_id,
+                    status=ProjectionInspectionStatus.MISSING,
+                    event_count=len(events),
+                    replay_state_digest=replayed.state_digest,
+                    projection_state_digest=None,
+                    reason_code="PROJECTION_MISSING",
+                )
+            else:
+                raw_digest = row["state_digest"]
+                try:
+                    projection = self._projection_from_row(row)
+                except Exception:
+                    result = ProjectionInspection(
+                        agent_run_id=run_id,
+                        status=ProjectionInspectionStatus.CONFLICT,
+                        event_count=len(events),
+                        replay_state_digest=replayed.state_digest,
+                        projection_state_digest=raw_digest,
+                        reason_code="PROJECTION_INVALID",
+                    )
+                else:
+                    indexes_match = self._binding_indexes_match(
+                        connection,
+                        projection,
+                    )
+                    exact = projection == replayed and indexes_match
+                    result = ProjectionInspection(
+                        agent_run_id=run_id,
+                        status=(
+                            ProjectionInspectionStatus.EXACT_MATCH
+                            if exact
+                            else ProjectionInspectionStatus.CONFLICT
+                        ),
+                        event_count=len(events),
+                        replay_state_digest=replayed.state_digest,
+                        projection_state_digest=projection.state_digest,
+                        reason_code=None if exact else "PROJECTION_MISMATCH",
+                    )
+            connection.rollback()
+            return result
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def rebuild_projection(
+        self,
+        agent_run_id: str,
+        *,
+        observed_at: str | None = None,
+    ) -> AgentRunProjection:
+        run_id = require_uuid4("agent_run_id", agent_run_id)
+        now = normalize_timestamp(
+            "observed_at",
+            (
+                datetime.now(timezone.utc).isoformat()
+                if observed_at is None
+                else observed_at
+            ),
+        )
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            events = self._load_event_chain(connection, run_id)
+            replayed = replay_agent_events(events)
+            ownership = connection.execute(
+                "SELECT expires_at FROM agent_ownership WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if ownership is not None and datetime.fromisoformat(
+                ownership["expires_at"]
+            ) > datetime.fromisoformat(now):
+                raise AgentRebuildBlockedError(
+                    "Agent projection rebuild is blocked by an active lease"
+                )
+            connection.execute(
+                "DELETE FROM agent_runs WHERE agent_run_id = ?",
+                (run_id,),
+            )
+            self._insert_projection(connection, replayed)
+            self._insert_bindings(connection, replayed.initial_header)
+            self._fault("after_projection_update")
+            self._fault("before_commit")
+            connection.commit()
+            return replayed
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -402,3 +402,20 @@ def apply_agent_event(
     if projection.state_digest != event.state_digest_after:
         raise AgentEventIntegrityError("Agent event state digest does not match projection")
     return projection
+
+
+def replay_agent_events(events: Iterable[AgentStateEvent]) -> AgentRunProjection:
+    current: AgentRunProjection | None = None
+    event_ids: set[str] = set()
+    observed = False
+    for event in events:
+        if not isinstance(event, AgentStateEvent):
+            raise ValueError("events must contain AgentStateEvent values")
+        observed = True
+        if event.event_id in event_ids:
+            raise AgentEventIntegrityError("Agent event chain contains duplicate event ID")
+        event_ids.add(event.event_id)
+        current = apply_agent_event(current, event)
+    if not observed or current is None:
+        raise AgentEventIntegrityError("Agent event chain is empty")
+    return current
