@@ -116,6 +116,12 @@ overwrote that Python exit code. The run is discarded as a harness error. The
 corrected command uses `tests.test_agent_contract_boundaries`, captures the test
 exit before diff-check, and passes 93 tests.
 
+The installed-wheel Twin review accepted import isolation but reopened receipt
+closure because the first smoke replay digest reused pre-reopen in-memory receipt
+objects. The smoke now performs exact idempotent attach and commit replay after
+reopen/rebuild, compares both complete persisted receipts to the originals, and
+derives replay/summary receipt digests only from those reopened records.
+
 ## Authorized scope
 
 Allowed:
