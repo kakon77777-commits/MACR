@@ -67,6 +67,10 @@ class StorageLayout:
         return Path(self.state_root) / "runtime" / "dispatch.sqlite3"
 
     @property
+    def agent_db_path(self) -> Path:
+        return Path(self.state_root) / "runtime" / "agent.sqlite3"
+
+    @property
     def accounting_db_path(self) -> Path:
         return Path(self.state_root) / "accounting" / "accounting.sqlite3"
 
