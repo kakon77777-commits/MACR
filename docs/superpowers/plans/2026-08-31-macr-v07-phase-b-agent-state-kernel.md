@@ -443,10 +443,11 @@ git commit -m "feat(agent): add atomic Agent store"
 
 ## Task 5 — Named lifecycle service and revision/epoch CAS
 
-**Create:**
+**Create/modify:**
 
 ```text
 src/macr_runtime/agent/service.py
+src/macr_runtime/agent/store.py
 tests/test_agent_service.py
 ```
 
@@ -487,7 +488,7 @@ git diff --check
 Commit:
 
 ```powershell
-git add src/macr_runtime/agent/service.py tests/test_agent_service.py
+git add src/macr_runtime/agent/service.py src/macr_runtime/agent/store.py tests/test_agent_service.py
 git commit -m "feat(agent): add revision-fenced Agent service"
 ```
 
