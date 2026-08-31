@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:evemisslab:macr:temporal-contracts:v1",
+  "title": "MACR v0.7 Temporal Contracts v1",
+  "oneOf": [
+    {"$ref": "#/$defs/AgentCheckpoint"},
+    {"$ref": "#/$defs/SuspendRecord"},
+    {"$ref": "#/$defs/WakeCondition"},
+    {"$ref": "#/$defs/WakeEvent"},
+    {"$ref": "#/$defs/ResumeRecord"},
+    {"$ref": "#/$defs/TemporalLease"},
+    {"$ref": "#/$defs/PendingDependency"}
+  ],
+  "$defs": {
+    "Sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "NonEmpty": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "NullableRef": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+    "NullableDigest": {"anyOf": [{"$ref": "#/$defs/Sha256"}, {"type": "null"}]},
+    "WakeKind": {
+      "enum": [
+        "at_time", "after_duration", "external_event", "domain_logical_time",
+        "world_condition", "human_response", "dependency_completed",
+        "provider_completed", "budget_available", "manual_wake"
+      ]
+    },
+    "DependencyState": {"enum": ["pending", "completed", "failed", "cancelled"]},
+    "AgentCheckpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_id", "agent_run_id", "agent_run_epoch", "state_revision",
+        "goal_ref", "goal_digest", "authority_ref", "authority_digest",
+        "authority_revision", "authority_epoch", "budget_ref", "budget_digest",
+        "budget_revision", "semantic_state_ref", "semantic_state_digest",
+        "semantic_state_revision", "active_plan_ref", "active_plan_digest",
+        "active_plan_revision", "world_basis_refs", "memory_binding_digests",
+        "pending_action_refs", "reconciliation_refs", "verification_state_ref",
+        "wake_condition_ref", "parent_checkpoint_ref", "created_at",
+        "checkpoint_digest"
+      ],
+      "properties": {
+        "checkpoint_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "agent_run_epoch": {"type": "integer", "minimum": 0},
+        "state_revision": {"type": "integer", "minimum": 1},
+        "goal_ref": {"$ref": "#/$defs/NonEmpty"},
+        "goal_digest": {"$ref": "#/$defs/Sha256"},
+        "authority_ref": {"$ref": "#/$defs/NonEmpty"},
+        "authority_digest": {"$ref": "#/$defs/Sha256"},
+        "authority_revision": {"type": "integer", "minimum": 1},
+        "authority_epoch": {"type": "integer", "minimum": 0},
+        "budget_ref": {"$ref": "#/$defs/NonEmpty"},
+        "budget_digest": {"$ref": "#/$defs/Sha256"},
+        "budget_revision": {"type": "integer", "minimum": 1},
+        "semantic_state_ref": {"$ref": "#/$defs/NonEmpty"},
+        "semantic_state_digest": {"$ref": "#/$defs/Sha256"},
+        "semantic_state_revision": {"type": "integer", "minimum": 1},
+        "active_plan_ref": {"$ref": "#/$defs/NullableRef"},
+        "active_plan_digest": {"$ref": "#/$defs/NullableDigest"},
+        "active_plan_revision": {"anyOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "world_basis_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "memory_binding_digests": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/Sha256"}},
+        "pending_action_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "reconciliation_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "verification_state_ref": {"$ref": "#/$defs/NonEmpty"},
+        "wake_condition_ref": {"$ref": "#/$defs/NullableRef"},
+        "parent_checkpoint_ref": {"$ref": "#/$defs/NullableRef"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "checkpoint_digest": {"$ref": "#/$defs/Sha256"}
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {"properties": {"active_plan_ref": {"$ref": "#/$defs/NonEmpty"}, "active_plan_digest": {"$ref": "#/$defs/Sha256"}, "active_plan_revision": {"type": "integer", "minimum": 1}}},
+            {"properties": {"active_plan_ref": {"type": "null"}, "active_plan_digest": {"type": "null"}, "active_plan_revision": {"type": "null"}}}
+          ]
+        }
+      ]
+    },
+    "SuspendRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["suspend_record_id", "agent_run_id", "checkpoint_ref", "checkpoint_digest", "wake_condition_ref", "reason", "suspended_at", "suspend_digest"],
+      "properties": {
+        "suspend_record_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "checkpoint_ref": {"$ref": "#/$defs/NonEmpty"},
+        "checkpoint_digest": {"$ref": "#/$defs/Sha256"},
+        "wake_condition_ref": {"$ref": "#/$defs/NullableRef"},
+        "reason": {"$ref": "#/$defs/NonEmpty"},
+        "suspended_at": {"type": "string", "format": "date-time"},
+        "suspend_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "WakeCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wake_condition_id", "agent_run_id", "kind", "parameters", "not_before", "expires_at", "condition_digest"],
+      "properties": {
+        "wake_condition_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "kind": {"$ref": "#/$defs/WakeKind"},
+        "parameters": {"type": "object"},
+        "not_before": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "expires_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "condition_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "WakeEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wake_event_id", "agent_run_id", "wake_condition_ref", "source", "source_event_ref", "received_at", "source_event_time", "deduplication_key", "wake_event_digest"],
+      "properties": {
+        "wake_event_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "wake_condition_ref": {"$ref": "#/$defs/NonEmpty"},
+        "source": {"$ref": "#/$defs/NonEmpty"},
+        "source_event_ref": {"$ref": "#/$defs/NullableRef"},
+        "received_at": {"type": "string", "format": "date-time"},
+        "source_event_time": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]},
+        "deduplication_key": {"$ref": "#/$defs/NonEmpty"},
+        "wake_event_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ResumeRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resume_record_id", "agent_run_id", "checkpoint_ref", "wake_event_ref", "previous_epoch", "new_epoch", "authority_binding_digest", "budget_binding_digest", "fresh_observation_refs", "invalidated_plan_refs", "resumed_at", "resume_digest"],
+      "properties": {
+        "resume_record_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "checkpoint_ref": {"$ref": "#/$defs/NonEmpty"},
+        "wake_event_ref": {"$ref": "#/$defs/NonEmpty"},
+        "previous_epoch": {"type": "integer", "minimum": 0},
+        "new_epoch": {"type": "integer", "minimum": 1},
+        "authority_binding_digest": {"$ref": "#/$defs/Sha256"},
+        "budget_binding_digest": {"$ref": "#/$defs/Sha256"},
+        "fresh_observation_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "invalidated_plan_refs": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/NonEmpty"}},
+        "resumed_at": {"type": "string", "format": "date-time"},
+        "resume_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "TemporalLease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lease_id", "agent_run_id", "owner_id", "epoch", "fencing_token", "acquired_at", "expires_at", "lease_digest"],
+      "properties": {
+        "lease_id": {"type": "string", "format": "uuid"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "owner_id": {"$ref": "#/$defs/NonEmpty"},
+        "epoch": {"type": "integer", "minimum": 0},
+        "fencing_token": {"$ref": "#/$defs/NonEmpty"},
+        "acquired_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "lease_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "PendingDependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dependency_id", "agent_run_id", "dependency_kind", "target_ref", "state", "completion_ref", "created_at", "updated_at", "dependency_digest"],
+      "properties": {
+        "dependency_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "dependency_kind": {"$ref": "#/$defs/NonEmpty"},
+        "target_ref": {"$ref": "#/$defs/NonEmpty"},
+        "state": {"$ref": "#/$defs/DependencyState"},
+        "completion_ref": {"$ref": "#/$defs/NullableRef"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"},
+        "dependency_digest": {"$ref": "#/$defs/Sha256"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"state": {"const": "pending"}}, "required": ["state"]},
+          "then": {"properties": {"completion_ref": {"type": "null"}}}
+        },
+        {
+          "if": {"properties": {"state": {"enum": ["completed", "failed", "cancelled"]}}, "required": ["state"]},
+          "then": {"properties": {"completion_ref": {"$ref": "#/$defs/NonEmpty"}}}
+        }
+      ]
+    }
+  }
+}
