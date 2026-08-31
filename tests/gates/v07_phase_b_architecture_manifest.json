@@ -1,0 +1,53 @@
+{
+  "schema": "macr-v07-phase-b-architecture-manifest/v1",
+  "phase": "B",
+  "declared_modules": [
+    "macr_runtime.agent.database",
+    "macr_runtime.agent.errors",
+    "macr_runtime.agent.events",
+    "macr_runtime.agent.lifecycle",
+    "macr_runtime.agent.ownership",
+    "macr_runtime.agent.service",
+    "macr_runtime.agent.state",
+    "macr_runtime.agent.store"
+  ],
+  "allowed_internal_imports": [
+    "macr_runtime._v07_contracts",
+    "macr_runtime.canonical",
+    "macr_runtime.errors",
+    "macr_runtime.agent.contracts",
+    "macr_runtime.agent.database",
+    "macr_runtime.agent.errors",
+    "macr_runtime.agent.events",
+    "macr_runtime.agent.lifecycle",
+    "macr_runtime.agent.ownership",
+    "macr_runtime.agent.service",
+    "macr_runtime.agent.state",
+    "macr_runtime.agent.store"
+  ],
+  "forbidden_import_prefixes": [
+    "macr_runtime.accounting",
+    "macr_runtime.candidate_vault",
+    "macr_runtime.direct_",
+    "macr_runtime.dispatch",
+    "macr_runtime.observation",
+    "macr_runtime.plan_runtime",
+    "macr_runtime.planner",
+    "macr_runtime.providers",
+    "macr_runtime.runtime",
+    "macr_runtime.scheduler",
+    "macr_runtime.semantic",
+    "macr_runtime.temporal"
+  ],
+  "fresh_replay_script": "scripts/agent-kernel-replay-smoke.py",
+  "fresh_replay_equivalence": [
+    "canonical_public_projection_bytes",
+    "state_digest",
+    "terminal_state_revision_epoch",
+    "event_ids_and_count",
+    "no_live_terminal_ownership"
+  ],
+  "network_activity": false,
+  "provider_generation": false,
+  "phase_c_started": false
+}

@@ -141,28 +141,20 @@ class AgentStoreTests(unittest.TestCase):
             },
         )
 
-    def test_creation_guard_mismatches_have_no_database_mutation_delta(self) -> None:
-        invalid = (
-            make_header(state=AgentRunState.ACTIVE),
-            make_header(state_revision=2),
-            make_header(epoch=1),
-        )
+    def _assert_creation_mismatch_has_no_database_mutation_delta(
+        self,
+        header: AgentRunHeader,
+    ) -> None:
         with d_drive_tempdir() as temp:
             store = AgentStore(temp / "agent.sqlite3")
             baseline = mutation_counts(store)
 
-            for header in invalid:
-                with self.subTest(
-                    state=header.state.value,
-                    revision=header.state_revision,
-                    epoch=header.epoch,
-                ):
-                    with self.assertRaisesRegex(
-                        ValueError,
-                        "CREATED/revision 1/epoch 0",
-                    ):
-                        store.create_agent_run(header)
-                    self.assertEqual(mutation_counts(store), baseline)
+            with self.assertRaisesRegex(
+                ValueError,
+                "CREATED/revision 1/epoch 0",
+            ):
+                store.create_agent_run(header)
+            self.assertEqual(mutation_counts(store), baseline)
 
         self.assertEqual(
             baseline,
@@ -177,6 +169,21 @@ class AgentStoreTests(unittest.TestCase):
                 "agent_ownership": 0,
                 "fencing_value": 0,
             },
+        )
+
+    def test_creation_guard_state_mismatch_has_no_database_mutation_delta(self) -> None:
+        self._assert_creation_mismatch_has_no_database_mutation_delta(
+            make_header(state=AgentRunState.ACTIVE)
+        )
+
+    def test_creation_guard_revision_mismatch_has_no_database_mutation_delta(self) -> None:
+        self._assert_creation_mismatch_has_no_database_mutation_delta(
+            make_header(state_revision=2)
+        )
+
+    def test_creation_guard_epoch_mismatch_has_no_database_mutation_delta(self) -> None:
+        self._assert_creation_mismatch_has_no_database_mutation_delta(
+            make_header(epoch=1)
         )
 
     def test_duplicate_run_id_rejects_without_second_event(self) -> None:
