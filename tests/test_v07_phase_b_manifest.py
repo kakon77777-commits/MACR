@@ -4,6 +4,7 @@ import ast
 import importlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -220,6 +221,70 @@ class V07PhaseBManifestTests(unittest.TestCase):
         self.assertEqual(macr_runtime.__version__, "0.6.0a1")
         for name in macr_runtime.__all__:
             self.assertIsNotNone(getattr(macr_runtime, name), name)
+
+    def test_phase_b_wrapper_reports_exact_offline_subject(self) -> None:
+        script = ROOT / "scripts/verify-v07-phase-b.ps1"
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        self.assertIsNotNone(powershell)
+        completed = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-File",
+                str(script),
+                "-ManifestOnly",
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        lines = [line for line in completed.stdout.splitlines() if line]
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("PHASE_B_MANIFEST="))
+        payload = json.loads(lines[0].removeprefix("PHASE_B_MANIFEST="))
+        self.assertEqual(
+            payload["focused_modules"],
+            [
+                "tests.test_agent_state",
+                "tests.test_agent_lifecycle",
+                "tests.test_agent_database",
+                "tests.test_agent_events",
+                "tests.test_agent_store",
+                "tests.test_agent_service",
+                "tests.test_agent_ownership",
+                "tests.test_agent_rebuild",
+                "tests.test_agent_multiprocess",
+                "tests.test_v07_phase_b_manifest",
+            ],
+        )
+        self.assertEqual(
+            payload["contract_manifest"],
+            "tests/gates/v07_phase_b_contract_manifest.json",
+        )
+        self.assertEqual(
+            payload["architecture_manifest"],
+            "tests/gates/v07_phase_b_architecture_manifest.json",
+        )
+        self.assertEqual(
+            payload["phase_a_gate"],
+            "scripts/verify-v07-phase-a.ps1",
+        )
+        self.assertEqual(
+            payload["fresh_replay_script"],
+            "scripts/agent-kernel-replay-smoke.py",
+        )
+        self.assertFalse(payload["network_activity"])
+        self.assertFalse(payload["provider_generation"])
+        self.assertFalse(payload["phase_c_started"])
+
+    def test_phase_a_wrapper_detects_phase_b_instead_of_hardcoding_false(self) -> None:
+        source = (ROOT / "scripts/verify-v07-phase-a.ps1").read_text(encoding="utf-8")
+
+        self.assertNotIn("phase_b_started = $false", source)
+        self.assertIn("v07_phase_b_contract_manifest.json", source)
 
 
 if __name__ == "__main__":

@@ -99,6 +99,9 @@ try {
     $gateManifest = Get-Content -LiteralPath (
         Join-Path $repoRoot 'tests\gates\v07_phase_a_contract_manifest.json'
     ) -Raw -Encoding UTF8 | ConvertFrom-Json
+    $phaseBStarted = Test-Path -LiteralPath (
+        Join-Path $repoRoot 'tests\gates\v07_phase_b_contract_manifest.json'
+    )
 
     $summary = [ordered]@{
         schema = 'macr-v07-phase-a-summary/v1'
@@ -117,7 +120,7 @@ try {
         network_activity = $false
         provider_generation = $false
         git_clean = $true
-        phase_b_started = $false
+        phase_b_started = [bool]$phaseBStarted
     }
     Write-Output ('PHASE_A_SUMMARY=' + ($summary | ConvertTo-Json -Compress -Depth 5))
 }

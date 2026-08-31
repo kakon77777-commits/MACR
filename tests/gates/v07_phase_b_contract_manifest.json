@@ -66,6 +66,8 @@
     {"id":"PB-RBLD-07","severity":"S0","test":"tests.test_agent_rebuild.AgentRebuildTests.test_bad_event_chain_leaves_existing_projection_unchanged_on_rebuild"},
     {"id":"PB-RBLD-08","severity":"S0","test":"tests.test_agent_rebuild.AgentRebuildTests.test_replay_rejects_duplicate_event_and_terminal_continuation"},
     {"id":"PB-RBLD-09","severity":"S0","test":"tests.test_agent_rebuild.AgentRebuildTests.test_changed_immutable_header_is_projection_conflict"},
+    {"id":"PB-RBLD-10","severity":"S0","test":"tests.test_agent_rebuild.AgentRebuildTests.test_parent_rebuild_preserves_or_reconstructs_outgoing_child_lineage"},
+    {"id":"PB-RBLD-11","severity":"S0","test":"tests.test_agent_rebuild.AgentRebuildTests.test_missing_or_tampered_outgoing_lineage_is_discriminated"},
 
     {"id":"PB-MP-01","severity":"S0","test":"tests.test_agent_multiprocess.AgentMultiprocessTests.test_eight_processes_produce_exactly_one_owner_and_one_canonical_mutation"},
     {"id":"PB-MP-02","severity":"S0","test":"tests.test_agent_multiprocess.AgentMultiprocessTests.test_release_then_eight_process_reacquire_has_one_new_epoch_and_token"},
@@ -75,6 +77,8 @@
     {"id":"PB-ARCH-01","severity":"S0","test":"tests.test_v07_phase_b_manifest.V07PhaseBManifestTests.test_architecture_manifest_matches_exact_modules_and_imports"},
     {"id":"PB-ARCH-02","severity":"S1","test":"tests.test_v07_phase_b_manifest.V07PhaseBManifestTests.test_phase_b_public_exports_are_exact"},
     {"id":"PB-ARCH-03","severity":"S0","test":"tests.test_v07_phase_b_manifest.V07PhaseBManifestTests.test_structural_smoke_script_is_offline_and_source_independent"},
-    {"id":"PB-ARCH-04","severity":"S0","test":"tests.test_v07_phase_b_manifest.V07PhaseBManifestTests.test_root_package_is_lazy_for_agent_but_legacy_exports_remain_compatible"}
+    {"id":"PB-ARCH-04","severity":"S0","test":"tests.test_v07_phase_b_manifest.V07PhaseBManifestTests.test_root_package_is_lazy_for_agent_but_legacy_exports_remain_compatible"},
+    {"id":"PB-ARCH-05","severity":"S0","test":"tests.test_v07_phase_b_manifest.V07PhaseBManifestTests.test_phase_b_wrapper_reports_exact_offline_subject"},
+    {"id":"PB-ARCH-06","severity":"S0","test":"tests.test_v07_phase_b_manifest.V07PhaseBManifestTests.test_phase_a_wrapper_detects_phase_b_instead_of_hardcoding_false"}
   ]
 }
