@@ -8,16 +8,25 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .._v07_contracts import require_positive_int, require_uuid4
+from .._v07_contracts import (
+    require_non_negative_int,
+    require_positive_int,
+    require_uuid4,
+)
 from ..canonical import canonical_json_bytes
 from .contracts import AgentRunHeader, AgentRunState
 from .database import AgentDatabase
 from .errors import (
     AgentProjectionConflictError,
+    AgentOwnershipConflictError,
     AgentRunAlreadyExistsError,
     AgentRunNotFoundError,
+    IllegalAgentRunTransitionError,
+    StaleAgentRunEpochError,
+    StaleAgentRunRevisionError,
 )
-from .events import AgentEventType, AgentStateEvent
+from .events import AgentEventType, AgentStateEvent, apply_agent_event
+from .lifecycle import require_phase_b_transition
 from .state import AgentRunProjection
 
 
@@ -278,18 +287,26 @@ class AgentStore:
             if row is None:
                 raise AgentRunNotFoundError("AgentRun was not found")
             projection = self._projection_from_row(row)
-            tail = connection.execute(
-                """
-                SELECT after_revision, epoch, state_digest_after
-                FROM agent_events
-                WHERE agent_run_id = ?
-                ORDER BY sequence DESC
-                LIMIT 1
-                """,
-                (run_id,),
-            ).fetchone()
+            self._require_matching_tail(connection, projection)
         finally:
             connection.close()
+        return projection
+
+    @staticmethod
+    def _require_matching_tail(
+        connection: sqlite3.Connection,
+        projection: AgentRunProjection,
+    ) -> None:
+        tail = connection.execute(
+            """
+            SELECT after_revision, epoch, state_digest_after
+            FROM agent_events
+            WHERE agent_run_id = ?
+            ORDER BY sequence DESC
+            LIMIT 1
+            """,
+            (projection.agent_run_id,),
+        ).fetchone()
         if tail is None:
             raise AgentProjectionConflictError("Agent projection has no event tail")
         if (
@@ -300,7 +317,120 @@ class AgentStore:
             raise AgentProjectionConflictError(
                 "Agent projection does not match its event tail"
             )
-        return projection
+
+    def _transition_unowned(
+        self,
+        agent_run_id: str,
+        *,
+        expected_state: AgentRunState,
+        target_state: AgentRunState,
+        expected_revision: int,
+        expected_epoch: int,
+        event_type: AgentEventType,
+        payload: dict[str, object],
+        created_at: str,
+        event_id: str | None = None,
+    ) -> AgentRunProjection:
+        run_id = require_uuid4("agent_run_id", agent_run_id)
+        selected_revision = require_positive_int(
+            "expected_revision",
+            expected_revision,
+        )
+        selected_epoch = require_non_negative_int("expected_epoch", expected_epoch)
+        if not isinstance(expected_state, AgentRunState):
+            raise ValueError("expected_state must be an AgentRunState")
+        if not isinstance(target_state, AgentRunState):
+            raise ValueError("target_state must be an AgentRunState")
+        if not isinstance(event_type, AgentEventType):
+            raise ValueError("event_type must be an AgentEventType")
+
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM agent_runs WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise AgentRunNotFoundError("AgentRun was not found")
+            current = self._projection_from_row(row)
+            self._require_matching_tail(connection, current)
+            if current.state_revision != selected_revision:
+                raise StaleAgentRunRevisionError("AgentRun revision is stale")
+            if current.epoch != selected_epoch:
+                raise StaleAgentRunEpochError("AgentRun epoch is stale")
+            if current.state is not expected_state:
+                raise IllegalAgentRunTransitionError(
+                    "AgentRun state does not match the named operation"
+                )
+            ownership = connection.execute(
+                "SELECT 1 FROM agent_ownership WHERE agent_run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if ownership is not None:
+                raise AgentOwnershipConflictError(
+                    "AgentRun has active ownership"
+                )
+            require_phase_b_transition(current.state, target_state)
+            next_projection = AgentRunProjection(
+                initial_header=current.initial_header,
+                state=target_state,
+                state_revision=current.state_revision + 1,
+                epoch=current.epoch,
+                updated_at=created_at,
+            )
+            event = AgentStateEvent(
+                event_id=str(uuid.uuid4()) if event_id is None else event_id,
+                agent_run_id=run_id,
+                epoch=next_projection.epoch,
+                before_revision=current.state_revision,
+                after_revision=next_projection.state_revision,
+                event_type=event_type,
+                payload=payload,
+                state_digest_after=next_projection.state_digest,
+                created_at=created_at,
+            )
+            if apply_agent_event(current, event) != next_projection:
+                raise AgentProjectionConflictError(
+                    "Agent transition event does not produce projection"
+                )
+
+            self._fault("before_event_insert")
+            self._insert_event(connection, event)
+            self._fault("after_event_insert")
+            cursor = connection.execute(
+                """
+                UPDATE agent_runs
+                SET state = ?, state_revision = ?, epoch = ?,
+                    state_digest = ?, updated_at = ?
+                WHERE agent_run_id = ?
+                  AND state_revision = ?
+                  AND epoch = ?
+                """,
+                (
+                    next_projection.state.value,
+                    next_projection.state_revision,
+                    next_projection.epoch,
+                    next_projection.state_digest,
+                    next_projection.updated_at,
+                    run_id,
+                    selected_revision,
+                    selected_epoch,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise AgentProjectionConflictError(
+                    "Agent projection compare-and-swap failed"
+                )
+            self._fault("after_projection_update")
+            self._fault("before_commit")
+            connection.commit()
+            return next_projection
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     @staticmethod
     def _projection_from_row(row: sqlite3.Row) -> AgentRunProjection:
