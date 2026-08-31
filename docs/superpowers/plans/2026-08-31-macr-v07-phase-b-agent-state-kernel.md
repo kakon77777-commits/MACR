@@ -66,7 +66,7 @@ The first Twin review challenged creation-time closure: Phase A deliberately
 allows `AgentRunHeader` to represent a general snapshot, while Phase B creation is
 restricted to CREATED/revision 1/epoch 0. The plan resolves this without changing
 Phase A by requiring a pre-SQL Phase B creation guard, three independent mismatch
-controls with zero writes across all Phase B tables, and one exact
+controls with no mutation delta in any Phase B table, and one exact
 `before_revision=0 -> after_revision=1` positive witness. The challenge remains in
 the record as resolved design input; it is not rewritten as initial agreement.
 
@@ -393,7 +393,8 @@ Tests require:
 - `create_agent_run()` writes one creation event, one projection, and exact
   immutable binding indexes in one transaction;
 - each otherwise valid header mismatch (state, revision, or epoch) fails before
-  SQL and leaves every Phase B table at zero rows;
+  mutation SQL, leaves every non-seed Phase B table at zero rows, and preserves
+  the schema-created fencing singleton at value 0;
 - the valid CREATED/revision 1/epoch 0 control writes exactly one creation event
   with `before_revision=0` and `after_revision=1`;
 - duplicate AgentRun ID rejects even when the second body is identical;
