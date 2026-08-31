@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import shutil
+import subprocess
 import unittest
 from importlib.resources import files
 from pathlib import Path
@@ -82,6 +84,47 @@ class V07PhaseAManifestTests(unittest.TestCase):
                             msg=f"{schema['$id']} {name} is not closed",
                         )
             schema_ids.add(schema["$id"])
+
+    def test_phase_a_wrapper_reports_exact_focused_modules_without_running_providers(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts/verify-v07-phase-a.ps1"
+        powershell = shutil.which("powershell") or shutil.which("pwsh")
+        self.assertIsNotNone(powershell)
+
+        completed = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-File",
+                str(script),
+                "-ManifestOnly",
+            ],
+            cwd=repo_root,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        lines = [line for line in completed.stdout.splitlines() if line]
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0].startswith("PHASE_A_MANIFEST="))
+        payload = json.loads(lines[0].removeprefix("PHASE_A_MANIFEST="))
+        self.assertEqual(
+            payload["focused_modules"],
+            [
+                "tests.test_v07_contract_support",
+                "tests.test_agent_contracts",
+                "tests.test_semantic_contracts",
+                "tests.test_observation_contracts",
+                "tests.test_action_contracts",
+                "tests.test_temporal_contracts",
+                "tests.test_agent_contract_boundaries",
+                "tests.test_v07_phase_a_manifest",
+            ],
+        )
+        self.assertFalse(payload["network_activity"])
+        self.assertFalse(payload["provider_generation"])
 
     @classmethod
     def collect_internal_refs(cls, value: object) -> set[str]:
