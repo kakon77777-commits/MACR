@@ -27,6 +27,14 @@ from .graph import (
 from .database import SemanticSchema
 from .registry import SEMANTIC_REGISTRY_SCHEMA_VERSION, SemanticRegistry
 from .store import SemanticStore
+from .patch import (
+    SEMANTIC_COMMIT_REQUEST_SCHEMA_VERSION,
+    SEMANTIC_PROPOSAL_SCHEMA_VERSION,
+    CompiledSemanticPatch,
+    SemanticCommitRequest,
+    SemanticPatchCompiler,
+    SemanticPatchProposalRequest,
+)
 
 __all__ = [
     "ArtifactRole",
@@ -42,6 +50,8 @@ __all__ = [
     "SemanticNode",
     "SemanticNodeType",
     "SemanticPatch",
+    "SemanticPatchCompiler",
+    "SemanticPatchProposalRequest",
     "SemanticProfileRef",
     "SemanticProvenance",
     "SemanticRelation",
@@ -49,8 +59,12 @@ __all__ = [
     "SemanticRegistry",
     "SemanticSchema",
     "SemanticStore",
+    "SemanticCommitRequest",
+    "CompiledSemanticPatch",
     "SEMANTIC_GRAPH_HEAD_SCHEMA_VERSION",
     "SEMANTIC_GRAPH_REVISION_SCHEMA_VERSION",
     "SEMANTIC_REGISTRY_SCHEMA_VERSION",
+    "SEMANTIC_COMMIT_REQUEST_SCHEMA_VERSION",
+    "SEMANTIC_PROPOSAL_SCHEMA_VERSION",
     "calculate_graph_digest",
 ]
