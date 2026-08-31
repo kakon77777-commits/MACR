@@ -42,6 +42,17 @@ from .patch import (
     SemanticPatchCompiler,
     SemanticPatchProposalRequest,
 )
+from .projection import (
+    MAX_PROJECTION_NODES,
+    MAX_PROJECTION_RELATIONS,
+    SEMANTIC_CONTEXT_PROJECTION_SCHEMA_VERSION,
+    SEMANTIC_CONTEXT_REQUEST_SCHEMA_VERSION,
+    SEMANTIC_PROJECTION_PROFILE_SCHEMA_VERSION,
+    SemanticContextProjection,
+    SemanticContextProjector,
+    SemanticContextRequest,
+    SemanticProjectionProfile,
+)
 
 __all__ = [
     "ArtifactRole",
@@ -72,12 +83,21 @@ __all__ = [
     "SemanticAttachReceipt",
     "SemanticCommitReceipt",
     "SemanticCommitService",
+    "SemanticContextProjection",
+    "SemanticContextProjector",
+    "SemanticContextRequest",
+    "SemanticProjectionProfile",
     "CompiledSemanticPatch",
     "SEMANTIC_GRAPH_HEAD_SCHEMA_VERSION",
     "SEMANTIC_GRAPH_REVISION_SCHEMA_VERSION",
     "SEMANTIC_REGISTRY_SCHEMA_VERSION",
     "SEMANTIC_COMMIT_REQUEST_SCHEMA_VERSION",
     "SEMANTIC_PROPOSAL_SCHEMA_VERSION",
+    "SEMANTIC_CONTEXT_PROJECTION_SCHEMA_VERSION",
+    "SEMANTIC_CONTEXT_REQUEST_SCHEMA_VERSION",
+    "SEMANTIC_PROJECTION_PROFILE_SCHEMA_VERSION",
+    "MAX_PROJECTION_NODES",
+    "MAX_PROJECTION_RELATIONS",
     "calculate_graph_digest",
     "ownership_permit_digest",
 ]
