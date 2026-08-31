@@ -17,6 +17,8 @@ graph-attach amendment  600a7eeeeecc1d5db10994222d5e6b896d809561
 amendment tree          30dd97feb515fa2bb2089c17e48b8e0c033db80e
 authority split commit  04ad276761b9c8bb3481b6ad001d14bd39bb2064
 authority split tree    c0ff3471911d828c0d53fdf9927cd61a00bb7197
+revision contract commit 59d827d18588bf11fcb14c6ddcbd361c27c81d00
+revision contract tree   0c8557ee7324cdfcf7b2aa4b78165c0f053d35c5
 package version         0.6.0a1 (unchanged)
 physical database       runtime/agent.sqlite3 on D: only
 ```
@@ -63,6 +65,14 @@ single transaction owner. The accepted resolution adds:
 - semantic authority-looking data explicitly unable to grant commit authority.
 
 Targeted reevaluation returned `CONCUR` at design scope only.
+
+The implementation-plan review then challenged the fresh reconstruction
+sequence after graph revisions were changed to start at one. Task 9 is corrected
+to the exact sequence `create empty r1 -> attach AgentRun to r1 -> commit
+Goal/Plan as r2 -> project/rebuild r2`. The smoke and manifest must bind both
+Agent semantic-binding advances and the resulting exact Agent revision/event
+counts. The earlier inconsistent “commit revision 1” wording is retained here as
+a corrected plan defect, not silently forgotten.
 
 ## Authorized scope
 
@@ -145,7 +155,8 @@ Tests first require:
 - unknown node/relation/effect/status and wrong registry digest rejection;
 - explicit relation direction validation, including a Goal-to-Plan green control;
 - immutable UUIDv4 graph identity separate from graph digest;
-- deterministic registry-bound empty graph digest at revision 0;
+- deterministic registry-bound empty graph digest at revision 1, compatible
+  with the existing positive-revision `SemanticStateBinding`;
 - immutable `SemanticGraphHead`, `SemanticGraphRevision`, and
   `SemanticStateBinding` conversion;
 - equal content under one registry gives equal digest across different graph IDs;
@@ -269,7 +280,7 @@ Tests require:
   create-once registry bytes;
 - synchronized initialization remains safe under the already-observed 32-process
   bootstrap subject;
-- graph create writes revision 0, registry binding, empty membership, and current
+- graph create writes revision 1, registry binding, empty membership, and current
   head atomically;
 - duplicate graph ID and conflicting registry bytes fail closed;
 - graph ID/digest separation and immutable revision reads;
@@ -617,15 +628,21 @@ Build wheel/cache/install/run under one disposable D-drive subject, install with
 ```text
 create AgentRun
 admit/acquire/activate
-create graph revision 0
+create graph revision 1
+attach AgentRun to graph revision 1
 propose Goal/Plan patch
-commit revision 1 and Agent binding
+commit patch as graph revision 2 and advance Agent binding again
 build context projection
 close and reopen
 remove rebuildable Agent/graph head projections
 reconstruct from events/revisions
 rebuild same projection
 ```
+
+The manifest and smoke assert two distinct
+`agent.semantic_state_advanced` events: one for attach at graph revision 1 and
+one for commit at graph revision 2. Final AgentRun revision and total event count
+are derived from this exact sequence rather than copied from an earlier phase.
 
 Predeclare equivalence exactly as the design. Emit content-free JSON with schema,
 counts, graph/Agent revisions, graph/state/binding/projection/replay digests, event
