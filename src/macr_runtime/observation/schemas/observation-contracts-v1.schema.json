@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:evemisslab:macr:observation-contracts:v1",
+  "title": "MACR v0.7 Observation Contracts v1",
+  "oneOf": [
+    {"$ref": "#/$defs/ObservationScope"},
+    {"$ref": "#/$defs/FreshnessPolicy"},
+    {"$ref": "#/$defs/RawObservationRef"},
+    {"$ref": "#/$defs/ObservationIntent"},
+    {"$ref": "#/$defs/VerifiedObservationRef"},
+    {"$ref": "#/$defs/ObservationBinding"},
+    {"$ref": "#/$defs/ReObservationRequest"}
+  ],
+  "$defs": {
+    "Sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "NonEmpty": {"type": "string", "minLength": 1, "maxLength": 2048},
+    "FreshnessMode": {
+      "enum": [
+        "immutable", "source_revision", "max_age", "event_invalidated",
+        "always_recheck_before_mutation"
+      ]
+    },
+    "ObservationVerificationRequirement": {"enum": ["verified"]},
+    "ObservationScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope_ref", "resource_refs", "region_refs", "scope_digest"],
+      "properties": {
+        "scope_ref": {"$ref": "#/$defs/NonEmpty"},
+        "resource_refs": {"type": "array", "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true, "maxItems": 128},
+        "region_refs": {"type": "array", "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true, "maxItems": 128},
+        "scope_digest": {"$ref": "#/$defs/Sha256"}
+      },
+      "anyOf": [
+        {"properties": {"resource_refs": {"minItems": 1}}},
+        {"properties": {"region_refs": {"minItems": 1}}}
+      ]
+    },
+    "FreshnessPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_id", "mode", "source_revision", "max_age_seconds", "invalidation_event_refs", "policy_digest"],
+      "properties": {
+        "policy_id": {"$ref": "#/$defs/NonEmpty"},
+        "mode": {"$ref": "#/$defs/FreshnessMode"},
+        "source_revision": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "max_age_seconds": {"anyOf": [{"type": "number", "exclusiveMinimum": 0}, {"type": "null"}]},
+        "invalidation_event_refs": {"type": "array", "items": {"$ref": "#/$defs/NonEmpty"}, "uniqueItems": true},
+        "policy_digest": {"$ref": "#/$defs/Sha256"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "immutable"}}, "required": ["mode"]},
+          "then": {"properties": {"source_revision": {"type": "null"}, "max_age_seconds": {"type": "null"}, "invalidation_event_refs": {"maxItems": 0}}}
+        },
+        {
+          "if": {"properties": {"mode": {"const": "source_revision"}}, "required": ["mode"]},
+          "then": {"properties": {"source_revision": {"$ref": "#/$defs/NonEmpty"}, "max_age_seconds": {"type": "null"}, "invalidation_event_refs": {"maxItems": 0}}}
+        },
+        {
+          "if": {"properties": {"mode": {"const": "max_age"}}, "required": ["mode"]},
+          "then": {"properties": {"source_revision": {"type": "null"}, "max_age_seconds": {"type": "number", "exclusiveMinimum": 0}, "invalidation_event_refs": {"maxItems": 0}}}
+        },
+        {
+          "if": {"properties": {"mode": {"const": "event_invalidated"}}, "required": ["mode"]},
+          "then": {"properties": {"source_revision": {"type": "null"}, "max_age_seconds": {"type": "null"}, "invalidation_event_refs": {"minItems": 1}}}
+        },
+        {
+          "if": {"properties": {"mode": {"const": "always_recheck_before_mutation"}}, "required": ["mode"]},
+          "then": {"properties": {"source_revision": {"type": "null"}, "max_age_seconds": {"type": "null"}, "invalidation_event_refs": {"maxItems": 0}}}
+        }
+      ]
+    },
+    "RawObservationRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw_ref", "source_ref", "captured_at", "raw_digest", "reference_digest"],
+      "properties": {
+        "raw_ref": {"$ref": "#/$defs/NonEmpty"},
+        "source_ref": {"$ref": "#/$defs/NonEmpty"},
+        "captured_at": {"type": "string", "format": "date-time"},
+        "raw_digest": {"$ref": "#/$defs/Sha256"},
+        "reference_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ObservationIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_intent_id", "agent_run_id", "goal_ref", "plan_ref", "task_ref", "world_binding_ref", "observation_purpose", "requested_scope", "preferred_representation", "freshness_policy", "verification_requirement", "intent_digest"],
+      "properties": {
+        "observation_intent_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "goal_ref": {"$ref": "#/$defs/NonEmpty"},
+        "plan_ref": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "task_ref": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "world_binding_ref": {"$ref": "#/$defs/NonEmpty"},
+        "observation_purpose": {"$ref": "#/$defs/NonEmpty"},
+        "requested_scope": {"$ref": "#/$defs/ObservationScope"},
+        "preferred_representation": {"$ref": "#/$defs/NonEmpty"},
+        "freshness_policy": {"$ref": "#/$defs/FreshnessPolicy"},
+        "verification_requirement": {"$ref": "#/$defs/ObservationVerificationRequirement"},
+        "intent_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "VerifiedObservationRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_ref_id", "agent_run_id", "observation_intent_ref", "projection_request_ref", "projection_result_ref", "manifest_digest", "verification_digest", "visibility_commit_ref", "source_identity", "source_revision", "scope_digest", "projection_profile_digest", "visible_at", "observation_digest"],
+      "properties": {
+        "observation_ref_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "observation_intent_ref": {"$ref": "#/$defs/NonEmpty"},
+        "projection_request_ref": {"$ref": "#/$defs/NonEmpty"},
+        "projection_result_ref": {"$ref": "#/$defs/NonEmpty"},
+        "manifest_digest": {"$ref": "#/$defs/Sha256"},
+        "verification_digest": {"$ref": "#/$defs/Sha256"},
+        "visibility_commit_ref": {"$ref": "#/$defs/NonEmpty"},
+        "source_identity": {"$ref": "#/$defs/NonEmpty"},
+        "source_revision": {"$ref": "#/$defs/NonEmpty"},
+        "scope_digest": {"$ref": "#/$defs/Sha256"},
+        "projection_profile_digest": {"$ref": "#/$defs/Sha256"},
+        "visible_at": {"type": "string", "format": "date-time"},
+        "observation_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ObservationBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_binding_id", "agent_run_id", "observation_ref_id", "observation_digest", "semantic_node_ref", "world_binding_ref", "basis_digest", "bound_at", "binding_digest"],
+      "properties": {
+        "observation_binding_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "observation_ref_id": {"$ref": "#/$defs/NonEmpty"},
+        "observation_digest": {"$ref": "#/$defs/Sha256"},
+        "semantic_node_ref": {"$ref": "#/$defs/NonEmpty"},
+        "world_binding_ref": {"$ref": "#/$defs/NonEmpty"},
+        "basis_digest": {"$ref": "#/$defs/Sha256"},
+        "bound_at": {"type": "string", "format": "date-time"},
+        "binding_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    },
+    "ReObservationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reobservation_request_id", "agent_run_id", "prior_observation_ref", "action_ref", "requested_scope", "freshness_policy", "reason", "request_digest"],
+      "properties": {
+        "reobservation_request_id": {"$ref": "#/$defs/NonEmpty"},
+        "agent_run_id": {"type": "string", "format": "uuid"},
+        "prior_observation_ref": {"$ref": "#/$defs/NonEmpty"},
+        "action_ref": {"anyOf": [{"$ref": "#/$defs/NonEmpty"}, {"type": "null"}]},
+        "requested_scope": {"$ref": "#/$defs/ObservationScope"},
+        "freshness_policy": {"$ref": "#/$defs/FreshnessPolicy"},
+        "reason": {"$ref": "#/$defs/NonEmpty"},
+        "request_digest": {"$ref": "#/$defs/Sha256"}
+      }
+    }
+  }
+}
