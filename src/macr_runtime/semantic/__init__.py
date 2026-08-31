@@ -28,6 +28,11 @@ from .database import SemanticSchema
 from .registry import SEMANTIC_REGISTRY_SCHEMA_VERSION, SemanticRegistry
 from .store import SemanticStore
 from .service import SemanticProposalRecord, SemanticProposalService
+from .commit import (
+    SemanticCommitReceipt,
+    SemanticCommitService,
+    ownership_permit_digest,
+)
 from .patch import (
     SEMANTIC_COMMIT_REQUEST_SCHEMA_VERSION,
     SEMANTIC_PROPOSAL_SCHEMA_VERSION,
@@ -63,6 +68,8 @@ __all__ = [
     "SemanticProposalRecord",
     "SemanticProposalService",
     "SemanticCommitRequest",
+    "SemanticCommitReceipt",
+    "SemanticCommitService",
     "CompiledSemanticPatch",
     "SEMANTIC_GRAPH_HEAD_SCHEMA_VERSION",
     "SEMANTIC_GRAPH_REVISION_SCHEMA_VERSION",
@@ -70,4 +77,5 @@ __all__ = [
     "SEMANTIC_COMMIT_REQUEST_SCHEMA_VERSION",
     "SEMANTIC_PROPOSAL_SCHEMA_VERSION",
     "calculate_graph_digest",
+    "ownership_permit_digest",
 ]

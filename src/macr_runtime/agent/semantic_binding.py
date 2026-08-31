@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 
 from .._v07_contracts import require_non_negative_int, require_positive_int
 from .contracts import SemanticStateBinding
@@ -92,6 +93,7 @@ class _AgentSemanticBindingPort:
         new_binding: SemanticStateBinding,
         expected_revision: int,
         expected_epoch: int,
+        fault_injector: Callable[[str], None] | None = None,
     ) -> AgentRunProjection:
         if not isinstance(connection, sqlite3.Connection):
             raise ValueError("connection must be a sqlite3.Connection")
@@ -137,6 +139,8 @@ class _AgentSemanticBindingPort:
             )
         next_projection = apply_agent_event(current, event)
         self.store._insert_event(connection, event)
+        if fault_injector is not None:
+            fault_injector("after_agent_event")
         cursor = connection.execute(
             """
             UPDATE agent_runs
@@ -161,4 +165,6 @@ class _AgentSemanticBindingPort:
             raise AgentProjectionConflictError(
                 "semantic binding Agent compare-and-swap failed"
             )
+        if fault_injector is not None:
+            fault_injector("after_agent_binding")
         return next_projection
