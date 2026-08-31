@@ -102,6 +102,14 @@ attacks now delete the head, require rebuild refusal, and prove zero attempted-
 rebuild drift beside the deliberately corrupted evidence; the intact rebuild
 control remains green.
 
+The C3 Twin challenged projection coherence because Agent binding, revision,
+nodes, and relations were initially loaded through separate connections. The
+repair pins one SQLite read transaction, validates Agent event-derived binding
+and exact semantic revision/membership on that connection, then performs
+selection only after the frozen source set is complete. A controlled interleave
+deletes membership after the first read: projection returns the coherent pre-
+fault snapshot while later ordinary readback rejects the now-corrupt state.
+
 ## Authorized scope
 
 Allowed:
