@@ -74,6 +74,13 @@ Agent semantic-binding advances and the resulting exact Agent revision/event
 counts. The earlier inconsistent “commit revision 1” wording is retained here as
 a corrected plan defect, not silently forgotten.
 
+The C1 storage review challenged graph-head topology: immutable revision/history
+rows referenced a `semantic_graphs` row that also acted as the removable head.
+The schema is corrected to immutable `semantic_graphs` catalog plus removable
+`semantic_graph_heads` projection. A manifest-bound control deletes only the head
+with foreign keys enabled, proves revision/history bytes unchanged, and rebuilds
+the exact head.
+
 ## Authorized scope
 
 Allowed:
@@ -282,6 +289,8 @@ Tests require:
   bootstrap subject;
 - graph create writes revision 1, registry binding, empty membership, and current
   head atomically;
+- graph identity/catalog remains immutable while the separate current-head row
+  can be deleted and rebuilt from latest revision with all history byte-identical;
 - duplicate graph ID and conflicting registry bytes fail closed;
 - graph ID/digest separation and immutable revision reads;
 - bounded graph/head/revision queries;

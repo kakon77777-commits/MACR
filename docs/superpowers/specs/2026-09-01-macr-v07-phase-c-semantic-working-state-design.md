@@ -302,6 +302,7 @@ binding columns, and graph revision is visible and never auto-repaired on read.
 ```text
 semantic_registry_versions
 semantic_graphs
+semantic_graph_heads
 semantic_graph_revisions
 semantic_graph_revision_nodes
 semantic_graph_revision_relations
@@ -329,9 +330,16 @@ unless an independently versioned registry is explicitly supplied later.
 
 ### 8.2 Graphs and revisions
 
-`semantic_graphs` stores graph identity, scope, current head revision/digest,
-registry binding, creator AgentRun, and bounded metadata. It is the current-head
-projection.
+`semantic_graphs` is the immutable graph identity/catalog row: graph ref, scope,
+registry binding, creator AgentRun, and creation metadata. Immutable revisions,
+nodes, relations, events, and patches may reference it.
+
+`semantic_graph_heads` is the removable current-head projection: current revision,
+digest, update time, and canonical head JSON. No immutable evidence depends on
+this row. Deleting only the head with foreign keys enabled preserves catalog,
+revisions, memberships, nodes, relations, events, patches, and receipts; explicit
+rebuild selects and validates the latest immutable revision plus catalog metadata
+and recreates the exact head.
 
 `semantic_graph_revisions` stores every immutable revision and its parent,
 commit/patch references, registry binding, graph digest, and timestamp.
@@ -629,6 +637,8 @@ At minimum, Phase C must bind positive and falsifying witnesses for:
 - deterministic empty and non-empty graph digests;
 - graph identity separate from graph digest;
 - immutable revision history and active head;
+- current graph head deletion preserves immutable history and reconstructs the
+  exact head;
 - relation direction and dangling endpoint rejection.
 
 ### Patch and commit
