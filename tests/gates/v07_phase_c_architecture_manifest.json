@@ -1,0 +1,71 @@
+{
+  "schema": "macr-v07-phase-c-architecture-manifest/v1",
+  "phase": "C",
+  "declared_modules": [
+    "macr_runtime.semantic.contracts",
+    "macr_runtime.semantic.errors",
+    "macr_runtime.semantic.registry",
+    "macr_runtime.semantic.graph",
+    "macr_runtime.semantic.database",
+    "macr_runtime.semantic.store",
+    "macr_runtime.semantic.validation",
+    "macr_runtime.semantic.patch",
+    "macr_runtime.semantic.service",
+    "macr_runtime.semantic.commit",
+    "macr_runtime.semantic.projection"
+  ],
+  "allowed_internal_imports": [
+    "macr_runtime._v07_contracts",
+    "macr_runtime.canonical",
+    "macr_runtime.errors",
+    "macr_runtime.execution",
+    "macr_runtime.action.contracts",
+    "macr_runtime.agent.contracts",
+    "macr_runtime.agent.database",
+    "macr_runtime.agent.ownership",
+    "macr_runtime.agent.semantic_binding",
+    "macr_runtime.agent.store",
+    "macr_runtime.semantic.contracts",
+    "macr_runtime.semantic.errors",
+    "macr_runtime.semantic.registry",
+    "macr_runtime.semantic.graph",
+    "macr_runtime.semantic.database",
+    "macr_runtime.semantic.store",
+    "macr_runtime.semantic.validation",
+    "macr_runtime.semantic.patch",
+    "macr_runtime.semantic.service",
+    "macr_runtime.semantic.commit",
+    "macr_runtime.semantic.projection"
+  ],
+  "forbidden_import_prefixes": [
+    "macr_runtime.accounting",
+    "macr_runtime.candidate_vault",
+    "macr_runtime.direct_",
+    "macr_runtime.dispatch",
+    "macr_runtime.observation",
+    "macr_runtime.plan_runtime",
+    "macr_runtime.planner",
+    "macr_runtime.providers",
+    "macr_runtime.runtime",
+    "macr_runtime.scheduler",
+    "macr_runtime.temporal"
+  ],
+  "phase_d_forbidden_paths": [
+    "src/macr_runtime/semantic/observation_bridge.py",
+    "src/macr_runtime/semantic/action_bridge.py",
+    "src/macr_runtime/agent/loop.py",
+    "src/macr_runtime/agent/runner.py"
+  ],
+  "fresh_replay_script": "scripts/semantic-working-state-replay-smoke.py",
+  "fresh_replay_equivalence": [
+    "graph_revision_history",
+    "agent_lifecycle_projection",
+    "agent_semantic_binding",
+    "semantic_binding_event_ids_and_count",
+    "context_projection_bytes_and_digest",
+    "attach_and_commit_receipts"
+  ],
+  "network_activity": false,
+  "provider_generation": false,
+  "phase_d_started": false
+}

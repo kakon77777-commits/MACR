@@ -1,0 +1,61 @@
+{
+  "schema": "macr-v07-phase-c-test-manifest/v1",
+  "phase": "C",
+  "required": [
+    {"id":"PC-REG-01","severity":"S1","test":"tests.test_semantic_registry.SemanticRegistryTests.test_builtin_registry_is_packaged_versioned_digest_bound_and_exact"},
+    {"id":"PC-REG-02","severity":"S0","test":"tests.test_semantic_registry.SemanticRegistryTests.test_unknown_node_relation_effect_status_verdict_and_failure_fail_closed"},
+    {"id":"PC-REG-03","severity":"S0","test":"tests.test_semantic_registry.SemanticRegistryTests.test_relation_direction_has_goal_to_plan_green_and_reverse_negative"},
+    {"id":"PC-REG-04","severity":"S0","test":"tests.test_semantic_registry.SemanticRegistryTests.test_registry_data_is_not_commit_authority"},
+
+    {"id":"PC-GRAPH-01","severity":"S1","test":"tests.test_semantic_graph.SemanticGraphTests.test_empty_graph_starts_at_positive_revision_one_and_is_bindable"},
+    {"id":"PC-GRAPH-02","severity":"S1","test":"tests.test_semantic_graph.SemanticGraphTests.test_graph_identity_is_distinct_from_content_digest"},
+    {"id":"PC-GRAPH-03","severity":"S0","test":"tests.test_semantic_store.SemanticStoreTests.test_head_projection_deletes_with_foreign_keys_and_rebuilds_without_history_drift"},
+    {"id":"PC-GRAPH-04","severity":"S0","test":"tests.test_semantic_graph.SemanticGraphTests.test_head_round_trip_is_closed_and_digest_tamper_fails"},
+
+    {"id":"PC-DB-01","severity":"S1","test":"tests.test_semantic_database.SemanticDatabaseTests.test_semantic_schema_shares_agent_database_and_has_exact_component_tables"},
+    {"id":"PC-DB-02","severity":"S0","test":"tests.test_semantic_database.SemanticDatabaseTests.test_tampered_registry_or_newer_semantic_schema_fails_closed"},
+    {"id":"PC-DB-03","severity":"S0","test":"tests.test_semantic_database.SemanticDatabaseTests.test_fresh_semantic_bootstrap_is_safe_for_32_synchronized_processes"},
+
+    {"id":"PC-PATCH-01","severity":"S0","test":"tests.test_semantic_patch_validation.SemanticPatchValidationTests.test_proposal_is_authority_free_digest_bound_and_round_trips"},
+    {"id":"PC-PATCH-02","severity":"S1","test":"tests.test_semantic_patch_compiler.SemanticPatchCompilerTests.test_goal_to_plan_patch_compiles_deterministically_without_sql"},
+    {"id":"PC-PATCH-03","severity":"S0","test":"tests.test_semantic_patch_compiler.SemanticPatchCompilerTests.test_unknown_effect_direction_dangling_and_scope_fail_distinctly"},
+    {"id":"PC-PATCH-04","severity":"S0","test":"tests.test_semantic_patch_compiler.SemanticPatchCompilerTests.test_status_update_is_exact_and_obligation_resolution_requires_evidence"},
+
+    {"id":"PC-PROP-01","severity":"S1","test":"tests.test_semantic_proposals.SemanticProposalTests.test_valid_proposal_persists_without_advancing_graph_or_agent"},
+    {"id":"PC-PROP-02","severity":"S0","test":"tests.test_semantic_proposals.SemanticProposalTests.test_exact_duplicate_is_idempotent_but_conflicting_id_fails"},
+    {"id":"PC-PROP-03","severity":"S0","test":"tests.test_semantic_proposals.SemanticProposalTests.test_invalid_semantic_proposal_records_bounded_failure_without_partial_write"},
+    {"id":"PC-PROP-04","severity":"S0","test":"tests.test_semantic_proposals.SemanticProposalTests.test_service_has_no_raw_model_or_commit_authority_surface"},
+
+    {"id":"PC-COMMIT-01","severity":"S0","test":"tests.test_semantic_commit.SemanticCommitTests.test_attach_binds_current_head_once_without_advancing_graph"},
+    {"id":"PC-COMMIT-02","severity":"S0","test":"tests.test_semantic_commit.SemanticCommitTests.test_attach_operation_id_conflicting_reuse_fails_without_drift"},
+    {"id":"PC-COMMIT-03","severity":"S0","test":"tests.test_semantic_commit.SemanticCommitTests.test_attach_rejects_stale_agent_cas_or_permit_without_drift"},
+    {"id":"PC-COMMIT-04","severity":"S0","test":"tests.test_semantic_commit.SemanticCommitTests.test_attach_rejects_wrong_authority_and_second_graph_binding"},
+    {"id":"PC-COMMIT-05","severity":"S0","test":"tests.test_semantic_commit.SemanticCommitTests.test_commit_advances_graph_and_agent_once_and_exact_repeat_returns_receipt"},
+    {"id":"PC-COMMIT-06","severity":"S0","test":"tests.test_semantic_commit.SemanticCommitTests.test_wrong_external_authority_fails_even_when_semantic_patch_looks_authoritative"},
+    {"id":"PC-COMMIT-07","severity":"S0","test":"tests.test_semantic_commit.SemanticCommitTests.test_commit_id_conflicting_reuse_fails_without_second_revision"},
+
+    {"id":"PC-ATOM-01","severity":"S0","test":"tests.test_semantic_atomicity.SemanticAtomicityTests.test_attach_faults_roll_back_binding_event_and_receipt"},
+    {"id":"PC-ATOM-02","severity":"S0","test":"tests.test_semantic_atomicity.SemanticAtomicityTests.test_faults_between_semantic_and_agent_halves_roll_back_everything"},
+
+    {"id":"PC-SHARE-01","severity":"S0","test":"tests.test_semantic_shared_graph.SemanticSharedGraphTests.test_one_run_advances_shared_head_while_other_remains_pinned_and_stale"},
+    {"id":"PC-SHARE-02","severity":"S0","test":"tests.test_semantic_multiprocess.SemanticMultiprocessTests.test_eight_exact_base_commits_produce_one_revision_and_seven_no_drift_refusals"},
+
+    {"id":"PC-RBLD-01","severity":"S1","test":"tests.test_semantic_rebuild.SemanticRebuildTests.test_agent_and_graph_heads_rebuild_to_same_committed_binding"},
+    {"id":"PC-RBLD-02","severity":"S0","test":"tests.test_semantic_rebuild.SemanticRebuildTests.test_missing_or_tampered_revision_membership_is_detected"},
+    {"id":"PC-RBLD-03","severity":"S0","test":"tests.test_semantic_rebuild.SemanticRebuildTests.test_rebuild_rejects_corrupt_membership_without_creating_head"},
+    {"id":"PC-RBLD-04","severity":"S0","test":"tests.test_semantic_rebuild.SemanticRebuildTests.test_tampered_commit_receipt_is_rejected_on_idempotent_readback"},
+
+    {"id":"PC-PROJ-01","severity":"S1","test":"tests.test_semantic_projection.SemanticProjectionTests.test_goal_plan_projection_is_deterministic_round_trippable_and_read_only"},
+    {"id":"PC-PROJ-02","severity":"S0","test":"tests.test_semantic_projection.SemanticProjectionTests.test_request_bounds_reject_bool_zero_negative_and_above_hard_limit"},
+    {"id":"PC-PROJ-03","severity":"S0","test":"tests.test_semantic_projection.SemanticProjectionTests.test_wrong_graph_binding_and_missing_or_disallowed_root_fail_explicitly"},
+    {"id":"PC-PROJ-04","severity":"S1","test":"tests.test_semantic_projection.SemanticProjectionTests.test_optional_node_omission_is_explicit_and_does_not_change_graph"},
+    {"id":"PC-PROJ-05","severity":"S0","test":"tests.test_semantic_projection.SemanticProjectionTests.test_required_goal_plan_blocking_ambiguity_and_obligation_never_silently_overflow"},
+    {"id":"PC-PROJ-06","severity":"S0","test":"tests.test_semantic_projection.SemanticProjectionTests.test_interleaved_membership_fault_never_mixes_snapshot_evidence"},
+    {"id":"PC-PROJ-07","severity":"S0","test":"tests.integration.test_semantic_goal_to_plan.SemanticGoalToPlanIntegrationTests.test_two_fresh_offline_worlds_reproduce_goal_to_plan_without_direct_db"},
+
+    {"id":"PC-ARCH-01","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_architecture_manifest_matches_exact_modules_and_imports"},
+    {"id":"PC-ARCH-02","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_phase_c_public_exports_and_phase_d_absence_are_exact"},
+    {"id":"PC-ARCH-03","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_structural_smoke_is_offline_source_independent_and_reconstructs"},
+    {"id":"PC-ARCH-04","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_semantic_import_is_lazy_for_providers_direct_and_observation"}
+  ]
+}
