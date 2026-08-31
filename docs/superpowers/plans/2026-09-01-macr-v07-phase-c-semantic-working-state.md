@@ -110,6 +110,12 @@ selection only after the frozen source set is complete. A controlled interleave
 deletes membership after the first read: projection returns the coherent pre-
 fault snapshot while later ordinary readback rejects the now-corrupt state.
 
+The first Task 9 focused command named nonexistent
+`tests.test_semantic_contract_boundaries`; a following `git diff --check` also
+overwrote that Python exit code. The run is discarded as a harness error. The
+corrected command uses `tests.test_agent_contract_boundaries`, captures the test
+exit before diff-check, and passes 93 tests.
+
 ## Authorized scope
 
 Allowed:
