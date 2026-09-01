@@ -1,8 +1,10 @@
-# MACR Runtime v0.6.0a1 — T1 Operability + Model-Local Tokens + Direct UI 0.1
+# MACR Runtime v0.7.0a0 — Phase-C Semantic Working State Alpha
 
-MACR is a migration-aware runtime for heterogeneous AI workers. The v0.6.0a1 offline-only candidate preserves the complete Direct plane, adds exact provider/model token policies, and turns the former T1 queue library into a one-attempt production consumer with global reconciliation visibility. Provider completion, private capture, conversation projection, verification, acceptance, merge, release, and live-route activation remain separate states.
+MACR is a migration-aware runtime for heterogeneous AI workers. The v0.7.0a0 Phase-C Alpha preserves the v0.6 Direct and delegated planes, adds the Agent contract/state kernels, and introduces a governed semantic working state: immutable graph revisions, per-Agent pinned bindings, authority-free proposals, atomic host-authorized commits, reconstructible receipts, and deterministic Goal-to-Plan context projection. Provider completion, private capture, semantic commit, projection, verification, acceptance, merge, release, and live-route activation remain separate states.
 
-This alpha line preserves all a3 replay and sensitive-marker repairs. Direct Chat remains a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model and model-token policy per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. No Codex/Claude Code host adapter or live T1 provider route is activated by this branch.
+This alpha line is the completed offline A-C foundation, not the full bounded single-Agent MVP. Phase D verified observation, governed action, temporal continuation, the closed Agent loop, and live provider use remain absent. Direct Chat remains a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model and model-token policy per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. No Codex/Claude Code host adapter or live T1 provider route is activated by this release.
+
+`0.7.0a1` remains reserved for the later A-H bounded single-Agent MVP. Claude Code direct provider access through MACR is recorded as deferred work; it is not implemented by `0.7.0a0` and does not authorize Anthropic API use.
 
 ## Canonical D: placement
 
@@ -187,7 +189,7 @@ Restricted GLM Flash worker, loading its key from D: for this process only:
   --dispatcher-id worker-1 --allow-network
 ```
 
-These commands are implemented but the current route is offline-only. The repository includes only fake-transport complete-path evidence. No exact live manifest has been authorized and no live provider call was made for v0.6.0a1.
+These commands are implemented but the current route is offline-only. The repository includes only fake-transport complete-path evidence. No exact live manifest has been authorized and no live provider call was made for v0.7.0a0.
 
 Generated images are preserved at:
 

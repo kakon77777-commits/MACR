@@ -26,6 +26,7 @@ class V06ReleaseGateTests(unittest.TestCase):
             )
         )
         for marker in (
+            "0.7.0a0",
             "0.6.0a1",
             "model-token-policies.sqlite3",
             "grok-4.6",
@@ -115,7 +116,7 @@ class V06ReleaseGateTests(unittest.TestCase):
         self.assertEqual(document["runtime_schema_version"], 6)
         self.assertEqual(document["observatory_schema_version"], 2)
         self.assertEqual(document["accounting_schema_version"], 2)
-        self.assertEqual(document["version"], "0.6.0a1")
+        self.assertEqual(document["version"], "0.7.0a0")
         self.assertEqual(document["direct_conversation_schema_version"], 2)
         self.assertEqual(document["model_token_policy_schema_version"], 1)
         self.assertEqual(document["model_token_policy_count"], 7)

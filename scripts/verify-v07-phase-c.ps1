@@ -22,6 +22,7 @@ $focusedModules = @(
     'tests.test_semantic_rebuild',
     'tests.test_semantic_projection',
     'tests.integration.test_semantic_goal_to_plan',
+    'tests.test_v07_release',
     'tests.test_v07_phase_c_manifest'
 )
 

@@ -1,6 +1,6 @@
 # Provider status
 
-Updated: 2026-08-30
+Updated: 2026-09-01 for MACR v0.7.0a0 Phase-C Alpha
 
 | Provider ID | Required model/route | Credential | Billing | Runtime state |
 |---|---|---|---:|---|
@@ -18,7 +18,7 @@ Updated: 2026-08-30
 
 ## Shared execution and Direct alpha status
 
-Delegated callable profiles enter the v0.6.0a1 CLI through current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Direct Grok/Qwythos turns keep the separate `DirectRuntime` contract. T1 now has explicit `t1-stage` and one-member `t1-worker` product paths, but the live T1 route remains stopped and offline-only.
+Delegated callable profiles enter the v0.7.0a0 CLI through current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Direct Grok/Qwythos turns keep the separate `DirectRuntime` contract. Phase C adds semantic proposals and host-governed commits but does not invoke providers. T1 has explicit `t1-stage` and one-member `t1-worker` product paths, but the live T1 route remains stopped and offline-only.
 
 Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. The three-process T1 gate uses an injected fake transport; no real provider generation occurred. Direct Chat is locally executable; Codex/Claude Code host adapters and autonomous routing remain unavailable.
 
@@ -87,3 +87,9 @@ For T1, `queue-status` exposes only bounded content-free state. A strict private
 ## Claude boundary
 
 Do not read or use `ANTHROPIC_API_KEY`. A future Claude integration must be an explicitly approved subscription-client route and must not fall back to API billing.
+
+### Deferred Claude Code host adapter
+
+**Claude Code direct provider access** is deferred and NotMeasured in v0.7.0a0. The intended later design lets an authorized Claude Code host call the same provider registry used by MACR—such as Grok, GLM, Google, MiniMax, or local Ollama/Qwythos—without converting Claude subscription access into Anthropic API billing. It must use the same provider registry, model-local token policy, authority/lease gates, candidate separation, and shared accounting records as the Codex-facing route.
+
+This is a host-adapter requirement, not an activated provider profile. No Claude Code adapter, cross-provider context transfer, Direct-conversation read permission, fallback, credential bridge, or live authority exists in this release. The current `claude_subscription` configuration remains disabled with `api_usage_allowed=false`.

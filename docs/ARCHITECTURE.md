@@ -1,4 +1,4 @@
-# MACR v0.6.0a1 T1 Operability + Shared Core + Direct Chat architecture
+# MACR v0.7.0a0 Phase-C Alpha architecture
 
 ```text
 Loopback browser (127.0.0.1, authenticated cookie)
@@ -67,7 +67,9 @@ one SQLite terminal event + accounting outbox
 materialization / verification / acceptance (orthogonal; acceptance host-only)
 ```
 
-The a3 Checkpoint A shared core remains an immutable ancestor and a4 supplies Direct runtime/UI. v0.6 adds Context Capsules, model/route identities, append-only Observatory evidence, deterministic planning, exact T0 execution, durable T1 queue/batch authority, constrained T2 proposals, T3 target ownership/cross-file verification, and blinded differential manifests. v0.6.0a1 adds the production T1 consumer and model-local token policy plane without activating a live route. Codex or Claude Code host adapters, transport-level Direct cancellation, late-result recovery, autonomous acceptance, and an activated live route remain absent.
+The a3 Checkpoint A shared core remains an immutable ancestor and a4 supplies Direct runtime/UI. v0.6 adds Context Capsules, model/route identities, append-only Observatory evidence, deterministic planning, exact T0 execution, durable T1 queue/batch authority, constrained T2 proposals, T3 target ownership/cross-file verification, and blinded differential manifests. v0.6.0a1 adds the production T1 consumer and model-local token policy plane without activating a live route. v0.7.0a0 adds the offline Agent contract/state kernels and Phase-C semantic working state: immutable semantic graphs, Agent-pinned revisions, authority-free proposals, governed atomic commits, reconstructible receipts, and coherent structured projection. Codex or Claude Code host adapters, Phase D observation, transport-level Direct cancellation, late-result recovery, autonomous acceptance, an Agent loop, and an activated live route remain absent.
+
+`agent_runtime=2` and `agent_semantics=1` share the future D-drive Agent SQLite file so graph and Agent binding changes can use one transaction. Their schema components and integrity digests remain separate. Semantic data never grants authority; external authorization, ownership fencing, Agent CAS, and graph CAS remain mandatory.
 
 ## Dynamic coordination boundary
 
@@ -219,7 +221,7 @@ runtime role != authorship identity
 generation != verification != acceptance
 ```
 
-Every delegated provider completion remains a candidate. MACR v0.6.0a1 preserves provider, capture, return-contract, materialization, verification, and acceptance states independently; Direct projection into its private conversation store does not create a coordinated verification or accepted-result transition.
+Every delegated provider completion remains a candidate. MACR v0.7.0a0 preserves provider, capture, return-contract, semantic proposal/commit, materialization, verification, and acceptance states independently; Direct projection into its private conversation store does not create a coordinated verification or accepted-result transition.
 
 ## Model-local token-policy plane
 

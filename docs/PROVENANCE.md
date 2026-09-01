@@ -249,3 +249,19 @@ The original concurrent census RED remains evidence; it is not erased by later q
 The `v0.6.0a0` tag and release decision remain immutable historical evidence. v0.6.0a1 is offline-only until a later exact clean checkpoint and explicit Neo live authorization. No live provider call occurred during this repair.
 
 The first exact clean a1 checkpoint subject was commit `74e81ae5133dd9e9e34fdfc11dae341a10310b2a` / tree `26a232ae138be7dd7f7f21bd4fb62c9d4951711c`. Two complete `verify-v06.ps1` runs each ran 482 tests (480 passed, two existing platform capability skips, zero failures) plus 127 passing targeted tests, five pre/post quiet samples, network false, provider generation false, and byte-identical summary digest `6f93542eac54462bebb03fab8e504c411298d5e01a8c0d0103d28a39e3bd9c24`. This is offline verification, not live acceptance or route activation.
+
+## v0.7.0a0 Phase-C Alpha release
+
+Neo authorized the completed Phase C checkpoint to enter the v0.7 version line.
+The accepted offline implementation base is commit
+`84a562fe58de8a279d427f6dd33ddc05410d1b1c` / tree
+`b0bbbc2210e50d47d6447d1e7bdf32c4aaa2e05f`. It establishes Agent contract and
+state kernels plus semantic working state only. Phase D, governed action,
+temporal continuation, closed loop, shared Agent-state activation, and live use
+remain absent or NotMeasured.
+
+The release version is `0.7.0a0`; `0.7.0a1 remains reserved` for the later A-H
+bounded single-Agent MVP. Claude Code direct provider access is a deferred
+subscription-client host-adapter requirement. No `ANTHROPIC_API_KEY`, provider
+generation, credential read, shared runtime migration, or live route is involved
+in this version transition.

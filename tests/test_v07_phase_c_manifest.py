@@ -131,6 +131,7 @@ class V07PhaseCManifestTests(unittest.TestCase):
                 "PC-SHARE",
                 "PC-RBLD",
                 "PC-PROJ",
+                "PC-REL",
                 "PC-ARCH",
             },
         )

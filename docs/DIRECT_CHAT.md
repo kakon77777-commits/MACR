@@ -1,15 +1,15 @@
 # MACR Direct Chat UI 0.1 Operator Guide
 
-Status: retained Direct UI `0.1` under `MACR 0.6.0a1`, 2026-08-30
+Status: retained Direct UI `0.1` under `MACR 0.7.0a0`, 2026-09-01
 
-This is the executable Direct plane for provider-native Grok 4.6 and local Qwythos conversations. It is not the future MACR v0.6 dynamic-coordination runtime. The v0.6 design and implementation plan remain separately versioned and unchanged.
+This is the executable Direct plane for provider-native Grok 4.6 and local Qwythos conversations. It remains separate from the v0.7 Agent semantic plane. Earlier v0.5/v0.6 design and implementation records remain separately versioned and unchanged.
 
 ## Install and open
 
-From the isolated a4 candidate checkout:
+From the current v0.7.0a0 checkout:
 
 ```powershell
-Set-Location 'D:\Ai\work together\MACR\.worktrees\macr-v0.6-dynamic-coordination'
+Set-Location 'D:\Ai\work together\MACR'
 .\scripts\install-direct-chat-shortcut.ps1
 ```
 
@@ -94,7 +94,7 @@ MACR retains only content-free provider accounting, operational hashes/Candidate
 
 The implementation gate is offline/local and does not spend Grok credit. The operator completes the remaining live acceptance from the UI:
 
-1. Open the v0.6 checkout's launcher and confirm the header says `MACR 0.6.0a1 · Direct UI 0.1 alpha`.
+1. Open the v0.7 checkout's launcher and confirm the header says `MACR 0.7.0a0 · Direct UI 0.1 alpha`.
 2. Confirm Grok reports a configured state and Qwythos reports the installed local model/digest.
 3. Create a Qwythos conversation with a blank system prompt. Send two turns where the second depends on the first. Refresh/reopen and confirm all four messages persist in order.
 4. Create a Grok conversation with a short, visible system prompt or a blank prompt. Send two bounded turns where the second depends on the first. Confirm the response appears only when complete.
@@ -109,4 +109,4 @@ The implementation gate is offline/local and does not spend Grok credit. The ope
 - No tools, web-search controls, files, images, or voice surface.
 - No automatic retry, summarization, compaction, routing, verification, materialization, or acceptance.
 - No transport-level cancel control or explicit late-result recovery in UI 0.1. These are required before `0.5.0b1`.
-- No merge, release, deployment, publication, or v0.6 implementation follows merely from installing this local alpha shortcut.
+- Installing the shortcut grants no provider authority, Agent semantic commit authority, deployment, or later-version behavior.

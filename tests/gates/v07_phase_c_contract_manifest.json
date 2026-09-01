@@ -53,6 +53,10 @@
     {"id":"PC-PROJ-06","severity":"S0","test":"tests.test_semantic_projection.SemanticProjectionTests.test_interleaved_membership_fault_never_mixes_snapshot_evidence"},
     {"id":"PC-PROJ-07","severity":"S0","test":"tests.integration.test_semantic_goal_to_plan.SemanticGoalToPlanIntegrationTests.test_two_fresh_offline_worlds_reproduce_goal_to_plan_without_direct_db"},
 
+    {"id":"PC-REL-01","severity":"S0","test":"tests.test_v07_release.V07PhaseCAlphaReleaseTests.test_active_runtime_and_operator_surfaces_use_one_phase_c_alpha_version"},
+    {"id":"PC-REL-02","severity":"S0","test":"tests.test_v07_release.V07PhaseCAlphaReleaseTests.test_release_record_is_bound_to_phase_c_and_preserves_a1_reservation"},
+    {"id":"PC-REL-03","severity":"S0","test":"tests.test_v07_release.V07PhaseCAlphaReleaseTests.test_claude_code_direct_provider_access_is_deferred_not_activated"},
+
     {"id":"PC-ARCH-01","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_architecture_manifest_matches_exact_modules_and_imports"},
     {"id":"PC-ARCH-02","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_phase_c_public_exports_and_phase_d_absence_are_exact"},
     {"id":"PC-ARCH-03","severity":"S0","test":"tests.test_v07_phase_c_manifest.V07PhaseCManifestTests.test_structural_smoke_contract_is_offline_and_reconstructs_from_source"},

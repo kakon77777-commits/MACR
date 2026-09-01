@@ -1,6 +1,6 @@
 # Storage and migration contract
 
-Status: active at MACR v0.6.0a1 offline-only T1 operability candidate with retained Direct UI 0.1
+Status: active at MACR v0.7.0a0 Phase-C Alpha with retained Direct UI 0.1
 
 Policy tags: `C_DRIVE_PERSISTENCE_FORBIDDEN`, `D_RESIDENCE_CANONICAL`, `SECRETS_EXTERNAL`
 
@@ -45,6 +45,7 @@ OLLAMA_MODELS
 
 ```text
 D:\AI_RESIDENCE\AI_Runtime\macr-state\
+  runtime\agent.sqlite3        future Agent/semantic state; not created by release
   runtime\dispatch.sqlite3       operational events, runs, exact authority,
                                  T1 queue, target leases, legacy/candidate provenance
   accounting\accounting.sqlite3 invocation accounting and local outbox
@@ -72,9 +73,11 @@ observatory SQLite          2
 accounting SQLite           2
 Direct conversation schema  2
 model-token policy schema   1
+Agent runtime schema        2
+semantic schema             1
 ```
 
-Runtime schema 6 contains exact batch-authority bodies, bounded queue batches/members, digest-only target claims, and digest-only fenced target-path leases. v0.6.0a1 uses those tables for global `queue-status`, exact T1 staging, one-attempt workers, and explicit `reconciliation_required` resolution. Resolving an ambiguous member revokes the old batch; it never requeues or grants a replacement writer. Raw task bodies, answers and target paths remain absent from runtime/accounting databases.
+Runtime schema 6 contains exact batch-authority bodies, bounded queue batches/members, digest-only target claims, and digest-only fenced target-path leases. v0.7.0a0 retains those tables for global `queue-status`, exact T1 staging, one-attempt workers, and explicit `reconciliation_required` resolution. The separate future `runtime\agent.sqlite3` hosts Agent lifecycle and semantic components only when an operator explicitly creates it; this release did not create or migrate shared Agent state. Resolving an ambiguous member revokes the old batch; it never requeues or grants a replacement writer. Raw task bodies, answers and target paths remain absent from runtime/accounting databases.
 
 Direct archive is reversible and changes no content bytes. Permanent Direct deletion is a separate operator-confirmed path requiring exact `DELETE`. It refuses conversations with an active run, overwrites and removes unmaterialized Candidate answer files, deletes Direct conversation/message/run rows with SQLite `secure_delete=ON`, and requires a successful WAL `TRUNCATE` checkpoint. Content-free invocation accounting, operational hashes, Candidate metadata, and a deletion tombstone remain for cost/audit continuity. MACR does not claim forensic erasure from SSD wear-leveling, filesystem snapshots, external backups, provider retention, or already materialized external artifacts.
 

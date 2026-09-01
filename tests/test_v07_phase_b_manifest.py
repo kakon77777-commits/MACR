@@ -218,7 +218,7 @@ class V07PhaseBManifestTests(unittest.TestCase):
         from macr_runtime.contracts import TaskContract
 
         self.assertIs(macr_runtime.TaskContract, TaskContract)
-        self.assertEqual(macr_runtime.__version__, "0.6.0a1")
+        self.assertEqual(macr_runtime.__version__, "0.7.0a0")
         for name in macr_runtime.__all__:
             self.assertIsNotNone(getattr(macr_runtime, name), name)
 
