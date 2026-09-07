@@ -350,3 +350,35 @@ identical wheel SHA
 `b67e13954b4c85e12749169590d23953e72fc977aafa0f3bed757fdd4e613ccd`,
 epoch `1788773322`, identical state/replay digests, network false, provider
 generation false, Phase D false, and clean Git state.
+
+## v0.7.0a0 dynamic T1 worker topology candidate
+
+Neo rejected the earlier pressure-test count of three as a standing product
+limit and directed T1 concurrency and cost envelopes to become operator
+configurable. The implementation commit is
+`bf993074881d9884f0e704b9bc7851ca5fb07a4f` / tree
+`c583e7dd303ac348a064d85bc9648b07735801fa`.
+
+T1 manifest schema 4 binds an explicit `worker_count`, an arbitrary nonempty
+ordered member set within the existing strict 4 MiB manifest boundary, the
+exact dispatcher set, positive per-member ceilings, their exact aggregate, and
+an operator-selected campaign ceiling that covers the aggregate. Member and
+manifest authority use v4 digest domains. Worker count may be lower than member
+count, and an authorized dispatcher may be invoked again to drain later queued
+work. No arbitrary three-worker or fixed USD 0.010/0.030/0.040 protocol ceiling
+remains.
+
+Schema 3 remains immutable audit evidence under
+`legacy_fixed_three_workers`; schemas 1 and 2 retain their prior audit labels.
+All three fail before staging or dispatch and are never silently upgraded. The
+topology identity remains `T1_FANOUT_VERIFIED`; schema 4 carries the changed
+contract.
+
+The implementation RED/GREEN evidence includes a four-worker/five-member
+dispatcher path, a five-process complete-path runtime/Vault/event/accounting
+mock, dynamic cost relations, CLI count projection, and typed schema-3
+rejection. The first post-implementation complete unit replay ran 814 tests
+with zero failures and two existing platform capability skips. This replay was
+offline: no provider call, key read, shared-state mutation, migration, or live
+authority activation occurred. The final clean Phase-C gate is recorded in the
+separate exact checkpoint after documentation is committed.

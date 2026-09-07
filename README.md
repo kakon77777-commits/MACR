@@ -86,12 +86,15 @@ new conversation rather than silently rebinding its history. A legacy local
 Qwythos v1 snapshot is verified under its original digest and retains the same
 local limits in memory; it does not acquire the cloud floor.
 
-The future T1 live preset is separate and stricter: exact `glm-5.3-flash`,
-128,000 context and 16,384 output. Its fixed ceilings are USD 0.010 per member,
-USD 0.030 for three members and USD 0.040 for the campaign. Older T1 manifests
-bind the previous token-policy digest and cost envelope and must be regenerated;
-they are not silently upgraded. Current member and manifest authority digests
-both use v3 domains.
+The T1 GLM preset is separate: exact `glm-5.3-flash`, 128,000 context and
+16,384 output. T1 manifest schema 4 no longer fixes the batch at three members
+or three workers. `worker_count` is explicit and digest-bound, may range from
+one through the exact member count, and must match the authorized dispatcher
+set. Each member carries its own positive exact cost ceiling; the aggregate
+must equal the sum of all member ceilings, while the operator-selected campaign
+ceiling must cover that aggregate. Older schema-1/2/3 manifests remain
+audit-visible and are never silently upgraded. Current member and manifest
+authority digests use v4 domains.
 
 ## Shared-core execution boundary
 
@@ -121,13 +124,13 @@ cd 'D:\Ai\work together\MACR'
 .\scripts\verify-v06.ps1
 ```
 
-Both suites are offline. `verify.ps1` runs the complete repository baseline. `verify-v06.ps1` holds the named `MACR_V06_QUIET_CENSUS` mutex, requires five zero-invoker samples before and after the suite, and adds exact schema fingerprints, the 1/2/3/4/8 queue matrix, a real three-process T1 complete-path mock, synchronized 32-process bootstrap, planner replay, identity, qualification, target-collision, accounting-privacy, cross-file and differential gates. It emits one deterministic `V06_SUMMARY` line and contacts no real provider or local model.
+Both suites are offline. `verify.ps1` runs the complete repository baseline. `verify-v06.ps1` holds the named `MACR_V06_QUIET_CENSUS` mutex, requires five zero-invoker samples before and after the suite, and adds exact schema fingerprints, the 1/2/3/4/8 queue matrix, a five-process dynamic T1 complete-path mock, synchronized 32-process bootstrap, planner replay, identity, qualification, target-collision, accounting-privacy, cross-file and differential gates. It emits one deterministic `V06_SUMMARY` line and contacts no real provider or local model.
 
 Phase B/C package replay pins `SOURCE_DATE_EPOCH` to the exact candidate commit
 timestamp. Repeated clean gates therefore require the generated wheel hash—not
 only the semantic replay digests—to remain byte-identical.
 
-Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token-policy store schema 1 / policy contract v2, provider-capability-policy schema 2, and T1 manifest schema 3.
+Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token-policy store schema 1 / policy contract v2, provider-capability-policy schema 2, and T1 manifest schema 4.
 
 For the dedicated multiprocess replay from a source checkout:
 
@@ -247,12 +250,13 @@ digest receives that label; arbitrary mismatches are counted as invalid.
 
 ## T1 staging and worker commands
 
-`queue-status` globally enumerates bounded content-free queue rows, including `reconciliation_required`, without task bodies, answers, credentials, or paths. `t1-stage` loads one strict private three-member manifest at 16,384 output tokens and USD 0.010 per member / USD 0.030 aggregate / USD 0.040 campaign, verifies all three existing GLM host approvals and the exact T1 token policy, signs batch plus dispatch authority, and enqueues without a provider call. `t1-worker` claims at most one exact member and performs no retry or fallback.
+`queue-status` globally enumerates bounded content-free queue rows, including `reconciliation_required`, without task bodies, answers, credentials, or paths. `t1-stage` loads one strict private schema-4 manifest, verifies every member's existing GLM host approval and the exact T1 token policy, checks that its digest-bound `worker_count` matches the dispatcher set, signs batch plus dispatch authority, and enqueues without a provider call. Member count, worker count, per-member ceilings and the campaign ceiling are operator-selected manifest data rather than fixed constants. `t1-worker` claims at most one exact member per invocation and performs no retry or fallback; an authorized dispatcher may be invoked again to drain a later queued member.
 
 ```powershell
 .\scripts\macr.ps1 queue-status --state reconciliation_required
 .\scripts\macr.ps1 t1-stage .\private\t1-manifest.json `
-  --dispatcher-id worker-1 --dispatcher-id worker-2 --dispatcher-id worker-3 `
+  --dispatcher-id worker-1 --dispatcher-id worker-2 `
+  --dispatcher-id worker-3 --dispatcher-id worker-4 `
   --expires-in-minutes 30
 .\scripts\macr.ps1 t1-worker .\private\t1-manifest.json `
   --dispatcher-id worker-1 --allow-network
