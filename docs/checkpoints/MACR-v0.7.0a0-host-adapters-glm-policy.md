@@ -13,8 +13,8 @@ worktree         D:\Ai\work together\MACR\.worktrees\v070a0-host-adapters-glm-po
 branch           feature/v070a0-host-adapters-glm-policy
 base commit      20a2d5e02e34c0faf74fcaa5c40721df9aa37763
 base tree        a16a181a96e7ede415648872b68263db43a02d13
-code commit      f838bf87eb4b002a08dd2fc6dcf6c124027f857f
-code tree        12f39b35c54cabdc07b4c385e27c11ba8ce6cc02
+code commit      6547c3af6b8cbc46e08a73ba1fd4137bc7e4ca24
+code tree        851fede0e18069b26d7faac19bf720e69104b478
 package version  0.7.0a0
 ```
 
@@ -82,9 +82,33 @@ git clean           true
 ```
 
 The later code-only commit `f838bf8` added the concrete pre-issued-authority
-activation verifier and passed all six provider-capability-store tests. Final
-documentation-subject verification is a separate gate and does not rewrite the
-evidence above.
+activation verifier and passed all six provider-capability-store tests.
+
+Two initially green complete gates on documentation commit `af5e787` exposed a
+reproducibility defect outside the feature logic: all semantic/state digests
+matched, but five generated `.dist-info` ZIP timestamps changed the wheel hash.
+A minimal two-build probe reproduced different hashes with exactly those five
+timestamp changes. Commit `6547c3a` pins `SOURCE_DATE_EPOCH` to the exact
+candidate commit timestamp in Phase B and C gates. The minimal control then
+produced two byte-identical wheels.
+
+Two consecutive clean complete Phase C gates on exact `6547c3a` / tree
+`851fede0e18069b26d7faac19bf720e69104b478` produced identical evidence:
+
+```text
+inherited tests      778
+failures               0
+platform skips         2
+wheel sha256          220e4f9907a81347d620dc9d93de3a5c89a47ebb0c996f466553ac87ad60f283
+source date epoch     1788771048
+network activity   false
+provider generation false
+phase D started    false
+git clean           true
+```
+
+All Agent, semantic, graph, projection, attachment, commit and replay digests
+were byte-identical between the two summaries.
 
 ## Claude and Codex operational status
 

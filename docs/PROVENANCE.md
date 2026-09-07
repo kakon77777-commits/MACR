@@ -287,9 +287,10 @@ The implementation train is append-only:
 | GLM approval schema 3 and T1 manifest schema 2 | `be95675` |
 | governed shared host adapter and read-only status surfaces | `0a0ba159` |
 | pre-issued-authority tier activation verifier | `f838bf87eb4b002a08dd2fc6dcf6c124027f857f` |
+| deterministic wheel verification | `6547c3af6b8cbc46e08a73ba1fd4137bc7e4ca24` |
 
-The code subject is `f838bf87eb4b002a08dd2fc6dcf6c124027f857f` /
-tree `12f39b35c54cabdc07b4c385e27c11ba8ce6cc02`. Package version remains
+The final code/gate subject is `6547c3af6b8cbc46e08a73ba1fd4137bc7e4ca24` /
+tree `851fede0e18069b26d7faac19bf720e69104b478`. Package version remains
 `0.7.0a0`.
 
 The former GLM transport `min(max_latency_s, 300)` was replaced by exact tier
@@ -318,5 +319,14 @@ A clean Phase C run on code commit `0a0ba159` executed 777 inherited tests plus
 the Phase A/B/C focused gates with two existing platform capability skips, zero
 failures, network false, provider generation false, Phase D false and clean Git
 state. The subsequent activation-verifier commit passed all six focused store
-tests. No key read, real provider call, shared-state migration/activation,
-merge, tag, push, release, deployment or adoption occurred in this candidate.
+tests.
+
+Two green gates on the first documentation subject revealed differing wheel
+hashes despite identical state/replay evidence. A minimal two-build probe traced
+the difference to five generated `.dist-info` ZIP timestamps. Phase B/C now pin
+`SOURCE_DATE_EPOCH` to the candidate commit timestamp. Two consecutive clean
+gates on `6547c3a` each ran 778 inherited tests and produced identical wheel SHA
+`220e4f9907a81347d620dc9d93de3a5c89a47ebb0c996f466553ac87ad60f283`,
+epoch `1788771048`, and identical state/replay digests. No key read, real
+provider call, shared-state migration/activation, merge, tag, push, release,
+deployment or adoption occurred in this candidate.

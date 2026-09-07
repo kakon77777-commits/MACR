@@ -100,6 +100,10 @@ cd 'D:\Ai\work together\MACR'
 
 Both suites are offline. `verify.ps1` runs the complete repository baseline. `verify-v06.ps1` holds the named `MACR_V06_QUIET_CENSUS` mutex, requires five zero-invoker samples before and after the suite, and adds exact schema fingerprints, the 1/2/3/4/8 queue matrix, a real three-process T1 complete-path mock, synchronized 32-process bootstrap, planner replay, identity, qualification, target-collision, accounting-privacy, cross-file and differential gates. It emits one deterministic `V06_SUMMARY` line and contacts no real provider or local model.
 
+Phase B/C package replay pins `SOURCE_DATE_EPOCH` to the exact candidate commit
+timestamp. Repeated clean gates therefore require the generated wheel hash—not
+only the semantic replay digests—to remain byte-identical.
+
 Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token policy schema 1, provider-capability-policy schema 1, and T1 manifest schema 2.
 
 For the dedicated multiprocess replay from a source checkout:
