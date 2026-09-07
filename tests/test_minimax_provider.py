@@ -5,7 +5,11 @@ from typing import Any, Mapping
 
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import PrivacyLevel, TaskConstraints, TaskContract
-from macr_runtime.errors import ProviderPolicyError, ProviderProtocolError
+from macr_runtime.errors import (
+    ProviderOutputBudgetTooSmallError,
+    ProviderPolicyError,
+    ProviderProtocolError,
+)
 from macr_runtime.providers.minimax import MiniMaxProvider
 from macr_runtime.providers.common import BOUNDED_WORKER_INSTRUCTION
 from macr_runtime.providers.http_json import UrllibJsonTransport
@@ -53,6 +57,7 @@ def cloud_task() -> TaskContract:
         constraints=TaskConstraints(
             max_cost_usd=0.01,
             max_latency_s=5,
+            max_output_tokens=2_048,
             internet=True,
             privacy=PrivacyLevel.INTERNAL_APPROVED,
         ),
@@ -64,7 +69,7 @@ class MiniMaxProviderTests(unittest.TestCase):
         self.env = {
             "MACR_TEST_PROVIDER_KEY": "test-key",
             "MACR_TEST_PROVIDER_BASE_URL": "https://example.invalid/v1",
-            "MACR_TEST_PROVIDER_MODEL": "test-model",
+            "MACR_TEST_PROVIDER_MODEL": "MiniMax-M2.7",
         }
 
     def test_offline_transport_normalizes_candidate(self) -> None:
@@ -82,7 +87,7 @@ class MiniMaxProviderTests(unittest.TestCase):
         self.assertEqual(len(transport.calls), 1)
         call = transport.calls[0]
         self.assertEqual(call["url"], "https://example.invalid/v1/chat/completions")
-        self.assertEqual(call["payload"]["model"], "test-model")
+        self.assertEqual(call["payload"]["model"], "MiniMax-M2.7")
         self.assertEqual(
             call["payload"]["max_completion_tokens"],
             cloud_task().constraints.max_output_tokens,
@@ -108,6 +113,29 @@ class MiniMaxProviderTests(unittest.TestCase):
         health = provider.health()
         self.assertFalse(health.ready)
         self.assertEqual(health.status, "configuration_incomplete")
+        self.assertEqual(transport.calls, [])
+
+    def test_output_below_provider_limited_floor_fails_before_key_or_transport(self) -> None:
+        transport = FakeTransport({})
+        provider = MiniMaxProvider(
+            provider_config(),
+            transport=transport,
+            environ={"MACR_TEST_PROVIDER_MODEL": "MiniMax-M2.7"},
+        )
+        task = cloud_task()
+        task = TaskContract.from_dict(
+            {
+                **task.to_dict(),
+                "constraints": {
+                    **task.constraints.to_dict(),
+                    "max_output_tokens": 1_024,
+                },
+            }
+        )
+
+        with self.assertRaises(ProviderOutputBudgetTooSmallError):
+            provider.invoke(task)
+
         self.assertEqual(transport.calls, [])
 
     def test_local_only_task_is_denied_before_network(self) -> None:

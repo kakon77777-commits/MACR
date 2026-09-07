@@ -58,15 +58,15 @@ There is no automatic provider routing or fallback. A failed provider never invo
 
 Token limits are no longer one global setting. Built-ins and append-only operator overrides are keyed by exact provider/model and stored at `settings\model-token-policies.sqlite3`. A new Direct conversation pins the exact canonical policy JSON and digest; changing an active override affects only later conversations. Delegated dispatch records the same digest and refuses an under-floor or over-limit task before authority admission or transport; GLM approval schema 3 binds it together with task ID, exact latency and provider-tier binding.
 
-| Exact provider/model | Warning context | Hard context | Default output | MACR max output |
-|---|---:|---:|---:|---:|
-| `grok/grok-4.6` | 180,000 | 400,000 | 32,768 | 65,536 |
-| `grok_standard/grok-4.3` | 180,000 | 400,000 | 32,768 | 65,536 |
-| `glm_flash_worker/glm-5.3-flash` | 400,000 | 512,000 | 16,384 | 65,536 |
-| `google_gemini/gemini-3.7-flash` | 400,000 | 512,000 | 16,384 | 65,536 |
-| `minimax/MiniMax-M2.7` | 160,000 | 180,000 | 2,048 | 2,048 |
-| `minimax/MiniMax-M2.7-highspeed` | 160,000 | 180,000 | 2,048 | 2,048 |
-| `ollama_qwythos/Qwythos-9B-v2` | 7,000 | 8,192 | 4,096 | 4,096 |
+| Exact provider/model | Warning context | Hard context | Minimum task output | Default output | MACR max output |
+|---|---:|---:|---:|---:|---:|
+| `grok/grok-4.6` | 180,000 | 400,000 | 32,768 | 32,768 | 65,536 |
+| `grok_standard/grok-4.3` | 180,000 | 400,000 | 32,768 | 32,768 | 65,536 |
+| `glm_flash_worker/glm-5.3-flash` | 400,000 | 512,000 | 16,384 | 16,384 | 65,536 |
+| `google_gemini/gemini-3.7-flash` | 400,000 | 512,000 | 16,384 | 16,384 | 65,536 |
+| `minimax/MiniMax-M2.7` | 160,000 | 180,000 | 2,048 | 2,048 | 2,048 |
+| `minimax/MiniMax-M2.7-highspeed` | 160,000 | 180,000 | 2,048 | 2,048 | 2,048 |
+| `ollama_qwythos/Qwythos-9B-v2` | 7,000 | 8,192 | 1 | 4,096 | 4,096 |
 
 `TaskConstraints.max_output_tokens` now defaults to 16,384. For external text
 models, the exact model-local default is also a hard quality floor: Grok uses
@@ -75,6 +75,14 @@ models, the exact model-local default is also a hard quality floor: Grok uses
 ceiling. Loopback Qwythos does not inherit the cloud floor. An external
 operator override cannot lower its default below 16,384 unless the provider's
 own output ceiling is lower.
+
+The quality floor is an explicit field in model-token policy contract v2 and
+therefore changes the policy digest. Grok, Gemini, MiniMax and GLM adapters
+repeat the check before credential access; runtime admission is not the sole
+enforcement point. Existing GLM approvals bind policy-v1 digests and must be
+regenerated. A legacy Grok Direct conversation without a current v2 policy
+snapshot fails before message append, authority admission or network; create a
+new conversation rather than silently rebinding its history.
 
 The future T1 live preset is separate and stricter: exact `glm-5.3-flash`,
 128,000 context and 16,384 output. Its fixed ceilings are USD 0.010 per member,
@@ -116,7 +124,7 @@ Phase B/C package replay pins `SOURCE_DATE_EPOCH` to the exact candidate commit
 timestamp. Repeated clean gates therefore require the generated wheel hash—not
 only the semantic replay digests—to remain byte-identical.
 
-Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token policy schema 1, provider-capability-policy schema 2, and T1 manifest schema 2.
+Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token-policy store schema 1 / policy contract v2, provider-capability-policy schema 2, and T1 manifest schema 3.
 
 For the dedicated multiprocess replay from a source checkout:
 
@@ -216,8 +224,9 @@ than silently enlarged. Reaching the floor reduces the observed exhaustion
 risk but does not guarantee visible content: a `length` response whose output
 is entirely reasoning becomes the distinct
 `ProviderReasoningBudgetExhaustedError`, preserves safe usage/cost evidence,
-performs no automatic retry, and requires a newly approved larger envelope for
-any later attempt.
+records typed `failure_code` / `provider_response_validation` in terminal and
+accounting state, performs no automatic retry, and requires a newly approved
+larger envelope for any later attempt.
 
 Read the current tier, legacy approval/queue counts and accounting state without
 creating or migrating state:

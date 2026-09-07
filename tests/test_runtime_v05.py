@@ -11,6 +11,7 @@ from macr_runtime.authority import AuthorityScope
 from macr_runtime.config import ConnectionScope
 from macr_runtime.contracts import (
     DelegationClass,
+    PrivacyLevel,
     ProviderResult,
     ResultStatus,
     ReturnContract,
@@ -33,10 +34,18 @@ from macr_runtime.providers.base import BaseProvider, ProviderHealth
 from macr_runtime.provider_capability import ProviderTierBinding, glm_standard_policy
 from macr_runtime.provider_capability import glm_extended_text_policy
 from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
+from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime, dispatch_resource_key
 
 from tests.support import build_test_services, d_drive_tempdir
+from tests.test_glm_provider import (
+    AllowingApprovalStore,
+    FakeTransport,
+    StaticKeySource,
+    glm_config,
+    success_document,
+)
 
 
 class ObservedProvider(BaseProvider):
@@ -523,6 +532,73 @@ class RuntimeV05Tests(unittest.TestCase):
         self.assertGreater(accounting["currency_cost_usd"], 0)
         self.assertEqual(accounting["candidate_status"], "candidate_failure")
         self.assertEqual(capture.sha256, hashlib.sha256(b"PARTIAL").hexdigest())
+
+    def test_glm_reasoning_exhaustion_reaches_typed_terminal_accounting(self) -> None:
+        document = success_document()
+        document["choices"][0]["finish_reason"] = "length"
+        document["choices"][0]["message"]["content"] = ""
+        document["usage"]["completion_tokens"] = 16_384
+        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 16_384
+        document["usage"]["total_tokens"] = 16_404
+        provider = GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(document),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(task_id="glm-reasoning-exhaustion-runtime")
+        unsigned = replace(
+            base,
+            constraints=replace(
+                base.constraints,
+                max_cost_usd=0.02,
+                privacy=PrivacyLevel.PUBLIC,
+            ),
+            delegation_approval_sha256=None,
+        )
+        approval = provider.approval_metadata(unsigned)[
+            "required_approval_sha256"
+        ]
+        task = replace(unsigned, delegation_approval_sha256=approval)
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            context = issue_context(
+                services,
+                provider.provider_id,
+                task,
+                provider_tier_binding_digest=(
+                    provider.capability_binding.binding_digest
+                ),
+            )
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+            accounting = services.accounting.read_invocation(context.run_id)
+            terminal = services.events.read_events(run_id=context.run_id)[-1]
+
+        self.assertEqual(
+            result.failure_code,
+            "ProviderReasoningBudgetExhaustedError",
+        )
+        self.assertEqual(result.failure_stage, "provider_response_validation")
+        self.assertEqual(
+            accounting["failure_code"],
+            "ProviderReasoningBudgetExhaustedError",
+        )
+        self.assertEqual(
+            accounting["failure_stage"],
+            "provider_response_validation",
+        )
+        self.assertEqual(
+            terminal["payload"]["failure_type"],
+            "ProviderReasoningBudgetExhaustedError",
+        )
+        self.assertEqual(
+            terminal["payload"]["failure_stage"],
+            "provider_response_validation",
+        )
 
     def test_missing_authority_refuses_before_dispatch_or_provider(self) -> None:
         provider = ObservedProvider("test_provider", answer="candidate")

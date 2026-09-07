@@ -367,12 +367,11 @@ class GlmFlashWorkerProvider(BaseProvider):
             )
         )
         self.token_policy_is_explicit = token_policy is not None
-        self.token_policy = token_policy or (
-            ModelTokenPolicyResolver.builtins_only().resolve(
-                self.provider_id,
-                _FIXED_MODEL,
-            )
+        canonical_token_policy = ModelTokenPolicyResolver.builtins_only().resolve(
+            self.provider_id,
+            _FIXED_MODEL,
         )
+        self.token_policy = token_policy or canonical_token_policy
         if (
             self.token_policy.provider_id != self.provider_id
             or self.token_policy.model_id != _FIXED_MODEL
@@ -381,6 +380,18 @@ class GlmFlashWorkerProvider(BaseProvider):
         ):
             raise ConfigurationError(
                 "GLM token policy must match the fixed provider, model, and scope"
+            )
+        if (
+            self.token_policy.provider_context_ceiling_tokens
+            != canonical_token_policy.provider_context_ceiling_tokens
+            or self.token_policy.provider_output_ceiling_tokens
+            != canonical_token_policy.provider_output_ceiling_tokens
+            or self.token_policy.minimum_task_output_tokens
+            != canonical_token_policy.minimum_task_output_tokens
+        ):
+            raise ConfigurationError(
+                "GLM token policy provider ceiling and quality floor must match "
+                "the immutable adapter definition"
             )
         selected_policy = capability_policy
         if selected_policy is None:
@@ -854,6 +865,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         observation: RawProviderObservation,
         *,
         failure_type: str | None = None,
+        failure_stage: str | None = None,
     ) -> dict[str, Any]:
         meta = {
             "provider": self.provider_id,
@@ -873,6 +885,8 @@ class GlmFlashWorkerProvider(BaseProvider):
         }
         if failure_type is not None:
             meta["failure_type"] = failure_type
+        if failure_stage is not None:
+            meta["failure_stage"] = failure_stage
         return meta
 
     def _validate_observation(
@@ -984,15 +998,19 @@ class GlmFlashWorkerProvider(BaseProvider):
         try:
             result = self._validate_observation(task, document, observation)
         except MacrError as exc:
+            failure_stage = "provider_response_validation"
             result = ProviderResult(
                 task_id=task.task_id,
                 status=ResultStatus.CANDIDATE_FAILURE,
                 answer="",
                 cost=self._cost_from_observation(document, observation),
                 warnings=(str(exc),),
+                failure_code=type(exc).__name__,
+                failure_stage=failure_stage,
                 provider_meta=self._provider_meta_from_observation(
                     observation,
                     failure_type=type(exc).__name__,
+                    failure_stage=failure_stage,
                 ),
             )
         return ProviderExecution.from_observation(observation, result)

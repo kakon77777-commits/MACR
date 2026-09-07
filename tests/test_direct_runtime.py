@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import uuid
 import unittest
 from dataclasses import replace
@@ -13,7 +14,10 @@ from macr_runtime.direct_runtime import (
 )
 from macr_runtime.direct_settings import DirectSettingsStore
 from macr_runtime.direct_store import DirectConversationStore
-from macr_runtime.errors import DirectStoreConflict
+from macr_runtime.errors import (
+    DirectStoreConflict,
+    LegacyDirectTokenPolicyIncompatibleError,
+)
 from macr_runtime.execution import ProviderState, ProviderUsage, RawProviderObservation
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.token_policy import ModelTokenOverride, ModelTokenPolicyResolver
@@ -140,6 +144,39 @@ class DirectRuntimeTests(unittest.TestCase):
             token_policies=token_policies,
         )
         return runtime, services, conversations, settings, grok, qwythos
+
+    def test_legacy_grok_without_pinned_token_policy_fails_before_dispatch(self) -> None:
+        with d_drive_tempdir() as root:
+            runtime, services, conversations, _, grok, _ = self.build_runtime(root)
+            conversation = runtime.create_conversation(
+                "grok",
+                conversation_id="00000000-0000-4000-8000-000000000709",
+            )
+            connection = sqlite3.connect(conversations.database.path)
+            connection.execute(
+                """UPDATE conversations
+                SET model_token_policy_json = NULL,
+                    model_token_policy_sha256 = NULL
+                WHERE conversation_id = ?""",
+                (conversation["conversation_id"],),
+            )
+            connection.commit()
+            connection.close()
+
+            with self.assertRaisesRegex(
+                LegacyDirectTokenPolicyIncompatibleError,
+                "legacy_direct_token_policy_incompatible",
+            ):
+                runtime.send_message(
+                    conversation["conversation_id"],
+                    "must not dispatch",
+                    origin_native_id="browser-session-legacy",
+                )
+
+            events = services.events.read_events()
+
+        self.assertEqual(grok.calls, [])
+        self.assertEqual(events, ())
 
     def test_model_override_is_local_and_existing_conversation_stays_pinned(self) -> None:
         with d_drive_tempdir() as root:

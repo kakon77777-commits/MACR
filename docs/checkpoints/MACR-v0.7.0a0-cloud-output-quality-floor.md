@@ -45,13 +45,14 @@ were not treated as dispatchable tasks.
 ## Effective design
 
 - `TaskConstraints.max_output_tokens` defaults to 16,384.
-- An external text task must request at least its exact model-local
-  `default_output_tokens`; this value is already inside the model policy digest.
+- Model-token policy contract v2 serializes `minimum_task_output_tokens` into
+  its digest. An external text task must request at least that exact floor.
 - Grok's floor is 32,768. GLM/Gemini use 16,384. MiniMax remains a visible
   2,048 exception because its configured provider output ceiling is 2,048.
   Loopback Qwythos does not inherit the cloud rule.
-- External operator overrides below 16,384 are invalid unless the immutable
-  provider output ceiling itself is lower.
+- External operator overrides cannot change the immutable floor or provider
+  ceilings. MiniMax's 2,048 exception is rooted in its adapter definition;
+  caller-supplied ceilings cannot manufacture another exception.
 - GLM preflight rejects a below-floor request before key/transport and returns a
   content-free `output_budget_below_quality_floor` diagnostic.
 - GLM task-type rejection returns requested safe type plus exact active
@@ -63,10 +64,25 @@ were not treated as dispatchable tasks.
 - A no-content `length` response with all but at most one generated token
   reported as reasoning becomes
   `ProviderReasoningBudgetExhaustedError`. Safe response and cost observations
-  remain available, and no retry occurs.
-- T1 remains schema 2 but now binds a new 128,000 / 16,384 token-policy digest
-  and exact USD 0.010 / 0.030 / 0.040 ceilings. Old manifests do not migrate in
-  place and must be regenerated/reapproved.
+  remain available; terminal/accounting rows receive the same typed failure at
+  `provider_response_validation`, and no retry occurs.
+- Grok, Gemini, MiniMax and GLM adapters repeat the floor check before reading a
+  credential or contacting a provider. Grok Direct does the same. Legacy Grok
+  Direct rows without a v2 snapshot fail before message append or dispatch and
+  must continue in a newly created conversation.
+- T1 schema 3 binds the new 128,000 / 16,384 token-policy-v2 digest and exact
+  USD 0.010 / 0.030 / 0.040 ceilings. Schema 2 is inspectable as
+  `legacy_pre_quality_floor` but cannot stage/dispatch and must be regenerated.
+
+## Governing-twin challenge and successor work
+
+The first committed candidate `596b1b2` / tree `1e5ff16e` passed its offline
+gate but was not accepted. The governing Twin independently demonstrated four
+closure gaps: raw Grok/Gemini and Grok Direct adapter bypass, unchanged v1
+policy digests plus a forgeable GLM ceiling exception, T1 schema/domain drift,
+and null top-level reasoning-exhaustion failure fields. The subsequent changes
+in this checkpoint are a successor candidate, not a reinterpretation of that
+earlier green result.
 
 ## Authority and live-state boundary
 

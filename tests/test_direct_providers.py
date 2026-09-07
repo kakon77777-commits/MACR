@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from typing import Any, Mapping
 
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
@@ -14,6 +15,7 @@ from macr_runtime.direct_providers import (
 from macr_runtime.direct_settings import operator_managed_settings
 from macr_runtime.errors import (
     ConfigurationError,
+    ProviderOutputBudgetTooSmallError,
     ProviderProtocolError,
     ProviderUnavailableError,
 )
@@ -23,6 +25,15 @@ from macr_runtime.execution import ProviderState
 MODEL = "hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M"
 DIGEST = "c" * 64
 VALID_XAI_KEY = "xai-" + ("A" * 24)
+
+
+def grok_settings():
+    return replace(
+        operator_managed_settings(),
+        max_output_tokens=32_768,
+        context_warning_tokens=180_000,
+        hard_context_tokens=400_000,
+    )
 
 
 class FakeTransport:
@@ -171,7 +182,7 @@ class DirectProviderTests(unittest.TestCase):
             DirectMessage("user", "second question"),
         )
 
-        reply = adapter.invoke(messages, operator_managed_settings())
+        reply = adapter.invoke(messages, grok_settings())
 
         call = transport.posts[0]
         self.assertEqual(call["url"], "https://api.x.ai/v1/responses")
@@ -181,7 +192,7 @@ class DirectProviderTests(unittest.TestCase):
                 "model": "grok-4.6",
                 "input": [item.to_dict() for item in messages],
                 "store": False,
-                "max_output_tokens": 4096,
+                "max_output_tokens": 32_768,
                 "reasoning": {"effort": "high"},
             },
         )
@@ -210,7 +221,7 @@ class DirectProviderTests(unittest.TestCase):
             environ={"XAI_API_KEY": VALID_XAI_KEY},
         ).invoke(
             (DirectMessage("user", "question"),),
-            operator_managed_settings(),
+            grok_settings(),
         )
         self.assertEqual(
             transport.posts[0]["payload"]["input"],
@@ -229,7 +240,7 @@ class DirectProviderTests(unittest.TestCase):
                     environ={"XAI_API_KEY": VALID_XAI_KEY},
                 ).invoke(
                     (DirectMessage("user", "question"),),
-                    operator_managed_settings(),
+                    grok_settings(),
                 )
                 self.assertEqual(reply.validation_error, reason)
                 self.assertEqual(reply.observation.answer_bytes, b"Grok answer")
@@ -245,8 +256,24 @@ class DirectProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ProviderUnavailableError, "XAI_API_KEY"):
             adapter.invoke(
                 (DirectMessage("user", "question"),),
+                grok_settings(),
+            )
+        self.assertEqual(transport.posts, [])
+
+    def test_grok_output_floor_fails_before_key_or_transport(self) -> None:
+        transport = FakeTransport(post_response=grok_response())
+        adapter = GrokDirectAdapter(
+            grok_config(),
+            transport=transport,
+            environ={},
+        )
+
+        with self.assertRaises(ProviderOutputBudgetTooSmallError):
+            adapter.invoke(
+                (DirectMessage("user", "question"),),
                 operator_managed_settings(),
             )
+
         self.assertEqual(transport.posts, [])
 
     def test_grok_uuid_identifier_is_not_accepted_as_an_api_secret(self) -> None:
@@ -264,7 +291,7 @@ class DirectProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ProviderUnavailableError, "format"):
             adapter.invoke(
                 (DirectMessage("user", "question"),),
-                operator_managed_settings(),
+                grok_settings(),
             )
         self.assertEqual(transport.posts, [])
 

@@ -20,7 +20,7 @@ from .direct_contracts import (
 from .direct_providers import DirectProviderReply
 from .direct_settings import DirectSettingsStore
 from .direct_store import DirectConversationStore
-from .errors import MacrError
+from .errors import MacrError, LegacyDirectTokenPolicyIncompatibleError
 from .execution import (
     AuthorizationReference,
     DispatchContext,
@@ -244,15 +244,33 @@ class DirectRuntime:
         run_id: str | None = None,
     ) -> DirectTurnResult:
         conversation = self.conversations.get(conversation_id)
+        provider_id = conversation["provider_id"]
         settings = self.settings.get_profile(
             conversation["settings_profile_name"],
             conversation["settings_profile_version"],
         )
         token_json = conversation.get("model_token_policy_json")
         token_digest = conversation.get("model_token_policy_sha256")
+        if provider_id == "grok" and token_json is None and token_digest is None:
+            raise LegacyDirectTokenPolicyIncompatibleError(
+                "legacy_direct_token_policy_incompatible: create a new Grok "
+                "conversation with a current pinned token policy"
+            )
         if token_json is not None or token_digest is not None:
             try:
-                token_policy = ModelTokenPolicy.from_dict(json.loads(token_json))
+                token_document = json.loads(token_json)
+                if (
+                    provider_id == "grok"
+                    and isinstance(token_document, dict)
+                    and "minimum_task_output_tokens" not in token_document
+                ):
+                    raise LegacyDirectTokenPolicyIncompatibleError(
+                        "legacy_direct_token_policy_incompatible: create a new "
+                        "Grok conversation with a current pinned token policy"
+                    )
+                token_policy = ModelTokenPolicy.from_dict(token_document)
+            except LegacyDirectTokenPolicyIncompatibleError:
+                raise
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
                 raise MacrError(
                     "Direct model token policy snapshot is invalid"
@@ -300,7 +318,6 @@ class DirectRuntime:
                 failure_type="ContextLimitExceeded",
             )
 
-        provider_id = conversation["provider_id"]
         adapter = self.registry.get(provider_id)
         self.conversations.assert_identity(
             conversation_id,

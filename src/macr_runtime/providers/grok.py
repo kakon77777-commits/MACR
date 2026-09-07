@@ -12,6 +12,7 @@ from ..errors import (
     ProviderProtocolError,
     ProviderUnavailableError,
 )
+from ..token_policy import ModelTokenPolicyResolver
 from .base import BaseProvider, ProviderHealth
 from .common import compile_worker_instruction
 from .http_json import JsonTransport, UrllibJsonTransport
@@ -105,6 +106,15 @@ class GrokResponsesProvider(BaseProvider):
         self.connection_scope = config.connection_scope
         self.transport = transport or UrllibJsonTransport()
         self.environ = os.environ if environ is None else environ
+        model = config.resolve_model(self.environ)
+        self.token_policy = ModelTokenPolicyResolver.builtins_only().resolve(
+            self.provider_id,
+            model,
+        )
+        if self.token_policy.connection_scope != self.connection_scope.value:
+            raise ConfigurationError(
+                "Grok token policy must match the configured connection scope"
+            )
 
     def _api_key(self) -> str:
         name = self.config.api_key_env
@@ -171,6 +181,9 @@ class GrokResponsesProvider(BaseProvider):
             raise ProviderPolicyError(
                 "Grok dispatch requires a positive max_latency_s"
             )
+        self.token_policy.validate_task_output_tokens(
+            task.constraints.max_output_tokens
+        )
         missing = sorted(
             set(task.required_capabilities) - set(self.config.capabilities)
         )

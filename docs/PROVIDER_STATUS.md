@@ -26,7 +26,7 @@ Accounting's `soft_warning` state remains distinct from each delegated provider 
 
 ## Exact model-token policy status
 
-The active token controls are model-local and append-only at `settings\model-token-policies.sqlite3`: Grok 4.6/4.3 hard context 400,000, default/quality floor 32,768 and max output 65,536; ordinary GLM 5.3 Flash and Gemini 3.7 Flash hard context 512,000, floor 16,384 and max output 65,536; MiniMax M2.7 variants hard context 180,000 and provider-limited 2,048 floor/max; Qwythos-9B-v2 hard context 8,192 and max output 4,096 with no cloud floor. The separate T1 GLM preset is 128,000 / 16,384. An override never changes provider/model identity or immutable provider ceilings and cannot reduce an external capable model below the 16,384 cloud quality baseline.
+The active token controls use policy contract v2 with an explicit digest-bound floor and append-only store schema 1 at `settings\model-token-policies.sqlite3`: Grok 4.6/4.3 hard context 400,000, floor/default 32,768 and max output 65,536; ordinary GLM 5.3 Flash and Gemini 3.7 Flash hard context 512,000, floor/default 16,384 and max output 65,536; MiniMax M2.7 variants hard context 180,000 and provider-limited 2,048 floor/max; Qwythos-9B-v2 hard context 8,192 and max output 4,096 with no cloud floor. The separate T1 GLM preset is 128,000 / 16,384. An override never changes provider/model identity or immutable provider ceilings/floors.
 
 ## Grok policy
 
@@ -95,9 +95,9 @@ Dispatch requires all of:
 - empty `workspace.write_scope`, no requested patch authority, and independent verification;
 - empty inputs or bounded text-only inputs with non-path labels.
 
-The outbound request excludes local task/workspace identity and currency budget. Credential-free preflight validates structure without reading a key; provider invocation repeats validation, reads fixed `D:\KEY\GLM.txt`, verifies the approval HMAC, and only then permits network transport. Health reads metadata only. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only. GLM max reasoning requires a task envelope of at least 16,384 output tokens. MACR never silently enlarges an approved envelope, and even 16,384 is not a guarantee of visible content. An observed no-answer `length` response whose output is effectively all reasoning becomes `ProviderReasoningBudgetExhaustedError`, retains usage/cost evidence, and is never retried automatically.
+The outbound request excludes local task/workspace identity and currency budget. Credential-free preflight validates structure without reading a key; provider invocation repeats validation, reads fixed `D:\KEY\GLM.txt`, verifies the approval HMAC, and only then permits network transport. Health reads metadata only. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only. GLM max reasoning requires a task envelope of at least 16,384 output tokens. MACR never silently enlarges an approved envelope, and even 16,384 is not a guarantee of visible content. An observed no-answer `length` response whose output is effectively all reasoning becomes `ProviderReasoningBudgetExhaustedError`, retains usage/cost evidence, records typed response-validation failure in accounting/events, and is never retried automatically.
 
-For T1, `queue-status` exposes only bounded content-free state. A strict private manifest binds three ordered member digests, exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy digest, 16,384 output tokens, USD 0.010 per member, USD 0.030 aggregate, USD 0.040 campaign, expiry, and dispatcher set. Old manifests retain their old digest/cost evidence and must be regenerated. `reconciliation_required` blocks every later claim. There is no automatic retry, fallback, verification, materialization, or acceptance.
+For T1, `queue-status` exposes only bounded content-free state. Schema 3 binds three ordered member digests, exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy-v2 digest, 16,384 output tokens, USD 0.010 per member, USD 0.030 aggregate, USD 0.040 campaign, expiry, and dispatcher set. Schema 2 remains inspectable as `legacy_pre_quality_floor` but cannot stage or dispatch; it must be regenerated and reapproved. `reconciliation_required` blocks every later claim. There is no automatic retry, fallback, verification, materialization, or acceptance.
 
 ## Claude boundary
 
@@ -108,3 +108,9 @@ Do not read or use `ANTHROPIC_API_KEY`. A future Claude integration must be an e
 Claude Code can invoke the existing MACR CLI today under `cli` attribution and therefore call the same configured provider registry—such as Grok, GLM, Google, MiniMax, or local Ollama/Qwythos—without converting Claude subscription access into Anthropic API billing. The offline `MacrHostAdapter` core uses the same model-local token policy, provider capability, authority/lease gates, candidate separation, and shared accounting as the Codex-facing route.
 
 Trusted `task_local_host_observed` attribution still requires a host-owned verifier unavailable to generic/model shells and a pre-issued operator authority/connectivity grant. Environment variables and hook JSON alone remain forgeable discovery evidence. No cross-provider context transfer, Direct-conversation read permission, fallback, credential bridge, self-issued authority, or live host binding exists in this candidate. The current `claude_subscription` configuration remains disabled with `api_usage_allowed=false`.
+
+Grok Direct enforces its 32,768 floor inside the adapter before reading the
+credential. A legacy Grok conversation with a null or policy-v1 snapshot fails
+as `legacy_direct_token_policy_incompatible` before message append, authority,
+dispatch or network. Its preserved history can still be archived/deleted;
+start a new conversation to obtain a current policy-v2 snapshot.

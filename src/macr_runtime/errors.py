@@ -131,6 +131,10 @@ class DirectStoreConflict(MacrError):
     """Direct settings, conversation, or message state violates an invariant."""
 
 
+class LegacyDirectTokenPolicyIncompatibleError(MacrError):
+    """A cloud Direct conversation lacks the current token-policy contract."""
+
+
 class ObservatoryConflict(MacrError):
     """An observatory record or private snapshot conflicts with append-only state."""
 
@@ -141,3 +145,7 @@ class CoordinatorPolicyError(MacrError):
 
 class LegacyPreTierIncompatibleError(MacrError):
     """Historical pre-tier authority/evidence cannot satisfy a new dispatch."""
+
+
+class LegacyOutputPolicyIncompatibleError(MacrError):
+    """Historical output-policy evidence cannot satisfy a current dispatch."""

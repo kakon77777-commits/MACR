@@ -13,6 +13,7 @@ from macr_runtime.contracts import (
     TaskContract,
 )
 from macr_runtime.errors import (
+    ProviderOutputBudgetTooSmallError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderUnavailableError,
@@ -65,7 +66,7 @@ def grok_config(
 
 def cloud_task(
     max_cost_usd: float = 0.01,
-    max_output_tokens: int = 64,
+    max_output_tokens: int = 32_768,
 ) -> TaskContract:
     return TaskContract(
         task_id="grok-test-001",
@@ -111,13 +112,13 @@ class GrokProviderTests(unittest.TestCase):
             grok_config("grok", "grok-4.6", "high"),
             transport=transport,
             environ={"XAI_API_KEY": "test-key"},
-        ).invoke(cloud_task(max_cost_usd=0.01, max_output_tokens=64))
+        ).invoke(cloud_task(max_cost_usd=0.01, max_output_tokens=32_768))
         call = transport.posts[0]
         self.assertEqual(call["url"], "https://api.x.ai/v1/responses")
         self.assertEqual(call["payload"]["model"], "grok-4.6")
         self.assertFalse(call["payload"]["store"])
         self.assertEqual(call["payload"]["reasoning"], {"effort": "high"})
-        self.assertEqual(call["payload"]["max_output_tokens"], 64)
+        self.assertEqual(call["payload"]["max_output_tokens"], 32_768)
         self.assertNotIn("tools", call["payload"])
         self.assertEqual(call["headers"]["Authorization"], "Bearer test-key")
         self.assertEqual(result.answer, "candidate")
@@ -183,6 +184,19 @@ class GrokProviderTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ProviderUnavailableError, "XAI_API_KEY"):
             provider.invoke(cloud_task())
+        self.assertEqual(transport.posts, [])
+
+    def test_output_below_policy_floor_fails_before_key_or_transport(self):
+        transport = FakeTransport(success_document(model="grok-4.6"))
+        provider = GrokResponsesProvider(
+            grok_config("grok", "grok-4.6", "high"),
+            transport=transport,
+            environ={},
+        )
+
+        with self.assertRaises(ProviderOutputBudgetTooSmallError):
+            provider.invoke(cloud_task(max_output_tokens=64))
+
         self.assertEqual(transport.posts, [])
 
     def test_nonzero_server_tools_are_rejected(self):

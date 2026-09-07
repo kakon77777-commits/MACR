@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import unittest
 
+from macr_runtime.canonical import sha256_id
 from macr_runtime.errors import ProviderPolicyError
 from macr_runtime.token_policy import (
     ModelTokenOverride,
@@ -54,6 +55,12 @@ class ModelTokenPolicyTests(unittest.TestCase):
         self.assertEqual(gemini.minimum_task_output_tokens, 16_384)
         self.assertEqual(minimax.minimum_task_output_tokens, 2_048)
         self.assertEqual(local.minimum_task_output_tokens, 1)
+        self.assertEqual(glm.to_dict()["minimum_task_output_tokens"], 16_384)
+        self.assertEqual(
+            glm.policy_digest,
+            sha256_id("model_token_policy_v2", glm.to_dict()),
+        )
+        self.assertEqual(ModelTokenPolicy.from_dict(glm.to_dict()), glm)
         self.assertEqual(len(builtin_model_token_policies()), 7)
         self.assertEqual(len({item.policy_digest for item in builtin_model_token_policies()}), 7)
 

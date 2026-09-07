@@ -53,6 +53,7 @@ class ModelTokenPolicy:
     provider_id: str
     model_id: str
     connection_scope: str
+    minimum_task_output_tokens: int
     context_warning_tokens: int
     hard_context_tokens: int
     default_output_tokens: int
@@ -80,6 +81,11 @@ class ModelTokenPolicy:
             self.provider_output_ceiling_tokens,
             maximum=1_000_000,
         )
+        minimum_output = _positive_int(
+            "minimum_task_output_tokens",
+            self.minimum_task_output_tokens,
+            maximum=output_ceiling,
+        )
         warning = _positive_int(
             "context_warning_tokens",
             self.context_warning_tokens,
@@ -102,18 +108,20 @@ class ModelTokenPolicy:
         )
         if warning >= hard:
             raise ValueError("context warning must be below hard context")
+        if minimum_output > default_output:
+            raise ValueError("minimum task output must not exceed default output")
         if default_output > max_output:
             raise ValueError("default output must not exceed max output")
         if (
             self.connection_scope == "external_https"
-            and default_output
+            and minimum_output
             < min(
                 _CLOUD_TEXT_QUALITY_FLOOR_TOKENS,
                 output_ceiling,
             )
         ):
             raise ValueError(
-                "external model default output is below the cloud quality floor"
+                "external model minimum task output is below the cloud quality floor"
             )
         if max_output >= hard:
             raise ValueError("max output must be below hard context")
@@ -125,13 +133,7 @@ class ModelTokenPolicy:
 
     @property
     def policy_digest(self) -> str:
-        return sha256_id("model_token_policy_v1", self.to_dict())
-
-    @property
-    def minimum_task_output_tokens(self) -> int:
-        if self.connection_scope != "external_https":
-            return 1
-        return self.default_output_tokens
+        return sha256_id("model_token_policy_v2", self.to_dict())
 
     def validate_task_output_tokens(self, requested: int) -> None:
         if requested < self.minimum_task_output_tokens:
@@ -153,6 +155,7 @@ class ModelTokenPolicy:
             "provider_id": self.provider_id,
             "model_id": self.model_id,
             "connection_scope": self.connection_scope,
+            "minimum_task_output_tokens": self.minimum_task_output_tokens,
             "context_warning_tokens": self.context_warning_tokens,
             "hard_context_tokens": self.hard_context_tokens,
             "default_output_tokens": self.default_output_tokens,
@@ -170,6 +173,7 @@ class ModelTokenPolicy:
             "provider_id",
             "model_id",
             "connection_scope",
+            "minimum_task_output_tokens",
             "context_warning_tokens",
             "hard_context_tokens",
             "default_output_tokens",
@@ -236,6 +240,7 @@ class ModelTokenOverride:
             provider_id=base.provider_id,
             model_id=base.model_id,
             connection_scope=base.connection_scope,
+            minimum_task_output_tokens=base.minimum_task_output_tokens,
             context_warning_tokens=self.context_warning_tokens,
             hard_context_tokens=self.hard_context_tokens,
             default_output_tokens=self.default_output_tokens,
@@ -276,19 +281,20 @@ class ModelTokenOverride:
 
 def builtin_model_token_policies() -> tuple[ModelTokenPolicy, ...]:
     rows = (
-        ("grok", "grok-4.6", "external_https", 180_000, 400_000, 32_768, 65_536, 500_000, 131_072),
-        ("grok_standard", "grok-4.3", "external_https", 180_000, 400_000, 32_768, 65_536, 1_000_000, 131_072),
-        ("glm_flash_worker", "glm-5.3-flash", "external_https", 400_000, 512_000, 16_384, 65_536, 1_000_000, 131_072),
-        ("google_gemini", "gemini-3.7-flash", "external_https", 400_000, 512_000, 16_384, 65_536, 1_048_576, 65_536),
-        ("minimax", "MiniMax-M2.7", "external_https", 160_000, 180_000, 2_048, 2_048, 204_800, 2_048),
-        ("minimax", "MiniMax-M2.7-highspeed", "external_https", 160_000, 180_000, 2_048, 2_048, 204_800, 2_048),
-        ("ollama_qwythos", _QWYTHOS_MODEL, "loopback_http", 7_000, 8_192, 4_096, 4_096, 8_192, 4_096),
+        ("grok", "grok-4.6", "external_https", 32_768, 180_000, 400_000, 32_768, 65_536, 500_000, 131_072),
+        ("grok_standard", "grok-4.3", "external_https", 32_768, 180_000, 400_000, 32_768, 65_536, 1_000_000, 131_072),
+        ("glm_flash_worker", "glm-5.3-flash", "external_https", 16_384, 400_000, 512_000, 16_384, 65_536, 1_000_000, 131_072),
+        ("google_gemini", "gemini-3.7-flash", "external_https", 16_384, 400_000, 512_000, 16_384, 65_536, 1_048_576, 65_536),
+        ("minimax", "MiniMax-M2.7", "external_https", 2_048, 160_000, 180_000, 2_048, 2_048, 204_800, 2_048),
+        ("minimax", "MiniMax-M2.7-highspeed", "external_https", 2_048, 160_000, 180_000, 2_048, 2_048, 204_800, 2_048),
+        ("ollama_qwythos", _QWYTHOS_MODEL, "loopback_http", 1, 7_000, 8_192, 4_096, 4_096, 8_192, 4_096),
     )
     return tuple(
         ModelTokenPolicy(
             provider_id=provider_id,
             model_id=model_id,
             connection_scope=scope,
+            minimum_task_output_tokens=minimum_output,
             context_warning_tokens=warning,
             hard_context_tokens=hard,
             default_output_tokens=default_output,
@@ -301,6 +307,7 @@ def builtin_model_token_policies() -> tuple[ModelTokenPolicy, ...]:
             provider_id,
             model_id,
             scope,
+            minimum_output,
             warning,
             hard,
             default_output,
@@ -345,6 +352,7 @@ def t1_glm_live_policy() -> ModelTokenPolicy:
         provider_id="glm_flash_worker",
         model_id="glm-5.3-flash",
         connection_scope="external_https",
+        minimum_task_output_tokens=16_384,
         context_warning_tokens=100_000,
         hard_context_tokens=128_000,
         default_output_tokens=16_384,

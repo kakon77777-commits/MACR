@@ -15,6 +15,7 @@ from macr_runtime.contracts import (
     WorkspaceSpec,
 )
 from macr_runtime.errors import (
+    ProviderOutputBudgetTooSmallError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderUnavailableError,
@@ -102,7 +103,7 @@ def gemini_task(
         or TaskConstraints(
             max_cost_usd=1.0,
             max_latency_s=30,
-            max_output_tokens=64,
+            max_output_tokens=16_384,
             internet=True,
             privacy=PrivacyLevel.PUBLIC,
         ),
@@ -129,6 +130,31 @@ class GoogleGeminiProviderTests(unittest.TestCase):
         self.assertEqual(result.provider_meta["model"], "gemini-3.7-flash")
         self.assertEqual(result.cost["cost_kind"], "estimated")
         self.assertEqual(result.cost["pricing_basis_version"], "2026-08-26")
+
+    def test_output_below_policy_floor_fails_before_credentials_or_transport(self) -> None:
+        with d_drive_tempdir() as root:
+            transport = FakeGoogleTransport(success_response())
+            task = gemini_task(
+                root,
+                constraints=TaskConstraints(
+                    max_cost_usd=1.0,
+                    max_latency_s=30,
+                    max_output_tokens=64,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+            )
+            provider = GoogleGeminiProvider(
+                google_gemini_config(),
+                transport=transport,
+                environ={},
+                cwd=root,
+            )
+
+            with self.assertRaises(ProviderOutputBudgetTooSmallError):
+                provider.invoke(task)
+
+        self.assertEqual(transport.requests, [])
 
     def test_validated_multimodal_bytes_reach_transport(self) -> None:
         with d_drive_tempdir() as root:

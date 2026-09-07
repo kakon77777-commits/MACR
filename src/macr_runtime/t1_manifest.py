@@ -12,7 +12,10 @@ from .batch_authority import BatchAuthorityReference
 from .canonical import aware_iso8601, sha256_id
 from .contracts import DelegationClass, PrivacyLevel, TaskContract
 from .execution import AuthorizationReference
-from .errors import LegacyPreTierIncompatibleError
+from .errors import (
+    LegacyOutputPolicyIncompatibleError,
+    LegacyPreTierIncompatibleError,
+)
 from .providers.glm import contains_obvious_sensitive_marker
 from .route_resolution import ExecutionRouteProposal
 from .runtime import task_contract_digest
@@ -33,7 +36,7 @@ _T1_MEMBER_COST_USD = 0.010
 _T1_AGGREGATE_COST_USD = 0.030
 _T1_CAMPAIGN_COST_USD = 0.040
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
-T1_MANIFEST_SCHEMA_VERSION = 2
+T1_MANIFEST_SCHEMA_VERSION = 3
 
 
 def _digest(name: str, value: object) -> str:
@@ -409,7 +412,9 @@ class T1ExecutionManifest:
 
     def __post_init__(self) -> None:
         if self.schema_version != T1_MANIFEST_SCHEMA_VERSION:
-            raise ValueError("T1 manifest schema_version must be 2")
+            raise ValueError(
+                f"T1 manifest schema_version must be {T1_MANIFEST_SCHEMA_VERSION}"
+            )
         if self.topology_id != _T1_TOPOLOGY:
             raise ValueError("T1 manifest topology must be T1_FANOUT_VERIFIED")
         object.__setattr__(self, "plan_digest", _digest("plan_digest", self.plan_digest))
@@ -476,7 +481,7 @@ class T1ExecutionManifest:
         if len(dispatchers) != 3 or len(set(dispatchers)) != 3:
             raise ValueError("T1 manifest requires three unique dispatchers")
         object.__setattr__(self, "authorized_dispatchers", dispatchers)
-        expected = sha256_id("t1_execution_manifest_v2", self.canonical_manifest())
+        expected = sha256_id("t1_execution_manifest_v3", self.canonical_manifest())
         if self.manifest_digest != expected:
             raise ValueError("T1 manifest digest does not match exact manifest")
 
@@ -506,7 +511,7 @@ class T1ExecutionManifest:
             )
         )
         canonical = {
-            "schema_version": 2,
+            "schema_version": T1_MANIFEST_SCHEMA_VERSION,
             "topology_id": _T1_TOPOLOGY,
             "plan_digest": plan_digest,
             "plan_revision": plan_revision,
@@ -517,7 +522,7 @@ class T1ExecutionManifest:
             "authorized_dispatchers": list(normalized_dispatchers),
         }
         return cls(
-            manifest_digest=sha256_id("t1_execution_manifest_v2", canonical),
+            manifest_digest=sha256_id("t1_execution_manifest_v3", canonical),
             plan_digest=plan_digest,
             plan_revision=plan_revision,
             members=normalized_members,
@@ -685,15 +690,20 @@ def inspect_t1_manifest(path: str | Path) -> T1ManifestInspection:
     schema_version = document.get("schema_version")
     members = document.get("members")
     manifest_digest = document.get("manifest_digest")
-    if schema_version not in {1, 2}:
+    if schema_version not in {1, 2, 3}:
         raise ValueError("T1 manifest schema_version is unsupported")
     if not isinstance(members, list) or len(members) != 3:
         raise ValueError("T1 manifest must contain exactly three members")
     digest = _digest("manifest_digest", manifest_digest)
-    if schema_version == 2:
+    if schema_version == T1_MANIFEST_SCHEMA_VERSION:
         T1ExecutionManifest.from_dict(document)
+    status = {
+        1: "legacy_pre_tier",
+        2: "legacy_pre_quality_floor",
+        T1_MANIFEST_SCHEMA_VERSION: "current",
+    }[schema_version]
     return T1ManifestInspection(
-        status=("legacy_pre_tier" if schema_version == 1 else "current"),
+        status=status,
         schema_version=schema_version,
         manifest_digest=digest,
         member_count=len(members),
@@ -705,6 +715,10 @@ def load_t1_manifest(path: str | Path) -> T1ExecutionManifest:
     if document.get("schema_version") == 1:
         raise LegacyPreTierIncompatibleError(
             "legacy_pre_tier_incompatible: T1 schema 1 is audit-only"
+        )
+    if document.get("schema_version") == 2:
+        raise LegacyOutputPolicyIncompatibleError(
+            "legacy_output_policy_incompatible: T1 schema 2 is audit-only"
         )
     return T1ExecutionManifest.from_dict(document)
 

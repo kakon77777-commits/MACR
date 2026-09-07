@@ -6,7 +6,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from macr_runtime.canonical import sha256_id
-from macr_runtime.errors import LegacyPreTierIncompatibleError
+from macr_runtime.errors import (
+    LegacyOutputPolicyIncompatibleError,
+    LegacyPreTierIncompatibleError,
+)
 from macr_runtime.provider_capability import glm_standard_policy
 from macr_runtime.contracts import (
     DelegationClass,
@@ -99,7 +102,7 @@ def manifest() -> T1ExecutionManifest:
 
 
 class T1ManifestTests(unittest.TestCase):
-    def test_schema_two_and_member_digest_bind_provider_tier(self) -> None:
+    def test_schema_three_and_member_digest_bind_provider_tier(self) -> None:
         first = manifest()
         original = first.members[0]
         changed = T1ExecutionMember.create(
@@ -116,7 +119,7 @@ class T1ManifestTests(unittest.TestCase):
             target_claims=original.target_claims,
         )
 
-        self.assertEqual(first.schema_version, 2)
+        self.assertEqual(first.schema_version, 3)
         self.assertNotEqual(original.member_digest, changed.member_digest)
 
     def test_schema_one_is_audit_visible_but_dispatch_incompatible(self) -> None:
@@ -159,6 +162,35 @@ class T1ManifestTests(unittest.TestCase):
 
         self.assertEqual(inspection.status, "legacy_pre_tier")
         self.assertEqual(inspection.schema_version, 1)
+        self.assertEqual(inspection.member_count, 3)
+        self.assertEqual(inspection.manifest_digest, legacy_manifest["manifest_digest"])
+        self.assertEqual(after, raw)
+
+    def test_schema_two_is_audit_visible_but_quality_floor_incompatible(self) -> None:
+        current = manifest()
+        legacy_manifest = current.to_dict()
+        legacy_manifest["schema_version"] = 2
+        canonical_manifest = current.canonical_manifest()
+        canonical_manifest["schema_version"] = 2
+        legacy_manifest["manifest_digest"] = sha256_id(
+            "t1_execution_manifest_v2",
+            canonical_manifest,
+        )
+
+        with d_drive_tempdir() as temp:
+            path = temp / "legacy-quality-floor-t1.json"
+            raw = json.dumps(legacy_manifest, sort_keys=True).encode("utf-8")
+            path.write_bytes(raw)
+            inspection = inspect_t1_manifest(path)
+            with self.assertRaisesRegex(
+                LegacyOutputPolicyIncompatibleError,
+                "legacy_output_policy_incompatible",
+            ):
+                load_t1_manifest(path)
+            after = path.read_bytes()
+
+        self.assertEqual(inspection.status, "legacy_pre_quality_floor")
+        self.assertEqual(inspection.schema_version, 2)
         self.assertEqual(inspection.member_count, 3)
         self.assertEqual(inspection.manifest_digest, legacy_manifest["manifest_digest"])
         self.assertEqual(after, raw)

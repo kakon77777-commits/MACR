@@ -19,6 +19,7 @@ from .execution import ProviderState, ProviderUsage, RawProviderObservation
 from .providers.base import ProviderHealth
 from .providers.http_json import JsonTransport, UrllibJsonTransport
 from .providers.ollama import OLLAMA_LOOPBACK_BASE_URL, _resolve_keep_alive
+from .token_policy import ModelTokenPolicyResolver
 
 
 _QWYTHOS_MODEL = "hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M"
@@ -154,6 +155,10 @@ class GrokDirectAdapter:
         self._monotonic = monotonic
         if config.resolve_model(self.environ) != "grok-4.6":
             raise ConfigurationError("Grok Direct model must be grok-4.6")
+        self.token_policy = ModelTokenPolicyResolver.builtins_only().resolve(
+            "grok",
+            "grok-4.6",
+        )
         if config.resolve_base_url(self.environ) != "https://api.x.ai/v1":
             raise ConfigurationError("Grok Direct route must use api.x.ai/v1")
 
@@ -204,6 +209,7 @@ class GrokDirectAdapter:
         normalized = _validate_messages(messages)
         if not isinstance(settings, DirectRunSettings):
             raise ValueError("settings must be DirectRunSettings")
+        self.token_policy.validate_task_output_tokens(settings.max_output_tokens)
         api_key = self._api_key()
         payload: dict[str, Any] = {
             "model": "grok-4.6",

@@ -5,7 +5,8 @@ from typing import Mapping
 
 from ..config import ProviderConfig
 from ..contracts import ProviderResult, ResultStatus, TaskContract
-from ..errors import ProviderProtocolError
+from ..errors import ConfigurationError, ProviderProtocolError
+from ..token_policy import ModelTokenPolicyResolver
 from .common import compile_worker_instruction
 from .google_base import BaseGoogleProvider
 from .google_core import (
@@ -32,9 +33,21 @@ class GoogleGeminiProvider(BaseGoogleProvider):
             environ=environ,
             cwd=cwd,
         )
+        model = config.resolve_model(self.environ)
+        self.token_policy = ModelTokenPolicyResolver.builtins_only().resolve(
+            self.provider_id,
+            model,
+        )
+        if self.token_policy.connection_scope != self.connection_scope.value:
+            raise ConfigurationError(
+                "Google Gemini token policy must match the configured scope"
+            )
 
     def invoke(self, task: TaskContract) -> ProviderResult:
         self._check_task_policy(task)
+        self.token_policy.validate_task_output_tokens(
+            task.constraints.max_output_tokens
+        )
         media = self._validated_media(task)
         self._validate_offline_configuration()
         model = self.config.resolve_model(self.environ)

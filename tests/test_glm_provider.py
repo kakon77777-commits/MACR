@@ -782,6 +782,18 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             execution.result.provider_meta["failure_type"],
             "ProviderReasoningBudgetExhaustedError",
         )
+        self.assertEqual(
+            execution.result.failure_code,
+            "ProviderReasoningBudgetExhaustedError",
+        )
+        self.assertEqual(
+            execution.result.failure_stage,
+            "provider_response_validation",
+        )
+        self.assertEqual(
+            execution.result.provider_meta["failure_stage"],
+            "provider_response_validation",
+        )
         self.assertTrue(
             any(
                 "reasoning exhausted" in warning.lower()
@@ -842,6 +854,29 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
         self.assertEqual(metadata["minimum_task_output_tokens"], 16_384)
         self.assertEqual(metadata["max_output_tokens"], 16_384)
+
+    def test_forged_glm_provider_ceiling_cannot_create_a_floor_exception(self):
+        canonical = ModelTokenPolicyResolver.builtins_only().resolve(
+            "glm_flash_worker",
+            "glm-5.3-flash",
+        )
+        forged = replace(
+            canonical,
+            minimum_task_output_tokens=2_048,
+            default_output_tokens=2_048,
+            max_output_tokens=2_048,
+            provider_output_ceiling_tokens=2_048,
+        )
+
+        with self.assertRaisesRegex(ConfigurationError, "provider ceiling"):
+            _GlmFlashWorkerProvider(
+                glm_config(),
+                transport=FakeTransport(success_document()),
+                environ={},
+                key_source=StaticKeySource(),
+                approval_store=AllowingApprovalStore(),
+                token_policy=forged,
+            )
 
     def test_impossible_reasoning_usage_is_not_mislabeled_as_exhaustion(self):
         document = success_document()
