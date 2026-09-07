@@ -19,6 +19,7 @@ from ..contracts import (
 )
 from ..errors import (
     ConfigurationError,
+    LegacyPreTierIncompatibleError,
     MacrError,
     ProviderPolicyError,
     ProviderProtocolError,
@@ -31,6 +32,12 @@ from ..execution import (
     RawProviderObservation,
 )
 from ..glm_approval import GlmApprovalStore
+from ..provider_capability import (
+    ProviderCapabilityPolicy,
+    ProviderCapabilityResolver,
+    ProviderTierBinding,
+    glm_standard_policy,
+)
 from ..task_preflight import validate_task_consistency
 from ..token_policy import ModelTokenPolicy, ModelTokenPolicyResolver
 from .base import BaseProvider, ProviderHealth
@@ -49,7 +56,6 @@ _FIXED_BASE_URL = "https://api.z.ai/api/paas/v4"
 _FIXED_ENDPOINT_PATH = "/chat/completions"
 _FIXED_MODEL = "glm-5.3-flash"
 _ZAI_KEY_SHAPE = re.compile(r"^[^.\s]+\.[^.\s]+$")
-_ALLOWED_TASK_TYPES = frozenset({"delegated_routine", "provider_conformance"})
 _OBVIOUS_CREDENTIAL_MARKER = re.compile(
     r"(?i)(?:-----BEGIN (?:[a-z0-9]+ )*PRIVATE KEY-----|"
     r"(?:api(?:[\s_-]+)?key|access(?:[\s_-]+)?token|"
@@ -314,6 +320,8 @@ class GlmFlashWorkerProvider(BaseProvider):
         key_source: GlmFixedKeySource | None = None,
         approval_store: Any | None = None,
         token_policy: ModelTokenPolicy | None = None,
+        capability_binding: ProviderTierBinding | None = None,
+        capability_policy: ProviderCapabilityPolicy | None = None,
     ) -> None:
         if config.kind != "zai_glm_worker":
             raise ConfigurationError(
@@ -372,6 +380,33 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ConfigurationError(
                 "GLM token policy must match the fixed provider, model, and scope"
             )
+        selected_policy = capability_policy
+        if selected_policy is None:
+            if capability_binding is None:
+                selected_policy = glm_standard_policy()
+            else:
+                selected_policy = ProviderCapabilityResolver.builtins_only().resolve(
+                    capability_binding.provider_id,
+                    capability_binding.model_id,
+                    capability_binding.tier_id,
+                    capability_binding.revision,
+                )
+        selected_binding = selected_policy.binding()
+        if capability_binding is not None and capability_binding != selected_binding:
+            raise ConfigurationError(
+                "GLM capability binding does not match the exact policy"
+            )
+        if (
+            selected_policy.provider_id != self.provider_id
+            or selected_policy.model_id != _FIXED_MODEL
+            or selected_binding.complete_policy_digest
+            != selected_policy.complete_policy_digest
+        ):
+            raise ConfigurationError(
+                "GLM capability policy must match the fixed provider and model"
+            )
+        self.capability_policy = selected_policy
+        self.capability_binding = selected_binding
 
     def _api_key(self) -> str:
         value = self.key_source.load()
@@ -420,17 +455,21 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM dispatch requires explicit delegable=true"
             )
-        if task.delegation_class is not DelegationClass.NON_SENSITIVE_ROUTINE:
+        if task.delegation_class.value != self.capability_policy.delegation_class:
             raise ProviderPolicyError(
                 "GLM dispatch requires non_sensitive_routine delegation class"
             )
-        if task.task_type not in _ALLOWED_TASK_TYPES:
+        if task.task_type not in self.capability_policy.allowed_task_types:
             raise ProviderPolicyError(
-                "GLM dispatch requires an approved routine task type"
+                "GLM dispatch requires a task type approved by the active tier"
             )
         if not task.constraints.internet:
             raise ProviderPolicyError("GLM task contract must permit internet access")
-        if task.constraints.privacy.value not in self.config.approved_privacy:
+        if (
+            task.constraints.privacy.value not in self.config.approved_privacy
+            or task.constraints.privacy.value
+            not in self.capability_policy.approved_privacy
+        ):
             raise ProviderPolicyError(
                 f"GLM worker is not approved for privacy level "
                 f"{task.constraints.privacy.value}"
@@ -439,13 +478,17 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError("GLM dispatch requires a positive max_cost_usd")
         if task.constraints.max_latency_s <= 0:
             raise ProviderPolicyError("GLM dispatch requires a positive max_latency_s")
-        if task.workspace.write_scope:
+        if task.constraints.max_latency_s > self.capability_policy.max_latency_s:
+            raise ProviderPolicyError(
+                "GLM task latency exceeds the active provider tier"
+            )
+        if task.workspace.write_scope and not self.capability_policy.write_scope_allowed:
             raise ProviderPolicyError("GLM worker may not receive write_scope authority")
-        if task.return_contract.patch:
+        if task.return_contract.patch and not self.capability_policy.patch_allowed:
             raise ProviderPolicyError("GLM worker may not receive patch authority")
-        if not task.verification.required:
+        if self.capability_policy.verification_required and not task.verification.required:
             raise ProviderPolicyError("GLM output requires independent verification")
-        if task.required_capabilities != ("text_generation",):
+        if task.required_capabilities != self.capability_policy.required_capabilities:
             raise ProviderPolicyError(
                 "GLM worker requires exactly text_generation capability"
             )
@@ -533,7 +576,8 @@ class GlmFlashWorkerProvider(BaseProvider):
             "stream": False,
         }
         approval_manifest = {
-            "approval_schema": 2,
+            "approval_schema": 3,
+            "task_id": task.task_id,
             "provider_id": "glm_flash_worker",
             "endpoint": endpoint,
             "model": _FIXED_MODEL,
@@ -542,9 +586,13 @@ class GlmFlashWorkerProvider(BaseProvider):
             "task_type": task.task_type,
             "privacy": task.constraints.privacy.value,
             "max_cost_usd": task.constraints.max_cost_usd,
+            "max_latency_s": task.constraints.max_latency_s,
             "max_output_tokens": task.constraints.max_output_tokens,
             "max_context_tokens": task.constraints.max_context_tokens,
             "model_token_policy_digest": self.token_policy.policy_digest,
+            "provider_tier_binding_digest": (
+                self.capability_binding.binding_digest
+            ),
             "request_payload": request_payload,
         }
         approval_sha256 = hashlib.sha256(
@@ -577,6 +625,14 @@ class GlmFlashWorkerProvider(BaseProvider):
             "request_bytes": prepared["request_bytes"],
             "conservative_cost_ceiling_usd": prepared["cost_ceiling"],
             "pricing_basis_version": _PRICING_BASIS_VERSION,
+            "approval_schema": 3,
+            "task_id": task.task_id,
+            "max_latency_s": task.constraints.max_latency_s,
+            "provider_tier_id": self.capability_binding.tier_id,
+            "provider_tier_revision": self.capability_binding.revision,
+            "provider_tier_binding_digest": (
+                self.capability_binding.binding_digest
+            ),
         }
 
     def approval_metadata(self, task: TaskContract) -> dict[str, Any]:
@@ -590,7 +646,21 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM delegation approval digest is missing or stale"
             )
-        self.approval_store.inspect(prepared["approval_sha256"])
+        record = self.approval_store.inspect(prepared["approval_sha256"])
+        if isinstance(record, Mapping) and "schema_version" in record:
+            if record.get("schema_version") != 2:
+                raise LegacyPreTierIncompatibleError(
+                    "legacy_pre_tier_incompatible: GLM approval record "
+                    "does not bind capability policy"
+                )
+            if (
+                record.get("approval_contract_schema") != 3
+                or record.get("provider_tier_binding_digest")
+                != self.capability_binding.binding_digest
+            ):
+                raise ProviderPolicyError(
+                    "GLM host approval capability binding is stale"
+                )
         return prepared
 
     def validate_approval(self, task: TaskContract) -> dict[str, Any]:
@@ -604,7 +674,7 @@ class GlmFlashWorkerProvider(BaseProvider):
             prepared["approval_sha256"],
             signing_key=api_key,
         )
-        timeout_s = max(0.001, min(task.constraints.max_latency_s, 300.0))
+        timeout_s = float(task.constraints.max_latency_s)
         return self.transport.post_json(
             prepared["endpoint"],
             headers={"Authorization": f"Bearer {api_key}"},

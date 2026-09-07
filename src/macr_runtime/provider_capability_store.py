@@ -30,7 +30,7 @@ def _encode_policy(policy: ProviderCapabilityPolicy) -> tuple[str, str]:
     return body, hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def _binding_from_row(row: sqlite3.Row) -> ProviderTierBinding:
+def _policy_from_row(row: sqlite3.Row) -> ProviderCapabilityPolicy:
     expected_body_sha256 = hashlib.sha256(
         row["body_json"].encode("utf-8")
     ).hexdigest()
@@ -50,7 +50,11 @@ def _binding_from_row(row: sqlite3.Row) -> ProviderTierBinding:
         or binding.binding_digest != row["binding_digest"]
     ):
         raise DirectStoreConflict("provider capability policy digest is invalid")
-    return binding
+    return policy
+
+
+def _binding_from_row(row: sqlite3.Row) -> ProviderTierBinding:
+    return _policy_from_row(row).binding()
 
 
 def _read_effective_from_connection(
@@ -77,6 +81,32 @@ def _read_effective_from_connection(
     if row is None or row["binding_digest"] != active["binding_digest"]:
         raise DirectStoreConflict("provider capability activation is invalid")
     return _binding_from_row(row)
+
+
+def _read_effective_policy_from_connection(
+    connection: sqlite3.Connection,
+    resolver: ProviderCapabilityResolver,
+    provider_id: str,
+    model_id: str,
+) -> ProviderCapabilityPolicy:
+    active = connection.execute(
+        """SELECT tier_id, revision, binding_digest
+        FROM provider_capability_active
+        WHERE provider_id = ? AND model_id = ?""",
+        (provider_id, model_id),
+    ).fetchone()
+    if active is None:
+        return resolver.resolve(provider_id, model_id, "standard", 1)
+    row = connection.execute(
+        """SELECT body_json, body_sha256, binding_digest
+        FROM provider_capability_policies
+        WHERE provider_id = ? AND model_id = ?
+          AND tier_id = ? AND revision = ?""",
+        (provider_id, model_id, active["tier_id"], active["revision"]),
+    ).fetchone()
+    if row is None or row["binding_digest"] != active["binding_digest"]:
+        raise DirectStoreConflict("provider capability activation is invalid")
+    return _policy_from_row(row)
 
 
 class ProviderCapabilityPolicyStore:
@@ -293,6 +323,22 @@ class ProviderCapabilityPolicyStore:
         finally:
             connection.close()
 
+    def effective_policy(
+        self,
+        provider_id: str,
+        model_id: str,
+    ) -> ProviderCapabilityPolicy:
+        connection = self.database.connect()
+        try:
+            return _read_effective_policy_from_connection(
+                connection,
+                self.resolver,
+                provider_id,
+                model_id,
+            )
+        finally:
+            connection.close()
+
 
 def read_effective_binding(
     path: str | Path,
@@ -331,8 +377,46 @@ def read_effective_binding(
         connection.close()
 
 
+def read_effective_policy(
+    path: str | Path,
+    provider_id: str,
+    model_id: str,
+    *,
+    resolver: ProviderCapabilityResolver | None = None,
+) -> ProviderCapabilityPolicy:
+    candidate = Path(path)
+    selected = resolver or ProviderCapabilityResolver.builtins_only()
+    if not candidate.exists():
+        return selected.resolve(provider_id, model_id, "standard", 1)
+    uri = candidate.absolute().as_uri() + "?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        row = connection.execute(
+            """SELECT version FROM provider_capability_schema_meta
+            WHERE component = 'provider_capability_policies'"""
+        ).fetchone()
+        if row is None or row["version"] != ProviderCapabilityPolicyStore.SCHEMA_VERSION:
+            raise DirectStoreConflict(
+                "provider capability policy database schema is unsupported"
+            )
+        return _read_effective_policy_from_connection(
+            connection,
+            selected,
+            provider_id,
+            model_id,
+        )
+    except sqlite3.Error as exc:
+        raise DirectStoreConflict(
+            "provider capability policy database is invalid"
+        ) from exc
+    finally:
+        connection.close()
+
+
 __all__ = [
     "OperatorTierActivationVerifier",
     "ProviderCapabilityPolicyStore",
     "read_effective_binding",
+    "read_effective_policy",
 ]

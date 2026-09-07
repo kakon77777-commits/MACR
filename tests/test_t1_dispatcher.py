@@ -39,6 +39,9 @@ def approved_manifest(provider: GlmFlashWorkerProvider) -> T1ExecutionManifest:
                 task=task,
                 route=original.route,
                 token_policy_digest=original.token_policy_digest,
+                provider_tier_binding_digest=(
+                    original.provider_tier_binding_digest
+                ),
                 role_digest=original.role_digest,
                 privacy=original.privacy,
                 context_class=original.context_class,
@@ -67,6 +70,7 @@ def replan_manifest(
             task=item.task,
             route=item.route,
             token_policy_digest=item.token_policy_digest,
+            provider_tier_binding_digest=item.provider_tier_binding_digest,
             role_digest=item.role_digest,
             privacy=item.privacy,
             context_class=item.context_class,
@@ -99,6 +103,71 @@ class FailingFinishEventStore(SqliteEventStore):
 
 
 class T1DispatcherTests(unittest.TestCase):
+    def test_mismatched_provider_tier_fails_before_authority_or_queue_write(self) -> None:
+        now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as state_root:
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=FakeTransport(success_document()),
+                environ={"MACR_STATE_ROOT": str(state_root)},
+                key_source=StaticKeySource(),
+                approval_store=AllowingApprovalStore(),
+                token_policy=t1_glm_live_policy(),
+            )
+            services = build_test_services(state_root)
+            dispatcher = T1Dispatcher(
+                ProviderRegistry((provider,)),
+                services,
+                now=clock,
+            )
+            source = approved_manifest(provider)
+            wrong_members = tuple(
+                T1ExecutionMember.create(
+                    plan_digest=source.plan_digest,
+                    ordinal=item.ordinal,
+                    task=item.task,
+                    route=item.route,
+                    token_policy_digest=item.token_policy_digest,
+                    provider_tier_binding_digest="b" * 64,
+                    role_digest=item.role_digest,
+                    privacy=item.privacy,
+                    context_class=item.context_class,
+                    cost_ceiling_usd=item.cost_ceiling_usd,
+                    target_claims=item.target_claims,
+                )
+                for item in source.members
+            )
+            attacked = T1ExecutionManifest.create(
+                plan_digest=source.plan_digest,
+                members=wrong_members,
+                aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
+                campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
+                expires_at=source.expires_at,
+                authorized_dispatchers=source.authorized_dispatchers,
+            )
+
+            with self.assertRaisesRegex(T1DispatchError, "capability binding"):
+                dispatcher.stage(
+                    attacked,
+                    attacked.authorized_dispatchers,
+                    attacked.expires_at,
+                )
+            connection = services.events.database.connect()
+            try:
+                counts = tuple(
+                    connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    for table in (
+                        "batch_authorities",
+                        "dispatch_authorities",
+                        "plan_queue_batches",
+                    )
+                )
+            finally:
+                connection.close()
+
+        self.assertEqual(counts, (0, 0, 0))
+
     def test_worker_claims_one_member_and_uses_complete_runtime_path_once(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
@@ -172,6 +241,10 @@ class T1DispatcherTests(unittest.TestCase):
         self.assertEqual(
             events[0]["payload"]["member_digest"],
             subject.members[0].member_digest,
+        )
+        self.assertEqual(
+            events[0]["payload"]["provider_tier_binding_digest"],
+            subject.members[0].provider_tier_binding_digest,
         )
 
     def test_unknown_after_dispatch_requires_global_reconciliation_and_blocks_next(self) -> None:
@@ -294,6 +367,9 @@ class T1DispatcherTests(unittest.TestCase):
                 task=changed_task,
                 route=source.members[0].route,
                 token_policy_digest=source.members[0].token_policy_digest,
+                provider_tier_binding_digest=(
+                    source.members[0].provider_tier_binding_digest
+                ),
                 role_digest=source.members[0].role_digest,
                 privacy=source.members[0].privacy,
                 context_class=source.members[0].context_class,
@@ -379,6 +455,9 @@ class T1DispatcherTests(unittest.TestCase):
                     task_type=item.task.task_type,
                     batch_id=subject.manifest_digest,
                     member_digest=item.member_digest,
+                    provider_tier_binding_digest=(
+                        item.provider_tier_binding_digest
+                    ),
                 )
             self.assertEqual(transport.posts, [])
 

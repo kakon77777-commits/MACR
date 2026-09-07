@@ -12,6 +12,7 @@ from macr_runtime.provider_capability import (
 from macr_runtime.provider_capability_store import (
     ProviderCapabilityPolicyStore,
     read_effective_binding,
+    read_effective_policy,
 )
 from macr_runtime.runtime import RuntimeServices
 from macr_runtime.storage import StorageLayout
@@ -56,6 +57,14 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
             )
 
             self.assertEqual(binding, glm_standard_policy().binding())
+            self.assertEqual(
+                read_effective_policy(
+                    path,
+                    "glm_flash_worker",
+                    "glm-5.3-flash",
+                ),
+                glm_standard_policy(),
+            )
             self.assertFalse(path.exists())
 
     def test_store_is_create_once_and_defaults_to_standard(self) -> None:
@@ -99,6 +108,10 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
             self.assertEqual(
                 store.effective_binding("glm_flash_worker", "glm-5.3-flash"),
                 extended.binding(),
+            )
+            self.assertEqual(
+                store.effective_policy("glm_flash_worker", "glm-5.3-flash"),
+                extended,
             )
 
     def test_corrupt_active_policy_fails_closed_without_standard_fallback(self) -> None:

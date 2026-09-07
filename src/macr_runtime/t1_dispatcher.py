@@ -186,6 +186,16 @@ class T1Dispatcher:
                 raise T1DispatchError(
                     "T1 route does not use the exact manifest token policy"
                 )
+            capability_binding = self.registry.capability_binding(
+                member.route.provider_id
+            )
+            if (
+                capability_binding.binding_digest
+                != member.provider_tier_binding_digest
+            ):
+                raise T1DispatchError(
+                    "T1 route does not use the exact provider capability binding"
+                )
             provider = self.registry.get(member.route.provider_id)
             validate_approval = getattr(provider, "validate_approval", None)
             if not callable(validate_approval):
@@ -203,6 +213,8 @@ class T1Dispatcher:
                 != member.task.delegation_approval_sha256
                 or metadata.get("model_token_policy_digest")
                 != member.token_policy_digest
+                or metadata.get("provider_tier_binding_digest")
+                != member.provider_tier_binding_digest
             ):
                 raise T1DispatchError(
                     "T1 task approval digest or token policy is stale"
@@ -220,6 +232,14 @@ class T1Dispatcher:
             ),
             batch_ids=(manifest.manifest_digest,),
             member_digests=tuple(item.member_digest for item in manifest.members),
+            provider_tier_binding_digests=tuple(
+                sorted(
+                    {
+                        item.provider_tier_binding_digest
+                        for item in manifest.members
+                    }
+                )
+            ),
         )
 
     def _verify_dispatch_authority(
@@ -235,6 +255,9 @@ class T1Dispatcher:
                 task_type=member.task.task_type,
                 batch_id=manifest.manifest_digest,
                 member_digest=member.member_digest,
+                provider_tier_binding_digest=(
+                    member.provider_tier_binding_digest
+                ),
             )
 
     def _existing_bundle(
@@ -639,6 +662,7 @@ class T1Dispatcher:
             role_slot_id=f"t1-member-{member.ordinal}",
             route_id=member.route.route_id,
             model_token_policy_digest=member.token_policy_digest,
+            provider_tier_binding_digest=member.provider_tier_binding_digest,
         )
         result = None
         failure_type = None

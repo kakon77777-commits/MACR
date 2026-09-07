@@ -267,6 +267,10 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                     item.task.delegation_approval_sha256,
                     signing_key="test-id.test-secret",
                     expires_in_days=1,
+                    approval_contract_schema=3,
+                    provider_tier_binding_digest=(
+                        item.provider_tier_binding_digest
+                    ),
                 )
             services = build_test_services(temp)
             dispatcher = T1Dispatcher(

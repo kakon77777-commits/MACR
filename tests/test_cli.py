@@ -42,6 +42,8 @@ from macr_runtime.contracts import (
 )
 from macr_runtime.config import load_provider_configs
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.provider_capability import glm_extended_text_policy
+from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.registry import ProviderRegistry
@@ -89,6 +91,12 @@ class StaticKeySource:
 
     def check_metadata(self):
         return None
+
+
+class ExactWitnessVerifier:
+    def verify(self, *, witness, binding_digest):
+        if witness != "owner-witness":
+            raise AssertionError("unexpected witness")
 
 
 class ExplodingKeySource:
@@ -152,6 +160,10 @@ class DoctorTests(unittest.TestCase):
                     item.task.delegation_approval_sha256,
                     signing_key="test-id.test-secret",
                     expires_in_days=1,
+                    approval_contract_schema=3,
+                    provider_tier_binding_digest=(
+                        item.provider_tier_binding_digest
+                    ),
                 )
             manifest_path = state_root / "t1-private-manifest.json"
             manifest_path.write_text(
@@ -766,6 +778,54 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(len(document["required_approval_sha256"]), 64)
         self.assertNotIn("PUBLIC PREFLIGHT BODY", output.getvalue())
 
+    def test_glm_preflight_uses_exact_active_extended_capability(self) -> None:
+        with d_drive_tempdir() as temp:
+            capability_store = ProviderCapabilityPolicyStore(
+                temp / "settings" / "provider-capability-policies.sqlite3"
+            )
+            extended = glm_extended_text_policy()
+            capability_store.save_policy(extended)
+            capability_store.activate(
+                extended.binding().binding_digest,
+                witness="owner-witness",
+                verifier=ExactWitnessVerifier(),
+            )
+            task = TaskContract(
+                task_id="glm-preflight-extended",
+                goal="Review the supplied public candidate.",
+                task_type="delegated_review",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.01,
+                    max_latency_s=900,
+                    max_output_tokens=256,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_preflight(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        show_required_digest=True,
+                    )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(document["provider_tier_id"], "extended_text_candidate")
+        self.assertEqual(document["max_latency_s"], 900.0)
+        self.assertEqual(
+            document["provider_tier_binding_digest"],
+            extended.binding().binding_digest,
+        )
+
     def test_glm_preflight_rejects_stale_digest_without_key(self) -> None:
         with d_drive_tempdir() as temp:
             task = TaskContract(
@@ -876,9 +936,11 @@ class DoctorTests(unittest.TestCase):
                 for item in load_provider_configs(ROOT / "config" / "providers.json")
                 if item.id == "glm_flash_worker"
             )
-            digest = GlmFlashWorkerProvider(config, environ={}).approval_metadata(task)[
-                "required_approval_sha256"
-            ]
+            approval_metadata = GlmFlashWorkerProvider(
+                config,
+                environ={},
+            ).approval_metadata(task)
+            digest = approval_metadata["required_approval_sha256"]
             task = TaskContract.from_dict(
                 {
                     **task.to_dict(),
@@ -891,6 +953,10 @@ class DoctorTests(unittest.TestCase):
                 digest,
                 signing_key="test-id." + "test-secret",
                 expires_in_days=30,
+                approval_contract_schema=approval_metadata["approval_schema"],
+                provider_tier_binding_digest=approval_metadata[
+                    "provider_tier_binding_digest"
+                ],
             )
             output = io.StringIO()
             environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}

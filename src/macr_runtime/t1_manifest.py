@@ -12,6 +12,7 @@ from .batch_authority import BatchAuthorityReference
 from .canonical import aware_iso8601, sha256_id
 from .contracts import DelegationClass, PrivacyLevel, TaskContract
 from .execution import AuthorizationReference
+from .errors import LegacyPreTierIncompatibleError
 from .providers.glm import contains_obvious_sensitive_marker
 from .route_resolution import ExecutionRouteProposal
 from .runtime import task_contract_digest
@@ -147,6 +148,7 @@ class T1ExecutionMember:
     task: TaskContract
     route: ExecutionRouteProposal
     token_policy_digest: str
+    provider_tier_binding_digest: str
     role_digest: str
     privacy: str
     context_class: str
@@ -169,6 +171,14 @@ class T1ExecutionMember:
             self,
             "token_policy_digest",
             _digest("token_policy_digest", self.token_policy_digest),
+        )
+        object.__setattr__(
+            self,
+            "provider_tier_binding_digest",
+            _digest(
+                "provider_tier_binding_digest",
+                self.provider_tier_binding_digest,
+            ),
         )
         object.__setattr__(
             self,
@@ -201,7 +211,7 @@ class T1ExecutionMember:
         object.__setattr__(self, "target_claims", claims)
         self._validate_fixed_route()
         self._validate_task()
-        expected = sha256_id("t1_execution_member_v1", self.canonical_member())
+        expected = sha256_id("t1_execution_member_v2", self.canonical_member())
         if self.member_digest != expected:
             raise ValueError("T1 member digest does not match exact member")
 
@@ -271,6 +281,7 @@ class T1ExecutionMember:
         task: TaskContract,
         route: ExecutionRouteProposal,
         token_policy_digest: str,
+        provider_tier_binding_digest: str,
         role_digest: str,
         privacy: str,
         context_class: str,
@@ -292,6 +303,7 @@ class T1ExecutionMember:
             "task": task,
             "route": route,
             "token_policy_digest": token_policy_digest,
+            "provider_tier_binding_digest": provider_tier_binding_digest,
             "role_digest": role_digest,
             "privacy": privacy,
             "context_class": context_class,
@@ -304,13 +316,14 @@ class T1ExecutionMember:
             "task_contract_digest": task_contract_digest(task),
             "route_proposal_digest": route.proposal_digest,
             "token_policy_digest": token_policy_digest,
+            "provider_tier_binding_digest": provider_tier_binding_digest,
             "role_digest": role_digest,
             "privacy": privacy,
             "context_class": context_class,
             "cost_ceiling_usd": values["cost_ceiling_usd"],
             "target_claims": [item.to_dict() for item in normalized_claims],
         }
-        digest = sha256_id("t1_execution_member_v1", canonical)
+        digest = sha256_id("t1_execution_member_v2", canonical)
         return cls(member_digest=digest, **values)
 
     @classmethod
@@ -322,6 +335,7 @@ class T1ExecutionMember:
             "task",
             "route",
             "token_policy_digest",
+            "provider_tier_binding_digest",
             "role_digest",
             "privacy",
             "context_class",
@@ -339,6 +353,7 @@ class T1ExecutionMember:
             task=_task_from_dict(data["task"]),
             route=_route_from_dict(data["route"]),
             token_policy_digest=data["token_policy_digest"],
+            provider_tier_binding_digest=data["provider_tier_binding_digest"],
             role_digest=data["role_digest"],
             privacy=data["privacy"],
             context_class=data["context_class"],
@@ -353,6 +368,7 @@ class T1ExecutionMember:
             "task_contract_digest": task_contract_digest(self.task),
             "route_proposal_digest": self.route.proposal_digest,
             "token_policy_digest": self.token_policy_digest,
+            "provider_tier_binding_digest": self.provider_tier_binding_digest,
             "role_digest": self.role_digest,
             "privacy": self.privacy,
             "context_class": self.context_class,
@@ -368,6 +384,7 @@ class T1ExecutionMember:
             "task": self.task.to_dict(),
             "route": self.route.to_dict(),
             "token_policy_digest": self.token_policy_digest,
+            "provider_tier_binding_digest": self.provider_tier_binding_digest,
             "role_digest": self.role_digest,
             "privacy": self.privacy,
             "context_class": self.context_class,
@@ -386,12 +403,12 @@ class T1ExecutionManifest:
     campaign_cost_ceiling_usd: float
     expires_at: str
     authorized_dispatchers: tuple[str, ...]
-    schema_version: int = 1
+    schema_version: int = 2
     topology_id: str = _T1_TOPOLOGY
 
     def __post_init__(self) -> None:
-        if self.schema_version != 1:
-            raise ValueError("T1 manifest schema_version must be 1")
+        if self.schema_version != 2:
+            raise ValueError("T1 manifest schema_version must be 2")
         if self.topology_id != _T1_TOPOLOGY:
             raise ValueError("T1 manifest topology must be T1_FANOUT_VERIFIED")
         object.__setattr__(self, "plan_digest", _digest("plan_digest", self.plan_digest))
@@ -414,6 +431,8 @@ class T1ExecutionManifest:
             raise ValueError("T1 manifest members must be unique")
         if len({item.task.task_id for item in members}) != 3:
             raise ValueError("T1 manifest task IDs must be unique")
+        if len({item.provider_tier_binding_digest for item in members}) != 1:
+            raise ValueError("T1 manifest members must use one provider tier binding")
         object.__setattr__(self, "members", members)
         object.__setattr__(
             self,
@@ -456,7 +475,7 @@ class T1ExecutionManifest:
         if len(dispatchers) != 3 or len(set(dispatchers)) != 3:
             raise ValueError("T1 manifest requires three unique dispatchers")
         object.__setattr__(self, "authorized_dispatchers", dispatchers)
-        expected = sha256_id("t1_execution_manifest_v1", self.canonical_manifest())
+        expected = sha256_id("t1_execution_manifest_v2", self.canonical_manifest())
         if self.manifest_digest != expected:
             raise ValueError("T1 manifest digest does not match exact manifest")
 
@@ -486,7 +505,7 @@ class T1ExecutionManifest:
             )
         )
         canonical = {
-            "schema_version": 1,
+            "schema_version": 2,
             "topology_id": _T1_TOPOLOGY,
             "plan_digest": plan_digest,
             "plan_revision": plan_revision,
@@ -497,7 +516,7 @@ class T1ExecutionManifest:
             "authorized_dispatchers": list(normalized_dispatchers),
         }
         return cls(
-            manifest_digest=sha256_id("t1_execution_manifest_v1", canonical),
+            manifest_digest=sha256_id("t1_execution_manifest_v2", canonical),
             plan_digest=plan_digest,
             plan_revision=plan_revision,
             members=normalized_members,
@@ -509,6 +528,10 @@ class T1ExecutionManifest:
 
     @classmethod
     def from_dict(cls, value: object) -> "T1ExecutionManifest":
+        if isinstance(value, Mapping) and value.get("schema_version") == 1:
+            raise LegacyPreTierIncompatibleError(
+                "legacy_pre_tier_incompatible: T1 schema 1 is audit-only"
+            )
         expected = {
             "manifest_digest",
             "schema_version",
@@ -617,6 +640,14 @@ class T1AuthorityBundle:
         }
 
 
+@dataclass(frozen=True)
+class T1ManifestInspection:
+    status: str
+    schema_version: int
+    manifest_digest: str
+    member_count: int
+
+
 def _reject_duplicate_keys(pairs):
     document = {}
     for key, value in pairs:
@@ -626,7 +657,7 @@ def _reject_duplicate_keys(pairs):
     return document
 
 
-def load_t1_manifest(path: str | Path) -> T1ExecutionManifest:
+def _load_t1_document(path: str | Path) -> Mapping[str, Any]:
     candidate = Path(path)
     if not candidate.is_file():
         raise ValueError("T1 manifest path must be a file")
@@ -643,6 +674,37 @@ def load_t1_manifest(path: str | Path) -> T1ExecutionManifest:
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("T1 manifest must be strict UTF-8 JSON") from exc
+    if not isinstance(document, Mapping):
+        raise ValueError("T1 manifest must be a JSON object")
+    return document
+
+
+def inspect_t1_manifest(path: str | Path) -> T1ManifestInspection:
+    document = _load_t1_document(path)
+    schema_version = document.get("schema_version")
+    members = document.get("members")
+    manifest_digest = document.get("manifest_digest")
+    if schema_version not in {1, 2}:
+        raise ValueError("T1 manifest schema_version is unsupported")
+    if not isinstance(members, list) or len(members) != 3:
+        raise ValueError("T1 manifest must contain exactly three members")
+    digest = _digest("manifest_digest", manifest_digest)
+    if schema_version == 2:
+        T1ExecutionManifest.from_dict(document)
+    return T1ManifestInspection(
+        status=("legacy_pre_tier" if schema_version == 1 else "current"),
+        schema_version=schema_version,
+        manifest_digest=digest,
+        member_count=len(members),
+    )
+
+
+def load_t1_manifest(path: str | Path) -> T1ExecutionManifest:
+    document = _load_t1_document(path)
+    if document.get("schema_version") == 1:
+        raise LegacyPreTierIncompatibleError(
+            "legacy_pre_tier_incompatible: T1 schema 1 is audit-only"
+        )
     return T1ExecutionManifest.from_dict(document)
 
 
@@ -650,5 +712,7 @@ __all__ = [
     "T1AuthorityBundle",
     "T1ExecutionManifest",
     "T1ExecutionMember",
+    "T1ManifestInspection",
+    "inspect_t1_manifest",
     "load_t1_manifest",
 ]

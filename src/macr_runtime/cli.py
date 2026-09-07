@@ -31,6 +31,7 @@ from .execution import DispatchContext, DispatchOrigin, InteractionPlane
 from .legacy_ledger import LegacyLedgerImporter
 from .model_passport import ModelPassportProjector
 from .model_token_store import ModelTokenPolicyStore
+from .provider_capability_store import read_effective_policy
 from .observatory import ModelObservatory
 from .observatory_db import ObservatoryDatabase
 from .discovery.openrouter import (
@@ -297,6 +298,11 @@ def _glm_preflight(
                 config.id,
                 config.model or "",
             ),
+            capability_policy=read_effective_policy(
+                layout.provider_capability_policy_db_path,
+                config.id,
+                config.model or "",
+            ),
         )
         metadata = (
             provider.approval_metadata(task)
@@ -365,6 +371,11 @@ def _glm_approve(
                 config.id,
                 config.model or "",
             ),
+            capability_policy=read_effective_policy(
+                layout.provider_capability_policy_db_path,
+                config.id,
+                config.model or "",
+            ),
         )
         metadata = provider.approval_metadata(task)
         if task.delegation_approval_sha256 != metadata["required_approval_sha256"]:
@@ -376,6 +387,10 @@ def _glm_approve(
                 signing_key=signing_key,
                 expires_in_days=expires_in_days,
                 replace_existing=replace_existing,
+                approval_contract_schema=metadata["approval_schema"],
+                provider_tier_binding_digest=metadata[
+                    "provider_tier_binding_digest"
+                ],
             )
         finally:
             signing_key = None
@@ -932,6 +947,7 @@ def _cli_policy_snapshot_sha256(
     allow_network: bool,
     allow_local: bool,
     model_token_policy_digest: str | None,
+    provider_tier_binding_digest: str | None,
 ) -> str:
     document = {
         "schema": "macr_cli_one_shot_v2",
@@ -945,6 +961,7 @@ def _cli_policy_snapshot_sha256(
         "max_output_tokens": task.constraints.max_output_tokens,
         "max_context_tokens": task.constraints.max_context_tokens,
         "model_token_policy_digest": model_token_policy_digest,
+        "provider_tier_binding_digest": provider_tier_binding_digest,
         "allow_network": allow_network,
         "allow_local": allow_local,
     }
@@ -991,6 +1008,7 @@ def _invoke(
     registry = ProviderRegistry.from_configs(
         configs,
         token_policy_store=services.token_policies,
+        capability_policy_store=services.capability_policies,
     )
     provider = registry.get(provider_id)
     if not _legacy_migration_complete(layout, services):
@@ -1020,6 +1038,12 @@ def _invoke(
     run_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     member_digest = task.delegation_approval_sha256
+    capability_binding = getattr(provider, "capability_binding", None)
+    provider_tier_binding_digest = (
+        capability_binding.binding_digest
+        if capability_binding is not None
+        else None
+    )
     reference = services.authorities.issue(
         source_kind="cli_opt_in",
         source_id=f"{provider_id}:{task.task_id}:{run_id}",
@@ -1028,6 +1052,11 @@ def _invoke(
             planes=(InteractionPlane.DELEGATION.value,),
             task_types=(task.task_type,),
             member_digests=(member_digest,) if member_digest else (),
+            provider_tier_binding_digests=(
+                (provider_tier_binding_digest,)
+                if provider_tier_binding_digest is not None
+                else ()
+            ),
         ),
         expires_at=(now + timedelta(minutes=10)).isoformat(),
     )
@@ -1047,6 +1076,7 @@ def _invoke(
                 if model_token_policy is not None
                 else None
             ),
+            provider_tier_binding_digest=provider_tier_binding_digest,
         ),
         model_token_policy_digest=(
             model_token_policy.policy_digest
@@ -1054,6 +1084,7 @@ def _invoke(
             else None
         ),
         member_digest=member_digest,
+        provider_tier_binding_digest=provider_tier_binding_digest,
     )
     result = MacrRuntime(registry, services).invoke(
         provider_id,

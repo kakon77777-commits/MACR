@@ -60,3 +60,7 @@ class ObservatoryConflict(MacrError):
 
 class CoordinatorPolicyError(MacrError):
     """A coordinator proposal exceeds its host-defined planning constraints."""
+
+
+class LegacyPreTierIncompatibleError(MacrError):
+    """Historical pre-tier authority/evidence cannot satisfy a new dispatch."""

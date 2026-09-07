@@ -15,7 +15,7 @@ from .errors import ProviderPolicyError
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_FIELDS = frozenset(
+_FIELDS_V1 = frozenset(
     {
         "schema_version",
         "provider_id",
@@ -25,6 +25,12 @@ _FIELDS = frozenset(
         "expires_at",
         "nonce",
         "mac_sha256",
+    }
+)
+_FIELDS_V2 = _FIELDS_V1 | frozenset(
+    {
+        "approval_contract_schema",
+        "provider_tier_binding_digest",
     }
 )
 
@@ -142,6 +148,8 @@ class GlmApprovalStore:
         signing_key: str,
         expires_in_days: int,
         replace_existing: bool = False,
+        approval_contract_schema: int | None = None,
+        provider_tier_binding_digest: str | None = None,
     ) -> dict[str, Any]:
         digest = self._validate_digest(approval_sha256)
         if (
@@ -154,8 +162,20 @@ class GlmApprovalStore:
         if now.tzinfo is None:
             raise ValueError("approval clock must be timezone-aware")
         now = now.astimezone(timezone.utc)
+        typed = (
+            approval_contract_schema is not None
+            or provider_tier_binding_digest is not None
+        )
+        if typed and (
+            approval_contract_schema != 3
+            or not isinstance(provider_tier_binding_digest, str)
+            or not _SHA256.fullmatch(provider_tier_binding_digest)
+        ):
+            raise ValueError(
+                "typed GLM approval requires schema 3 and a tier binding digest"
+            )
         document = {
-            "schema_version": 1,
+            "schema_version": 2 if typed else 1,
             "provider_id": "glm_flash_worker",
             "approval_sha256": digest,
             "approved_by": "host_operator",
@@ -163,6 +183,11 @@ class GlmApprovalStore:
             "expires_at": (now + timedelta(days=expires_in_days)).isoformat(),
             "nonce": str(uuid.uuid4()),
         }
+        if typed:
+            document["approval_contract_schema"] = approval_contract_schema
+            document["provider_tier_binding_digest"] = (
+                provider_tier_binding_digest
+            )
         document["mac_sha256"] = self._record_mac(document, signing_key)
         self._ensure_root()
         path = self.record_path(digest)
@@ -209,7 +234,12 @@ class GlmApprovalStore:
             raise
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ProviderPolicyError("GLM host approval record is invalid") from exc
-        if not isinstance(document, dict) or set(document) != _FIELDS:
+        expected_fields = (
+            _FIELDS_V2
+            if isinstance(document, dict) and document.get("schema_version") == 2
+            else _FIELDS_V1
+        )
+        if not isinstance(document, dict) or set(document) != expected_fields:
             raise ProviderPolicyError("GLM host approval record is invalid")
         if not isinstance(document.get("mac_sha256"), str) or not _SHA256.fullmatch(
             document["mac_sha256"]
@@ -229,7 +259,7 @@ class GlmApprovalStore:
         except (TypeError, ValueError, KeyError) as exc:
             raise ProviderPolicyError("GLM host approval record is invalid") from exc
         if (
-            document["schema_version"] != 1
+            document["schema_version"] not in {1, 2}
             or document["provider_id"] != "glm_flash_worker"
             or document["approval_sha256"] != digest
             or document["approved_by"] != "host_operator"
@@ -238,6 +268,15 @@ class GlmApprovalStore:
             or expires_at.tzinfo is None
             or expires_at <= approved_at
             or expires_at - approved_at > timedelta(days=365)
+        ):
+            raise ProviderPolicyError("GLM host approval record is invalid")
+        if document["schema_version"] == 2 and (
+            document.get("approval_contract_schema") != 3
+            or not isinstance(
+                document.get("provider_tier_binding_digest"),
+                str,
+            )
+            or not _SHA256.fullmatch(document["provider_tier_binding_digest"])
         ):
             raise ProviderPolicyError("GLM host approval record is invalid")
         now = self._now()
@@ -267,3 +306,27 @@ class GlmApprovalStore:
         if not hmac.compare_digest(document["mac_sha256"], expected_mac):
             raise ProviderPolicyError("GLM host approval record MAC is invalid")
         return self._validate_document(digest, document)
+
+    def status_snapshot(self) -> dict[str, int]:
+        counts = {
+            "current_typed_count": 0,
+            "invalid_count": 0,
+            "legacy_pre_tier_count": 0,
+            "total_count": 0,
+        }
+        self._check_root_ancestry()
+        if not self.root.is_dir():
+            return counts
+        for path in self.root.glob("*.json"):
+            counts["total_count"] += 1
+            try:
+                digest = path.stem.lower()
+                _, document = self._read_document(digest)
+            except ProviderPolicyError:
+                counts["invalid_count"] += 1
+                continue
+            if document["schema_version"] == 2:
+                counts["current_typed_count"] += 1
+            else:
+                counts["legacy_pre_tier_count"] += 1
+        return counts

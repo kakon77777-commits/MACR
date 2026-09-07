@@ -23,6 +23,7 @@ from .execution import (
 )
 from .model_token_store import ModelTokenPolicyStore
 from .provider_capability_store import ProviderCapabilityPolicyStore
+from .provider_capability import ProviderTierBinding
 from .registry import ProviderRegistry
 from .return_contracts import validate_return_contract
 from .storage import StorageLayout
@@ -169,6 +170,44 @@ def _token_policy_failure(
     )
 
 
+def _capability_policy_failure(
+    provider_id: str,
+    task: TaskContract,
+    exc: ProviderPolicyError,
+) -> ProviderResult:
+    return ProviderResult(
+        task_id=task.task_id,
+        status=ResultStatus.CANDIDATE_FAILURE,
+        warnings=("Provider capability policy refused the task.",),
+        failure_code=type(exc).__name__,
+        failure_stage="provider_capability",
+        provider_meta={
+            "provider": provider_id,
+            "failure_type": type(exc).__name__,
+            "failure_stage": "provider_capability",
+        },
+    )
+
+
+def _provider_approval_failure(
+    provider_id: str,
+    task: TaskContract,
+    exc: MacrError,
+) -> ProviderResult:
+    return ProviderResult(
+        task_id=task.task_id,
+        status=ResultStatus.CANDIDATE_FAILURE,
+        warnings=("Provider approval refused the task before dispatch.",),
+        failure_code=type(exc).__name__,
+        failure_stage="provider_approval",
+        provider_meta={
+            "provider": provider_id,
+            "failure_type": type(exc).__name__,
+            "failure_stage": "provider_approval",
+        },
+    )
+
+
 class MacrRuntime:
     def __init__(
         self,
@@ -219,6 +258,41 @@ class MacrRuntime:
                 )
         except ProviderPolicyError as exc:
             return _token_policy_failure(provider_id, task, exc)
+        provider_binding = getattr(provider, "capability_binding", None)
+        if (
+            provider_binding is not None
+            or context.provider_tier_binding_digest is not None
+        ):
+            if (
+                not isinstance(provider_binding, ProviderTierBinding)
+                or provider_binding.provider_id != provider_id
+                or context.provider_tier_binding_digest
+                != provider_binding.binding_digest
+            ):
+                return _capability_policy_failure(
+                    provider_id,
+                    task,
+                    ProviderPolicyError(
+                        "dispatch context does not match provider capability binding"
+                    ),
+                )
+        validate_approval = getattr(provider, "validate_approval", None)
+        if callable(validate_approval):
+            try:
+                approval_metadata = validate_approval(task)
+                if (
+                    isinstance(provider_binding, ProviderTierBinding)
+                    and (
+                        not isinstance(approval_metadata, Mapping)
+                        or approval_metadata.get("provider_tier_binding_digest")
+                        != provider_binding.binding_digest
+                    )
+                ):
+                    raise ProviderPolicyError(
+                        "provider approval does not bind the active capability tier"
+                    )
+            except MacrError as exc:
+                return _provider_approval_failure(provider_id, task, exc)
         resource_key = dispatch_resource_key(provider_id, task)
         ttl_seconds = max(
             1,

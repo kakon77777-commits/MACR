@@ -6,6 +6,8 @@ from typing import Any, Mapping
 from .config import ProviderConfig
 from .errors import ConfigurationError, ProviderPolicyError, ProviderUnavailableError
 from .model_token_store import ModelTokenPolicyStore
+from .provider_capability import ProviderTierBinding
+from .provider_capability_store import ProviderCapabilityPolicyStore
 from .providers.base import BaseProvider
 from .providers.disabled import DisabledProvider
 from .providers.grok import GrokResponsesProvider
@@ -45,6 +47,7 @@ class ProviderRegistry:
         transports: Mapping[str, JsonTransport] | None = None,
         key_sources: Mapping[str, Any] | None = None,
         token_policy_store: ModelTokenPolicyStore | None = None,
+        capability_policy_store: ProviderCapabilityPolicyStore | None = None,
     ) -> "ProviderRegistry":
         transport_map = {} if transports is None else dict(transports)
         key_source_map = {} if key_sources is None else dict(key_sources)
@@ -76,6 +79,14 @@ class ProviderRegistry:
                     if token_policy_store is not None
                     else None
                 )
+                capability_policy = (
+                    capability_policy_store.effective_policy(
+                        config.id,
+                        config.model,
+                    )
+                    if capability_policy_store is not None
+                    else None
+                )
                 providers.append(
                     GlmFlashWorkerProvider(
                         config,
@@ -83,6 +94,7 @@ class ProviderRegistry:
                         transport=transport_map.get(config.id),
                         key_source=key_source_map.get(config.id),
                         token_policy=token_policy,
+                        capability_policy=capability_policy,
                     )
                 )
             elif config.kind == "ollama_local_chat":
@@ -168,6 +180,15 @@ class ProviderRegistry:
         if isinstance(config, ProviderConfig):
             return config.kind in _MODEL_TOKEN_POLICY_KINDS
         return self.requested_model(provider_id) is not None
+
+    def capability_binding(self, provider_id: str) -> ProviderTierBinding:
+        provider = self.get(provider_id)
+        binding = getattr(provider, "capability_binding", None)
+        if not isinstance(binding, ProviderTierBinding):
+            raise ProviderPolicyError(
+                "provider has no exact capability tier binding"
+            )
+        return binding
 
     def execution_profile(self, provider_id: str) -> dict[str, object]:
         provider = self.get(provider_id)

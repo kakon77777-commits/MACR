@@ -20,12 +20,18 @@ from macr_runtime.contracts import (
 )
 from macr_runtime.errors import (
     ConfigurationError,
+    LegacyPreTierIncompatibleError,
     ProviderPolicyError,
     ProviderUnavailableError,
 )
 from macr_runtime.providers.glm import (
     GlmFixedKeySource,
     GlmFlashWorkerProvider as _GlmFlashWorkerProvider,
+)
+from macr_runtime.glm_approval import GlmApprovalStore
+from macr_runtime.provider_capability import (
+    glm_extended_text_policy,
+    glm_standard_policy,
 )
 from macr_runtime.token_policy import ModelTokenPolicyResolver, t1_glm_live_policy
 from tests.support import d_drive_tempdir
@@ -142,11 +148,17 @@ def glm_config() -> ProviderConfig:
     )
 
 
-def _approval_digest(task: TaskContract, *, token_policy=None) -> str:
+def _approval_digest(
+    task: TaskContract,
+    *,
+    token_policy=None,
+    capability_binding=None,
+) -> str:
     policy = token_policy or ModelTokenPolicyResolver.builtins_only().resolve(
         "glm_flash_worker",
         "glm-5.3-flash",
     )
+    binding = capability_binding or glm_standard_policy().binding()
     envelope = {
         "goal": task.goal,
         "delegable": task.delegable,
@@ -186,7 +198,8 @@ def _approval_digest(task: TaskContract, *, token_policy=None) -> str:
         "stream": False,
     }
     manifest = {
-        "approval_schema": 2,
+        "approval_schema": 3,
+        "task_id": task.task_id,
         "provider_id": "glm_flash_worker",
         "endpoint": "https://api.z.ai/api/paas/v4/chat/completions",
         "model": "glm-5.3-flash",
@@ -195,9 +208,11 @@ def _approval_digest(task: TaskContract, *, token_policy=None) -> str:
         "task_type": task.task_type,
         "privacy": task.constraints.privacy.value,
         "max_cost_usd": task.constraints.max_cost_usd,
+        "max_latency_s": task.constraints.max_latency_s,
         "max_output_tokens": task.constraints.max_output_tokens,
         "max_context_tokens": task.constraints.max_context_tokens,
         "model_token_policy_digest": policy.policy_digest,
+        "provider_tier_binding_digest": binding.binding_digest,
         "request_payload": request_payload,
     }
     encoded = json.dumps(
@@ -260,6 +275,150 @@ def success_document() -> dict[str, Any]:
 
 
 class GlmFlashWorkerProviderTests(unittest.TestCase):
+    def test_legacy_pre_tier_approval_is_distinctly_incompatible(self):
+        with d_drive_tempdir() as state_root:
+            provider = _GlmFlashWorkerProvider(
+                glm_config(),
+                transport=FakeTransport(success_document()),
+                environ={"MACR_STATE_ROOT": str(state_root)},
+                key_source=StaticKeySource(),
+            )
+            base = replace(delegated_task(), delegation_approval_sha256=None)
+            metadata = provider.approval_metadata(base)
+            task = replace(
+                base,
+                delegation_approval_sha256=metadata["required_approval_sha256"],
+            )
+            GlmApprovalStore(state_root).create(
+                metadata["required_approval_sha256"],
+                signing_key="test-id.test-secret",
+                expires_in_days=1,
+            )
+
+            with self.assertRaisesRegex(
+                LegacyPreTierIncompatibleError,
+                "legacy_pre_tier_incompatible",
+            ):
+                provider.validate_approval(task)
+
+    @staticmethod
+    def _approve_with_provider(
+        provider: _GlmFlashWorkerProvider,
+        task: TaskContract,
+    ) -> TaskContract:
+        metadata = provider.approval_metadata(
+            replace(task, delegation_approval_sha256=None)
+        )
+        return replace(
+            task,
+            delegation_approval_sha256=metadata["required_approval_sha256"],
+        )
+
+    def test_standard_300_and_extended_900_reach_transport_without_clamp(self):
+        cases = (
+            (glm_standard_policy().binding(), "delegated_routine", 300),
+            (
+                glm_extended_text_policy().binding(),
+                "delegated_analysis",
+                900,
+            ),
+        )
+        for binding, task_type, timeout_s in cases:
+            with self.subTest(binding=binding.tier_id):
+                transport = FakeTransport(success_document())
+                provider = _GlmFlashWorkerProvider(
+                    glm_config(),
+                    transport=transport,
+                    environ={},
+                    key_source=StaticKeySource(),
+                    approval_store=AllowingApprovalStore(),
+                    capability_binding=binding,
+                )
+                base = delegated_task()
+                task = replace(
+                    base,
+                    task_type=task_type,
+                    constraints=replace(base.constraints, max_latency_s=timeout_s),
+                    delegation_approval_sha256=None,
+                )
+                task = self._approve_with_provider(provider, task)
+
+                provider.invoke(task)
+
+                self.assertEqual(transport.posts[0]["timeout_s"], timeout_s)
+
+    def test_latency_above_exact_tier_ceiling_fails_before_key_or_transport(self):
+        cases = (
+            (glm_standard_policy().binding(), 301),
+            (glm_extended_text_policy().binding(), 901),
+        )
+        for binding, timeout_s in cases:
+            with self.subTest(binding=binding.tier_id):
+                transport = FakeTransport(success_document())
+                key_source = ExplodingKeySource()
+                provider = _GlmFlashWorkerProvider(
+                    glm_config(),
+                    transport=transport,
+                    environ={},
+                    key_source=key_source,
+                    approval_store=AllowingApprovalStore(),
+                    capability_binding=binding,
+                )
+                base = delegated_task()
+                task = replace(
+                    base,
+                    constraints=replace(base.constraints, max_latency_s=timeout_s),
+                    delegation_approval_sha256=None,
+                )
+
+                with self.assertRaisesRegex(ProviderPolicyError, "latency.*tier"):
+                    provider.approval_metadata(task)
+
+                self.assertEqual(key_source.calls, 0)
+                self.assertEqual(transport.posts, [])
+
+    def test_approval_schema_binds_task_latency_and_outer_tier_identity(self):
+        standard = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+            capability_binding=glm_standard_policy().binding(),
+        )
+        extended = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+            capability_binding=glm_extended_text_policy().binding(),
+        )
+        base = replace(delegated_task(), delegation_approval_sha256=None)
+        digests = {
+            standard.approval_metadata(base)["required_approval_sha256"],
+            standard.approval_metadata(replace(base, task_id="different-task"))[
+                "required_approval_sha256"
+            ],
+            standard.approval_metadata(
+                replace(
+                    base,
+                    constraints=replace(base.constraints, max_latency_s=31),
+                )
+            )["required_approval_sha256"],
+            extended.approval_metadata(base)["required_approval_sha256"],
+        }
+
+        self.assertEqual(len(digests), 4)
+        metadata = standard.approval_metadata(base)
+        self.assertEqual(metadata["approval_schema"], 3)
+        self.assertEqual(metadata["task_id"], base.task_id)
+        self.assertEqual(metadata["max_latency_s"], 30.0)
+        self.assertEqual(
+            metadata["provider_tier_binding_digest"],
+            glm_standard_policy().binding().binding_digest,
+        )
+
     def test_external_host_approval_is_required_before_key_resolution(self):
         key_source = ExplodingKeySource()
         provider = GlmFlashWorkerProvider(
@@ -740,7 +899,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             environ={"ZAI_API_KEY": "test-id.test-secret"},
         )
 
-        with self.assertRaisesRegex(ProviderPolicyError, "routine task type"):
+        with self.assertRaisesRegex(ProviderPolicyError, "active tier"):
             provider.invoke(replace(delegated_task(), task_type="frontier_research"))
 
         self.assertEqual(transport.posts, [])

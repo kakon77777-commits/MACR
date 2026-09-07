@@ -40,6 +40,59 @@ def sign_record(document: dict, signing_key: str = SIGNING_KEY) -> None:
 
 
 class GlmApprovalStoreTests(unittest.TestCase):
+    def test_typed_approval_record_binds_contract_and_provider_tier(self):
+        now = datetime(2026, 8, 27, 7, 0, tzinfo=timezone.utc)
+        digest = "a" * 64
+        binding_digest = "b" * 64
+        with d_drive_tempdir() as state_root:
+            store = GlmApprovalStore(state_root, now=Clock(now))
+
+            created = store.create(
+                digest,
+                signing_key=SIGNING_KEY,
+                expires_in_days=30,
+                approval_contract_schema=3,
+                provider_tier_binding_digest=binding_digest,
+            )
+            verified = store.verify(digest, signing_key=SIGNING_KEY)
+
+        self.assertEqual(created["schema_version"], 2)
+        self.assertEqual(created["approval_contract_schema"], 3)
+        self.assertEqual(
+            created["provider_tier_binding_digest"],
+            binding_digest,
+        )
+        self.assertEqual(verified, created)
+
+    def test_content_free_status_distinguishes_legacy_and_typed_records(self):
+        now = datetime(2026, 8, 27, 7, 0, tzinfo=timezone.utc)
+        with d_drive_tempdir() as state_root:
+            store = GlmApprovalStore(state_root, now=Clock(now))
+            store.create(
+                "c" * 64,
+                signing_key=SIGNING_KEY,
+                expires_in_days=30,
+            )
+            store.create(
+                "d" * 64,
+                signing_key=SIGNING_KEY,
+                expires_in_days=30,
+                approval_contract_schema=3,
+                provider_tier_binding_digest="e" * 64,
+            )
+
+            status = store.status_snapshot()
+
+        self.assertEqual(
+            status,
+            {
+                "current_typed_count": 1,
+                "invalid_count": 0,
+                "legacy_pre_tier_count": 1,
+                "total_count": 2,
+            },
+        )
+
     def test_reparse_approval_ancestor_is_rejected_before_child_creation(self):
         with d_drive_tempdir() as state_root:
             approvals_root = state_root / "approvals"

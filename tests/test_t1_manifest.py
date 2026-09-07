@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from macr_runtime.canonical import sha256_id
+from macr_runtime.errors import LegacyPreTierIncompatibleError
+from macr_runtime.provider_capability import glm_standard_policy
 from macr_runtime.contracts import (
     DelegationClass,
     PrivacyLevel,
@@ -17,6 +19,7 @@ from macr_runtime.scheduler import TargetClaim
 from macr_runtime.t1_manifest import (
     T1ExecutionManifest,
     T1ExecutionMember,
+    inspect_t1_manifest,
     load_t1_manifest,
 )
 from macr_runtime.token_policy import t1_glm_live_policy
@@ -73,6 +76,9 @@ def member(ordinal: int, *, route_seed: int = 1) -> T1ExecutionMember:
         task=task(ordinal),
         route=proposal(route_seed),
         token_policy_digest=t1_glm_live_policy().policy_digest,
+        provider_tier_binding_digest=(
+            glm_standard_policy().binding().binding_digest
+        ),
         role_digest=format(ordinal + 9, "x") * 64,
         privacy="public",
         context_class="non_sensitive_routine",
@@ -93,6 +99,70 @@ def manifest() -> T1ExecutionManifest:
 
 
 class T1ManifestTests(unittest.TestCase):
+    def test_schema_two_and_member_digest_bind_provider_tier(self) -> None:
+        first = manifest()
+        original = first.members[0]
+        changed = T1ExecutionMember.create(
+            plan_digest=original.plan_digest,
+            ordinal=original.ordinal,
+            task=original.task,
+            route=original.route,
+            token_policy_digest=original.token_policy_digest,
+            provider_tier_binding_digest="b" * 64,
+            role_digest=original.role_digest,
+            privacy=original.privacy,
+            context_class=original.context_class,
+            cost_ceiling_usd=original.cost_ceiling_usd,
+            target_claims=original.target_claims,
+        )
+
+        self.assertEqual(first.schema_version, 2)
+        self.assertNotEqual(original.member_digest, changed.member_digest)
+
+    def test_schema_one_is_audit_visible_but_dispatch_incompatible(self) -> None:
+        current = manifest()
+        legacy_members = []
+        legacy_member_digests = []
+        for member_value in current.members:
+            document = member_value.to_dict()
+            document.pop("provider_tier_binding_digest")
+            canonical = member_value.canonical_member()
+            canonical.pop("provider_tier_binding_digest")
+            document["member_digest"] = sha256_id(
+                "t1_execution_member_v1",
+                canonical,
+            )
+            legacy_member_digests.append(document["member_digest"])
+            legacy_members.append(document)
+        legacy_manifest = current.to_dict()
+        legacy_manifest["schema_version"] = 1
+        legacy_manifest["members"] = legacy_members
+        canonical_manifest = current.canonical_manifest()
+        canonical_manifest["schema_version"] = 1
+        canonical_manifest["ordered_member_digests"] = legacy_member_digests
+        legacy_manifest["manifest_digest"] = sha256_id(
+            "t1_execution_manifest_v1",
+            canonical_manifest,
+        )
+
+        with d_drive_tempdir() as temp:
+            path = temp / "legacy-t1.json"
+            raw = json.dumps(legacy_manifest, sort_keys=True).encode("utf-8")
+            path.write_bytes(raw)
+            inspection = inspect_t1_manifest(path)
+            with self.assertRaisesRegex(
+                LegacyPreTierIncompatibleError,
+                "legacy_pre_tier_incompatible",
+            ):
+                load_t1_manifest(path)
+            after = path.read_bytes()
+
+        self.assertEqual(inspection.status, "legacy_pre_tier")
+        self.assertEqual(inspection.schema_version, 1)
+        self.assertEqual(inspection.member_count, 3)
+        self.assertEqual(inspection.manifest_digest, legacy_manifest["manifest_digest"])
+        self.assertEqual(after, raw)
+
     def test_member_and_manifest_digest_bind_order_task_route_policy_cost_and_targets(
         self,
     ) -> None:
@@ -118,6 +188,9 @@ class T1ManifestTests(unittest.TestCase):
                 task=source.task,
                 route=source.route,
                 token_policy_digest=source.token_policy_digest,
+                provider_tier_binding_digest=(
+                    source.provider_tier_binding_digest
+                ),
                 role_digest=source.role_digest,
                 privacy=source.privacy,
                 context_class=source.context_class,
@@ -178,6 +251,9 @@ class T1ManifestTests(unittest.TestCase):
                 task=unsafe_task,
                 route=first.members[0].route,
                 token_policy_digest=first.members[0].token_policy_digest,
+                provider_tier_binding_digest=(
+                    first.members[0].provider_tier_binding_digest
+                ),
                 role_digest=first.members[0].role_digest,
                 privacy=first.members[0].privacy,
                 context_class=first.members[0].context_class,
@@ -197,6 +273,7 @@ class T1ManifestTests(unittest.TestCase):
             task=latex_task,
             route=first.route,
             token_policy_digest=first.token_policy_digest,
+            provider_tier_binding_digest=first.provider_tier_binding_digest,
             role_digest=first.role_digest,
             privacy=first.privacy,
             context_class=first.context_class,

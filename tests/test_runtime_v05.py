@@ -27,7 +27,9 @@ from macr_runtime.execution import (
     ProviderUsage,
     RawProviderObservation,
 )
+from macr_runtime.errors import LegacyPreTierIncompatibleError
 from macr_runtime.providers.base import BaseProvider, ProviderHealth
+from macr_runtime.provider_capability import ProviderTierBinding, glm_standard_policy
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime, dispatch_resource_key
 
@@ -46,6 +48,7 @@ class ObservedProvider(BaseProvider):
         finish_reason: str = "stop",
         cost_usd: float | None = 0.000008,
         model: str | None = None,
+        capability_binding=None,
     ) -> None:
         self.provider_id = provider_id
         self.answer = answer
@@ -53,6 +56,7 @@ class ObservedProvider(BaseProvider):
         self.finish_reason = finish_reason
         self.cost_usd = cost_usd
         self.model = model
+        self.capability_binding = capability_binding
         self.calls = 0
 
     def health(self) -> ProviderHealth:
@@ -113,6 +117,14 @@ class ExplodingProvider(BaseProvider):
         raise RuntimeError("PRIVATE simulated provider crash")
 
 
+class ApprovalRejectingProvider(ObservedProvider):
+    def validate_approval(self, task):
+        del task
+        raise LegacyPreTierIncompatibleError(
+            "legacy_pre_tier_incompatible"
+        )
+
+
 def delegated_task(
     *,
     task_id: str,
@@ -169,10 +181,92 @@ def issue_context(
 
 
 class RuntimeV05Tests(unittest.TestCase):
+    def test_legacy_provider_approval_refuses_before_lease_or_event(self) -> None:
+        binding = ProviderTierBinding(
+            provider_id="approval_provider",
+            model_id="test-model",
+            tier_id="standard",
+            revision=1,
+            complete_policy_digest="e" * 64,
+            max_latency_s=300,
+        )
+        provider = ApprovalRejectingProvider(
+            "approval_provider",
+            answer="candidate",
+            capability_binding=binding,
+        )
+        task = delegated_task(task_id="legacy-provider-approval")
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            context = issue_context(
+                services,
+                provider.provider_id,
+                task,
+                provider_tier_binding_digest=binding.binding_digest,
+            )
+
+            result = MacrRuntime(ProviderRegistry((provider,)), services).invoke(
+                provider.provider_id,
+                task,
+                context,
+            )
+            events = services.events.read_events(run_id=context.run_id)
+            lease = services.leases.read(
+                dispatch_resource_key(provider.provider_id, task)
+            )
+
+        self.assertEqual(result.failure_code, "LegacyPreTierIncompatibleError")
+        self.assertEqual(result.failure_stage, "provider_approval")
+        self.assertEqual(provider.calls, 0)
+        self.assertEqual(events, ())
+        self.assertIsNone(lease)
+
+    def test_provider_capability_binding_mismatch_refuses_before_authority(self) -> None:
+        expected = glm_standard_policy().binding()
+        provider = ObservedProvider(
+            "test_provider",
+            answer="candidate",
+            capability_binding=expected,
+        )
+        task = delegated_task(task_id="tier-policy-mismatch")
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            context = issue_context(
+                services,
+                provider.provider_id,
+                task,
+                provider_tier_binding_digest="b" * 64,
+            )
+
+            result = MacrRuntime(ProviderRegistry((provider,)), services).invoke(
+                provider.provider_id,
+                task,
+                context,
+            )
+            events = services.events.read_events(run_id=context.run_id)
+
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(result.failure_code, "ProviderPolicyError")
+        self.assertEqual(result.failure_stage, "provider_capability")
+        self.assertEqual(provider.calls, 0)
+        self.assertEqual(events, ())
+
     def test_dispatch_event_binds_exact_provider_tier_digest(self) -> None:
-        provider = ObservedProvider("test_provider", answer="candidate")
+        binding = ProviderTierBinding(
+            provider_id="test_provider",
+            model_id="test-model",
+            tier_id="standard",
+            revision=1,
+            complete_policy_digest="e" * 64,
+            max_latency_s=300,
+        )
+        provider = ObservedProvider(
+            "test_provider",
+            answer="candidate",
+            capability_binding=binding,
+        )
         task = delegated_task(task_id="tier-policy-evidence")
-        binding_digest = "f" * 64
+        binding_digest = binding.binding_digest
         with d_drive_tempdir() as state_root:
             services = build_test_services(state_root)
             context = issue_context(

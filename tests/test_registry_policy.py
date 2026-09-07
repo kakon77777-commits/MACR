@@ -6,6 +6,8 @@ from macr_runtime.contracts import TaskContract
 from macr_runtime.errors import ProviderPolicyError
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.provider_capability import glm_extended_text_policy
+from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.token_policy import ModelTokenOverride, t1_glm_live_policy
 from tests.support import d_drive_tempdir, write_fake_google_credential
@@ -20,6 +22,12 @@ class StaticKeySource:
 
     def check_metadata(self):
         return None
+
+
+class ExactWitnessVerifier:
+    def verify(self, *, witness, binding_digest):
+        if witness != "owner-witness":
+            raise AssertionError("unexpected witness")
 
 
 class RegistryPolicyTests(unittest.TestCase):
@@ -101,6 +109,33 @@ class RegistryPolicyTests(unittest.TestCase):
         provider = registry.get("glm_flash_worker")
         self.assertEqual(provider.token_policy.max_output_tokens, 8_192)
         self.assertEqual(provider.token_policy.policy_source, "operator_override:1")
+
+    def test_glm_adapter_receives_exact_active_capability_binding(self) -> None:
+        configs = load_provider_configs(ROOT / "config" / "providers.json")
+        with d_drive_tempdir() as root:
+            store = ProviderCapabilityPolicyStore(
+                root / "provider-capability-policies.sqlite3"
+            )
+            extended = glm_extended_text_policy()
+            store.save_policy(extended)
+            store.activate(
+                extended.binding().binding_digest,
+                witness="owner-witness",
+                verifier=ExactWitnessVerifier(),
+            )
+            registry = ProviderRegistry.from_configs(
+                configs,
+                environ={"MACR_STATE_ROOT": str(root)},
+                key_sources={"glm_flash_worker": StaticKeySource()},
+                capability_policy_store=store,
+            )
+
+        provider = registry.get("glm_flash_worker")
+        self.assertEqual(provider.capability_policy, extended)
+        self.assertEqual(
+            registry.capability_binding("glm_flash_worker"),
+            extended.binding(),
+        )
 
     def test_explicit_t1_policy_wins_over_ordinary_store_policy(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")
