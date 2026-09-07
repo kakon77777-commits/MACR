@@ -46,6 +46,8 @@ class V07PhaseCManifestTests(unittest.TestCase):
             "MACR_INSTALL_TARGET",
             "installed_import_isolated",
             "python -S",
+            "SOURCE_DATE_EPOCH",
+            "source_date_epoch",
         ):
             self.assertIn(required, source)
         powershell = shutil.which("powershell") or shutil.which("pwsh")

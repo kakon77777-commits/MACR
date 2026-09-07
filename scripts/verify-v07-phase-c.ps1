@@ -131,7 +131,14 @@ try {
         'phase-c-gate-' + [guid]::NewGuid().ToString('N')
     )
     New-Item -ItemType Directory -Force -Path $subjectRoot | Out-Null
+    $hadSourceDateEpoch = Test-Path Env:SOURCE_DATE_EPOCH
+    $previousSourceDateEpoch = $env:SOURCE_DATE_EPOCH
     try {
+        $sourceDateEpoch = (git -C $repoRoot show -s --format=%ct HEAD).Trim()
+        if ($sourceDateEpoch -notmatch '^\d+$') {
+            throw 'Phase C could not derive a deterministic source epoch.'
+        }
+        $env:SOURCE_DATE_EPOCH = $sourceDateEpoch
         $env:TEMP = Join-Path $subjectRoot 'temp'
         $env:TMP = $env:TEMP
         $env:PIP_CACHE_DIR = Join-Path $subjectRoot 'pip-cache'
@@ -231,6 +238,12 @@ print("installed-import-isolated")
     }
     finally {
         $env:PYTHONPATH = $repoPythonPath
+        if ($hadSourceDateEpoch) {
+            $env:SOURCE_DATE_EPOCH = $previousSourceDateEpoch
+        }
+        else {
+            Remove-Item Env:SOURCE_DATE_EPOCH -ErrorAction SilentlyContinue
+        }
         $resolvedSubject = [System.IO.Path]::GetFullPath($subjectRoot)
         $expectedPrefix = $testRoot.TrimEnd('\') + '\'
         if (-not $resolvedSubject.StartsWith(
@@ -296,6 +309,7 @@ print("installed-import-isolated")
         commit_receipt_digest = $replay.commit_receipt_digest
         replay_digest = $replay.replay_digest
         wheel_sha256 = $wheelSha256
+        source_date_epoch = $sourceDateEpoch
         network_activity = $false
         provider_generation = $false
         phase_d_started = $false

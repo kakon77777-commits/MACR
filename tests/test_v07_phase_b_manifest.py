@@ -224,6 +224,9 @@ class V07PhaseBManifestTests(unittest.TestCase):
 
     def test_phase_b_wrapper_reports_exact_offline_subject(self) -> None:
         script = ROOT / "scripts/verify-v07-phase-b.ps1"
+        source = script.read_text(encoding="utf-8")
+        self.assertIn("SOURCE_DATE_EPOCH", source)
+        self.assertIn("source_date_epoch", source)
         powershell = shutil.which("powershell") or shutil.which("pwsh")
         self.assertIsNotNone(powershell)
         completed = subprocess.run(
