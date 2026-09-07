@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -102,13 +103,20 @@ def _read_effective_from_connection(
     model_id: str,
 ) -> ProviderTierBinding:
     active = connection.execute(
-        """SELECT tier_id, revision, binding_digest
+        """SELECT tier_id, revision, binding_digest, authority_digest
         FROM provider_capability_active
         WHERE provider_id = ? AND model_id = ?""",
         (provider_id, model_id),
     ).fetchone()
     if active is None:
         return resolver.default_binding(provider_id, model_id)
+    if (
+        not isinstance(active["authority_digest"], str)
+        or not re.fullmatch(r"[0-9a-f]{64}", active["authority_digest"])
+    ):
+        raise DirectStoreConflict(
+            "legacy_pre_tier provider capability activation is incompatible"
+        )
     row = connection.execute(
         """SELECT body_json, body_sha256, binding_digest
         FROM provider_capability_policies
@@ -128,13 +136,20 @@ def _read_effective_policy_from_connection(
     model_id: str,
 ) -> ProviderCapabilityPolicy:
     active = connection.execute(
-        """SELECT tier_id, revision, binding_digest
+        """SELECT tier_id, revision, binding_digest, authority_digest
         FROM provider_capability_active
         WHERE provider_id = ? AND model_id = ?""",
         (provider_id, model_id),
     ).fetchone()
     if active is None:
         return resolver.resolve(provider_id, model_id, "standard", 1)
+    if (
+        not isinstance(active["authority_digest"], str)
+        or not re.fullmatch(r"[0-9a-f]{64}", active["authority_digest"])
+    ):
+        raise DirectStoreConflict(
+            "legacy_pre_tier provider capability activation is incompatible"
+        )
     row = connection.execute(
         """SELECT body_json, body_sha256, binding_digest
         FROM provider_capability_policies
@@ -148,7 +163,7 @@ def _read_effective_policy_from_connection(
 
 
 class ProviderCapabilityPolicyStore:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(
         self,
@@ -194,7 +209,7 @@ class ProviderCapabilityPolicyStore:
                     tier_id TEXT NOT NULL,
                     revision INTEGER NOT NULL,
                     binding_digest TEXT NOT NULL,
-                    authority_digest TEXT NOT NULL,
+                    authority_digest TEXT,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(provider_id, model_id),
                     FOREIGN KEY(provider_id, model_id, tier_id, revision)
@@ -211,6 +226,23 @@ class ProviderCapabilityPolicyStore:
                 connection.execute(
                     """INSERT INTO provider_capability_schema_meta(component, version)
                     VALUES ('provider_capability_policies', ?)""",
+                    (self.SCHEMA_VERSION,),
+                )
+            elif row["version"] == 1:
+                columns = {
+                    item[1]
+                    for item in connection.execute(
+                        "PRAGMA table_info(provider_capability_active)"
+                    ).fetchall()
+                }
+                if "authority_digest" not in columns:
+                    connection.execute(
+                        """ALTER TABLE provider_capability_active
+                        ADD COLUMN authority_digest TEXT"""
+                    )
+                connection.execute(
+                    """UPDATE provider_capability_schema_meta SET version = ?
+                    WHERE component = 'provider_capability_policies'""",
                     (self.SCHEMA_VERSION,),
                 )
             elif row["version"] != self.SCHEMA_VERSION:
@@ -412,6 +444,18 @@ class ProviderCapabilityGovernance:
             raise ValueError("store must be a ProviderCapabilityPolicyStore")
         if not isinstance(authorities, DispatchAuthorityStore):
             raise ValueError("authorities must be a DispatchAuthorityStore")
+        expected_authority_path = (
+            store.path.parent.parent / "runtime" / "dispatch.sqlite3"
+        ).absolute()
+        if (
+            store.path.name != "provider-capability-policies.sqlite3"
+            or store.path.parent.name != "settings"
+            or authorities.database.path.absolute() != expected_authority_path
+        ):
+            raise ValueError(
+                "provider capability governance requires the canonical "
+                "state-root authority database"
+            )
         self.store = store
         self.authorities = authorities
 

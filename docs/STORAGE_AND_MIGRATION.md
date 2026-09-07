@@ -75,7 +75,7 @@ observatory SQLite          2
 accounting SQLite           3
 Direct conversation schema  2
 model-token policy schema   1
-provider-capability schema  1
+provider-capability schema  2
 T1 manifest schema          2
 Agent runtime schema        2
 semantic schema             1

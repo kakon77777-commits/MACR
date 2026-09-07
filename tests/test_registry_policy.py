@@ -113,11 +113,13 @@ class RegistryPolicyTests(unittest.TestCase):
         configs = load_provider_configs(ROOT / "config" / "providers.json")
         with d_drive_tempdir() as root:
             store = ProviderCapabilityPolicyStore(
-                root / "provider-capability-policies.sqlite3"
+                root / "settings" / "provider-capability-policies.sqlite3"
             )
             extended = glm_extended_text_policy()
             store.save_policy(extended)
-            authorities = DispatchAuthorityStore(root / "runtime.sqlite3")
+            authorities = DispatchAuthorityStore(
+                root / "runtime" / "dispatch.sqlite3"
+            )
             reference = authorities.issue(
                 source_kind="operator_policy_authority",
                 source_id="extended-v1",

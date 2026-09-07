@@ -187,7 +187,7 @@ dispatch.
 
 | Surface | New contract | Historical disposition | New dispatch rule |
 | --- | --- | --- | --- |
-| Capability policy | New store schema 1 | No predecessor | Built-in standard or exact active binding only |
+| Capability policy | Store schema 2 binds activation authority | Schema-1 definitions/active rows are preserved; active rows become legacy until reauthorized | Built-in standard or exact authorized active binding only |
 | Provider config | Remains schema 2 | Byte/semantic behavior unchanged | Contains no tier authority |
 | `AuthorityScope` | Contract 2 adds exact binding-digest set | Empty field reads as `legacy_pre_tier` | GLM requires exact binding digest |
 | `DispatchContext` / event | Contract 2 adds exact binding digest and payload schema marker | Old events stay byte-preserved/readable | GLM context must carry exact digest |

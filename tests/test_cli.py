@@ -920,7 +920,9 @@ class DoctorTests(unittest.TestCase):
             )
             extended = glm_extended_text_policy()
             capability_store.save_policy(extended)
-            authorities = DispatchAuthorityStore(temp / "runtime.sqlite3")
+            authorities = DispatchAuthorityStore(
+                temp / "runtime" / "dispatch.sqlite3"
+            )
             reference = authorities.issue(
                 source_kind="operator_policy_authority",
                 source_id="extended-v1",

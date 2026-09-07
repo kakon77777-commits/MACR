@@ -104,7 +104,7 @@ Phase B/C package replay pins `SOURCE_DATE_EPOCH` to the exact candidate commit
 timestamp. Repeated clean gates therefore require the generated wheel hash—not
 only the semantic replay digests—to remain byte-identical.
 
-Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token policy schema 1, provider-capability-policy schema 1, and T1 manifest schema 2.
+Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token policy schema 1, provider-capability-policy schema 2, and T1 manifest schema 2.
 
 For the dedicated multiprocess replay from a source checkout:
 

@@ -31,6 +31,149 @@ class AllowAllVerifier:
 
 
 class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
+    def test_schema_one_active_row_migrates_as_legacy_then_reauthorizes(self) -> None:
+        extended = glm_extended_text_policy()
+        body = json.dumps(
+            extended.to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        body_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        binding = extended.binding()
+        with d_drive_tempdir() as temp:
+            path = temp / "settings" / "provider-capability-policies.sqlite3"
+            path.parent.mkdir(parents=True)
+            connection = sqlite3.connect(path)
+            connection.executescript(
+                """CREATE TABLE provider_capability_schema_meta (
+                    component TEXT PRIMARY KEY, version INTEGER NOT NULL
+                );
+                CREATE TABLE provider_capability_policies (
+                    provider_id TEXT NOT NULL, model_id TEXT NOT NULL,
+                    tier_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                    body_json TEXT NOT NULL, body_sha256 TEXT NOT NULL,
+                    binding_digest TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
+                    PRIMARY KEY(provider_id, model_id, tier_id, revision)
+                );
+                CREATE TABLE provider_capability_active (
+                    provider_id TEXT NOT NULL, model_id TEXT NOT NULL,
+                    tier_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                    binding_digest TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    PRIMARY KEY(provider_id, model_id)
+                );"""
+            )
+            connection.execute(
+                "INSERT INTO provider_capability_schema_meta VALUES (?, 1)",
+                ("provider_capability_policies",),
+            )
+            connection.execute(
+                """INSERT INTO provider_capability_policies VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?
+                )""",
+                (
+                    extended.provider_id,
+                    extended.model_id,
+                    extended.tier_id,
+                    extended.revision,
+                    body,
+                    body_sha256,
+                    binding.binding_digest,
+                    "2026-09-07T00:00:00+00:00",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO provider_capability_active VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    extended.provider_id,
+                    extended.model_id,
+                    extended.tier_id,
+                    extended.revision,
+                    binding.binding_digest,
+                    "2026-09-07T00:00:00+00:00",
+                ),
+            )
+            connection.commit()
+            connection.close()
+
+            store = ProviderCapabilityPolicyStore(path)
+            connection = sqlite3.connect(path)
+            try:
+                version = connection.execute(
+                    "SELECT version FROM provider_capability_schema_meta"
+                ).fetchone()[0]
+                legacy_authority = connection.execute(
+                    "SELECT authority_digest FROM provider_capability_active"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            with self.assertRaisesRegex(DirectStoreConflict, "legacy"):
+                store.effective_binding(extended.provider_id, extended.model_id)
+
+            authorities = DispatchAuthorityStore(
+                temp / "runtime" / "dispatch.sqlite3"
+            )
+            reference = authorities.issue(
+                source_kind="operator_policy_authority",
+                source_id="reauthorize-extended-v1",
+                scope=AuthorityScope(
+                    providers=(extended.provider_id,),
+                    planes=("policy_activation",),
+                    task_types=("provider_tier_activation",),
+                    provider_tier_binding_digests=(binding.binding_digest,),
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            ProviderCapabilityGovernance(store, authorities).activate(
+                binding.binding_digest,
+                reference,
+            )
+            reauthorized = store.effective_binding(
+                extended.provider_id,
+                extended.model_id,
+            )
+
+        self.assertEqual(version, 2)
+        self.assertIsNone(legacy_authority)
+        self.assertEqual(reauthorized, binding)
+
+    def test_noncanonical_authority_database_cannot_activate_policy_store(self) -> None:
+        with d_drive_tempdir() as temp:
+            extended = glm_extended_text_policy()
+            store = ProviderCapabilityPolicyStore(
+                temp / "settings" / "provider-capability-policies.sqlite3"
+            )
+            store.save_policy(extended)
+            rogue_authorities = DispatchAuthorityStore(temp / "rogue.sqlite3")
+            reference = rogue_authorities.issue(
+                source_kind="operator_policy_authority",
+                source_id="rogue-authority-db",
+                scope=AuthorityScope(
+                    providers=(extended.provider_id,),
+                    planes=("policy_activation",),
+                    task_types=("provider_tier_activation",),
+                    provider_tier_binding_digests=(
+                        extended.binding().binding_digest,
+                    ),
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+
+            with self.assertRaisesRegex(ValueError, "canonical"):
+                ProviderCapabilityGovernance(store, rogue_authorities).activate(
+                    extended.binding().binding_digest,
+                    reference,
+                )
+
+            self.assertEqual(
+                store.effective_binding(extended.provider_id, extended.model_id),
+                glm_standard_policy().binding(),
+            )
+
     def test_allow_all_verifier_cannot_activate_without_authority_store(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "policies.sqlite3"
@@ -131,7 +274,9 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
     def test_activation_can_consume_but_not_issue_exact_dispatch_authority(self) -> None:
         with d_drive_tempdir() as temp:
             binding = glm_extended_text_policy().binding()
-            authorities = DispatchAuthorityStore(temp / "runtime.sqlite3")
+            authorities = DispatchAuthorityStore(
+                temp / "runtime" / "dispatch.sqlite3"
+            )
             reference = authorities.issue(
                 source_kind="operator_policy_authority",
                 source_id="glm-extended-text-v1",
@@ -145,7 +290,9 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
                     datetime.now(timezone.utc) + timedelta(minutes=5)
                 ).isoformat(),
             )
-            store = ProviderCapabilityPolicyStore(temp / "policies.sqlite3")
+            store = ProviderCapabilityPolicyStore(
+                temp / "settings" / "provider-capability-policies.sqlite3"
+            )
             store.save_policy(glm_extended_text_policy())
             ProviderCapabilityGovernance(store, authorities).activate(
                 binding.binding_digest,
@@ -209,11 +356,13 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
 
     def test_activation_requires_exact_preexisting_witness(self) -> None:
         with d_drive_tempdir() as temp:
-            path = temp / "policies.sqlite3"
+            path = temp / "settings" / "provider-capability-policies.sqlite3"
             store = ProviderCapabilityPolicyStore(path)
             extended = glm_extended_text_policy()
             store.save_policy(extended)
-            authorities = DispatchAuthorityStore(temp / "runtime.sqlite3")
+            authorities = DispatchAuthorityStore(
+                temp / "runtime" / "dispatch.sqlite3"
+            )
             missing = AuthorizationReference(
                 source_kind="missing",
                 source_id="missing",
@@ -263,11 +412,13 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
 
     def test_corrupt_active_policy_fails_closed_without_standard_fallback(self) -> None:
         with d_drive_tempdir() as temp:
-            path = temp / "policies.sqlite3"
+            path = temp / "settings" / "provider-capability-policies.sqlite3"
             store = ProviderCapabilityPolicyStore(path)
             extended = glm_extended_text_policy()
             store.save_policy(extended)
-            authorities = DispatchAuthorityStore(temp / "runtime.sqlite3")
+            authorities = DispatchAuthorityStore(
+                temp / "runtime" / "dispatch.sqlite3"
+            )
             reference = authorities.issue(
                 source_kind="operator_policy_authority",
                 source_id="extended-v1",

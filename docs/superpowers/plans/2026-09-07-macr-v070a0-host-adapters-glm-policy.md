@@ -504,7 +504,7 @@ Assert status commands perform no network/key access; fabricated shell activatio
 
 - [ ] **Step 3: Update gate summary and human documentation**
 
-Record capability store schema 1, accounting schema 3, T1 schema 2 and the exact built-in binding-set digest in the offline gate summary. Document that shared-state activation and any real provider invocation are still separate operator actions.
+Record capability store schema 2, accounting schema 3, T1 schema 2 and the exact built-in binding-set digest in the offline gate summary. Document that shared-state activation and any real provider invocation are still separate operator actions.
 
 - [ ] **Step 4: Run targeted verification**
 
