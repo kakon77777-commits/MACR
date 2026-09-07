@@ -82,13 +82,16 @@ repeat the check before credential access; runtime admission is not the sole
 enforcement point. Existing GLM approvals bind policy-v1 digests and must be
 regenerated. A legacy Grok Direct conversation without a current v2 policy
 snapshot fails before message append, authority admission or network; create a
-new conversation rather than silently rebinding its history.
+new conversation rather than silently rebinding its history. A legacy local
+Qwythos v1 snapshot is verified under its original digest and retains the same
+local limits in memory; it does not acquire the cloud floor.
 
 The future T1 live preset is separate and stricter: exact `glm-5.3-flash`,
 128,000 context and 16,384 output. Its fixed ceilings are USD 0.010 per member,
 USD 0.030 for three members and USD 0.040 for the campaign. Older T1 manifests
 bind the previous token-policy digest and cost envelope and must be regenerated;
-they are not silently upgraded.
+they are not silently upgraded. Current member and manifest authority digests
+both use v3 domains.
 
 ## Shared-core execution boundary
 
@@ -235,6 +238,11 @@ creating or migrating state:
 .\scripts\macr.ps1 capability-status --provider glm_flash_worker
 .\scripts\macr.ps1 accounting-status
 ```
+
+`capability-status` also reports content-free current, legacy, invalid and
+active counts for model-token overrides. An old override remains immutable
+`legacy_pre_quality_floor` evidence, but cannot be activated or used until it
+is reissued against the policy-v2 base.
 
 ## T1 staging and worker commands
 

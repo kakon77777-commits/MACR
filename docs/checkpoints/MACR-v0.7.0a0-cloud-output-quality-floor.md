@@ -73,6 +73,13 @@ were not treated as dispatchable tasks.
 - T1 schema 3 binds the new 128,000 / 16,384 token-policy-v2 digest and exact
   USD 0.010 / 0.030 / 0.040 ceilings. Schema 2 is inspectable as
   `legacy_pre_quality_floor` but cannot stage/dispatch and must be regenerated.
+  Current member and enclosing manifest digests both use v3 domains.
+- Policy-v1-base override rows remain immutable and are exposed through
+  content-free current/legacy/invalid/active counts. Legacy activation or
+  effective use raises `LegacyOutputPolicyIncompatibleError`; a new revision
+  must bind the v2 base. The shared store was observed to contain no overrides.
+- A verified legacy Qwythos policy-v1 Direct snapshot retains its original
+  loopback-only settings in memory; this exception cannot authorize cloud use.
 
 ## Governing-twin challenge and successor work
 
@@ -83,6 +90,11 @@ policy digests plus a forgeable GLM ceiling exception, T1 schema/domain drift,
 and null top-level reasoning-exhaustion failure fields. The subsequent changes
 in this checkpoint are a successor candidate, not a reinterpretation of that
 earlier green result.
+
+The governing Twin then challenged successor `fa3ce97` / tree `f1c1912a` for
+an untyped active-v1-override failure and a residual v2 member digest domain.
+Those findings caused another scoped reopening; neither earlier green gate is
+the final closure subject.
 
 ## Authority and live-state boundary
 

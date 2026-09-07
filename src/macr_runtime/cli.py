@@ -35,7 +35,10 @@ from .evidence_import import EvidenceImporter
 from .execution import DispatchContext, DispatchOrigin, InteractionPlane
 from .legacy_ledger import LegacyLedgerImporter
 from .model_passport import ModelPassportProjector
-from .model_token_store import ModelTokenPolicyStore
+from .model_token_store import (
+    ModelTokenPolicyStore,
+    read_model_token_override_status,
+)
 from .provider_capability_store import read_effective_policy
 from .observatory import ModelObservatory
 from .observatory_db import ObservatoryDatabase
@@ -148,6 +151,9 @@ def _capability_status(
             "approval_records": GlmApprovalStore(
                 layout.state_root
             ).status_snapshot(),
+            "model_token_overrides": read_model_token_override_status(
+                layout.model_token_policy_db_path
+            ),
             "t1_queue": read_queue_tier_status(layout.runtime_db_path),
             "network_activity": False,
             "provider_generation": False,

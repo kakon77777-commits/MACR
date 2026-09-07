@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .canonical import canonical_json_bytes
 from .direct_database import DirectDatabase
-from .errors import DirectStoreConflict
+from .errors import (
+    DirectStoreConflict,
+    LegacyOutputPolicyIncompatibleError,
+    ProviderPolicyError,
+    StoragePolicyError,
+)
 from .token_policy import (
     ModelTokenOverride,
     ModelTokenPolicy,
@@ -17,6 +23,17 @@ from .token_policy import (
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _empty_status() -> dict[str, int]:
+    return {
+        "current_count": 0,
+        "legacy_pre_quality_floor_count": 0,
+        "invalid_count": 0,
+        "active_current_count": 0,
+        "active_legacy_pre_quality_floor_count": 0,
+        "total_count": 0,
+    }
 
 
 class ModelTokenPolicyStore:
@@ -96,6 +113,72 @@ class ModelTokenPolicyStore:
         body = canonical_json_bytes(override.to_dict()).decode("utf-8")
         return body, hashlib.sha256(body.encode("utf-8")).hexdigest()
 
+    @classmethod
+    def _decode_override(
+        cls,
+        body_json: str,
+        body_sha256: str,
+    ) -> ModelTokenOverride:
+        expected = hashlib.sha256(body_json.encode("utf-8")).hexdigest()
+        if expected != body_sha256:
+            raise DirectStoreConflict("model token override digest is invalid")
+        try:
+            document = json.loads(body_json)
+            override = ModelTokenOverride.from_dict(document)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise DirectStoreConflict(
+                "model token override digest is invalid"
+            ) from exc
+        canonical, digest = cls._encode(override)
+        if canonical != body_json or digest != body_sha256:
+            raise DirectStoreConflict("model token override digest is invalid")
+        return override
+
+    @classmethod
+    def _status_from_connection(
+        cls,
+        connection: sqlite3.Connection,
+        resolver: ModelTokenPolicyResolver,
+    ) -> dict[str, int]:
+        counts = _empty_status()
+        rows = connection.execute(
+            """SELECT o.body_json, o.body_sha256,
+                      CASE WHEN a.revision IS NULL THEN 0 ELSE 1 END AS active
+            FROM model_token_overrides o
+            LEFT JOIN model_token_active a
+              ON a.provider_id = o.provider_id
+             AND a.model_id = o.model_id
+             AND a.revision = o.revision
+            ORDER BY o.provider_id, o.model_id, o.revision"""
+        ).fetchall()
+        counts["total_count"] = len(rows)
+        for row in rows:
+            try:
+                override = cls._decode_override(
+                    row["body_json"],
+                    row["body_sha256"],
+                )
+                base = resolver.resolve(override.provider_id, override.model_id)
+            except (DirectStoreConflict, ProviderPolicyError, ValueError):
+                counts["invalid_count"] += 1
+                continue
+            if override.base_policy_digest == base.policy_digest:
+                counts["current_count"] += 1
+                if row["active"]:
+                    counts["active_current_count"] += 1
+            else:
+                counts["legacy_pre_quality_floor_count"] += 1
+                if row["active"]:
+                    counts["active_legacy_pre_quality_floor_count"] += 1
+        return counts
+
+    def status_snapshot(self) -> dict[str, int]:
+        connection = self.database.connect()
+        try:
+            return self._status_from_connection(connection, self.resolver)
+        finally:
+            connection.close()
+
     def save_override(
         self,
         override: ModelTokenOverride,
@@ -165,12 +248,22 @@ class ModelTokenPolicyStore:
         try:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                """SELECT 1 FROM model_token_overrides
+                """SELECT body_json, body_sha256 FROM model_token_overrides
                 WHERE provider_id = ? AND model_id = ? AND revision = ?""",
                 (provider_id, model_id, revision),
             ).fetchone()
             if row is None:
                 raise DirectStoreConflict("model token override does not exist")
+            override = self._decode_override(
+                row["body_json"],
+                row["body_sha256"],
+            )
+            base = self.resolver.resolve(override.provider_id, override.model_id)
+            if override.base_policy_digest != base.policy_digest:
+                raise LegacyOutputPolicyIncompatibleError(
+                    "legacy_pre_quality_floor: model token override must be "
+                    "reissued against policy contract v2"
+                )
             connection.execute(
                 """INSERT INTO model_token_active(
                     provider_id, model_id, revision, updated_at
@@ -208,18 +301,7 @@ class ModelTokenPolicyStore:
             connection.close()
         if row is None:
             return None
-        expected = hashlib.sha256(row["body_json"].encode("utf-8")).hexdigest()
-        if expected != row["body_sha256"]:
-            raise DirectStoreConflict("model token override digest is invalid")
-        try:
-            document = json.loads(row["body_json"])
-            override = ModelTokenOverride.from_dict(document)
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            raise DirectStoreConflict("model token override digest is invalid") from exc
-        canonical, digest = self._encode(override)
-        if canonical != row["body_json"] or digest != row["body_sha256"]:
-            raise DirectStoreConflict("model token override digest is invalid")
-        return override
+        return self._decode_override(row["body_json"], row["body_sha256"])
 
     def effective_policy(
         self,
@@ -228,7 +310,17 @@ class ModelTokenPolicyStore:
     ) -> ModelTokenPolicy:
         base = self.resolver.resolve(provider_id, model_id)
         override = self._read_active_override(provider_id, model_id)
-        return base if override is None else override.apply(base)
+        if override is None:
+            return base
+        if override.base_policy_digest != base.policy_digest:
+            raise LegacyOutputPolicyIncompatibleError(
+                "legacy_pre_quality_floor: active model token override must be "
+                "reissued against policy contract v2"
+            )
+        try:
+            return override.apply(base)
+        except ValueError as exc:
+            raise DirectStoreConflict("model token override is invalid") from exc
 
     def list_effective(self) -> tuple[ModelTokenPolicy, ...]:
         return tuple(
@@ -237,4 +329,38 @@ class ModelTokenPolicyStore:
         )
 
 
-__all__ = ["ModelTokenPolicyStore"]
+def read_model_token_override_status(path: str | Path) -> dict[str, int]:
+    candidate = Path(path)
+    if not candidate.is_absolute() or candidate.drive.upper() != "D:":
+        raise StoragePolicyError(
+            "model token policy database path must be absolute on D:"
+        )
+    database_path = candidate.absolute()
+    if not database_path.is_file():
+        return _empty_status()
+    try:
+        connection = sqlite3.connect(
+            f"file:{database_path.as_posix()}?mode=ro",
+            uri=True,
+        )
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """SELECT version FROM model_token_schema_meta
+            WHERE component = 'model_token_policies'"""
+        ).fetchone()
+        if row is None or row["version"] != ModelTokenPolicyStore.SCHEMA_VERSION:
+            raise DirectStoreConflict(
+                "model token policy database schema is unsupported"
+            )
+        return ModelTokenPolicyStore._status_from_connection(
+            connection,
+            ModelTokenPolicyResolver.builtins_only(),
+        )
+    except sqlite3.Error as exc:
+        raise DirectStoreConflict("model token policy database is invalid") from exc
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+
+__all__ = ["ModelTokenPolicyStore", "read_model_token_override_status"]

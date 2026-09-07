@@ -11,6 +11,7 @@ from typing import Any
 
 from .authority import AuthorityScope
 from .candidate_vault import CandidateCapture
+from .canonical import sha256_id
 from .direct_contracts import (
     DirectConversationSpec,
     DirectMessage,
@@ -259,16 +260,28 @@ class DirectRuntime:
         if token_json is not None or token_digest is not None:
             try:
                 token_document = json.loads(token_json)
-                if (
-                    provider_id == "grok"
-                    and isinstance(token_document, dict)
-                    and "minimum_task_output_tokens" not in token_document
+                validated_digest = None
+                if isinstance(token_document, dict) and (
+                    "minimum_task_output_tokens" not in token_document
                 ):
-                    raise LegacyDirectTokenPolicyIncompatibleError(
-                        "legacy_direct_token_policy_incompatible: create a new "
-                        "Grok conversation with a current pinned token policy"
+                    if provider_id == "grok":
+                        raise LegacyDirectTokenPolicyIncompatibleError(
+                            "legacy_direct_token_policy_incompatible: create a "
+                            "new Grok conversation with a current pinned token policy"
+                        )
+                    if provider_id != "ollama_qwythos":
+                        raise ValueError("unsupported legacy Direct token policy")
+                    validated_digest = sha256_id(
+                        "model_token_policy_v1",
+                        token_document,
                     )
+                    token_document = {
+                        **token_document,
+                        "minimum_task_output_tokens": 1,
+                    }
                 token_policy = ModelTokenPolicy.from_dict(token_document)
+                if validated_digest is None:
+                    validated_digest = token_policy.policy_digest
             except LegacyDirectTokenPolicyIncompatibleError:
                 raise
             except (TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -276,7 +289,7 @@ class DirectRuntime:
                     "Direct model token policy snapshot is invalid"
                 ) from exc
             if (
-                token_policy.policy_digest != token_digest
+                validated_digest != token_digest
                 or token_policy.provider_id != conversation["provider_id"]
                 or token_policy.model_id != conversation["model"]
             ):

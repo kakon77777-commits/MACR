@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import uuid
 import unittest
 from dataclasses import replace
 
+from macr_runtime.canonical import sha256_id
 from macr_runtime.direct_contracts import DirectMessage
 from macr_runtime.direct_providers import DirectProviderReply
 from macr_runtime.direct_runtime import (
@@ -177,6 +179,43 @@ class DirectRuntimeTests(unittest.TestCase):
 
         self.assertEqual(grok.calls, [])
         self.assertEqual(events, ())
+
+    def test_legacy_qwythos_policy_v1_remains_local_only_compatible(self) -> None:
+        with d_drive_tempdir() as root:
+            runtime, _, conversations, _, _, qwythos = self.build_runtime(root)
+            conversation = runtime.create_conversation(
+                "ollama_qwythos",
+                conversation_id="00000000-0000-4000-8000-000000000710",
+            )
+            current = conversations.get(conversation["conversation_id"])
+            legacy_policy = json.loads(current["model_token_policy_json"])
+            legacy_policy.pop("minimum_task_output_tokens")
+            legacy_json = json.dumps(
+                legacy_policy,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            legacy_digest = sha256_id("model_token_policy_v1", legacy_policy)
+            connection = sqlite3.connect(conversations.database.path)
+            connection.execute(
+                """UPDATE conversations
+                SET model_token_policy_json = ?, model_token_policy_sha256 = ?
+                WHERE conversation_id = ?""",
+                (legacy_json, legacy_digest, conversation["conversation_id"]),
+            )
+            connection.commit()
+            connection.close()
+
+            result = runtime.send_message(
+                conversation["conversation_id"],
+                "local legacy turn",
+                origin_native_id="browser-session-local-legacy",
+            )
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(qwythos.calls), 1)
+        self.assertEqual(qwythos.calls[0][1].max_output_tokens, 4_096)
 
     def test_model_override_is_local_and_existing_conversation_stays_pinned(self) -> None:
         with d_drive_tempdir() as root:

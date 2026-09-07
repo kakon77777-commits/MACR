@@ -215,7 +215,7 @@ class T1ExecutionMember:
         object.__setattr__(self, "target_claims", claims)
         self._validate_fixed_route()
         self._validate_task()
-        expected = sha256_id("t1_execution_member_v2", self.canonical_member())
+        expected = sha256_id("t1_execution_member_v3", self.canonical_member())
         if self.member_digest != expected:
             raise ValueError("T1 member digest does not match exact member")
 
@@ -327,7 +327,7 @@ class T1ExecutionMember:
             "cost_ceiling_usd": values["cost_ceiling_usd"],
             "target_claims": [item.to_dict() for item in normalized_claims],
         }
-        digest = sha256_id("t1_execution_member_v2", canonical)
+        digest = sha256_id("t1_execution_member_v3", canonical)
         return cls(member_digest=digest, **values)
 
     @classmethod

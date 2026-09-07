@@ -120,6 +120,10 @@ class T1ManifestTests(unittest.TestCase):
         )
 
         self.assertEqual(first.schema_version, 3)
+        self.assertEqual(
+            original.member_digest,
+            sha256_id("t1_execution_member_v3", original.canonical_member()),
+        )
         self.assertNotEqual(original.member_digest, changed.member_digest)
 
     def test_schema_one_is_audit_visible_but_dispatch_incompatible(self) -> None:

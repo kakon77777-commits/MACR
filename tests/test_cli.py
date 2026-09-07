@@ -138,11 +138,15 @@ class DoctorTests(unittest.TestCase):
             capability["approval_records"]["legacy_pre_tier_count"],
             0,
         )
+        self.assertEqual(capability["model_token_overrides"]["total_count"], 0)
         self.assertEqual(capability["t1_queue"]["legacy_pre_tier_count"], 0)
         self.assertEqual(accounting["accounting"]["known_cost_usd"], 0.0)
         self.assertFalse((temp / "accounting" / "accounting.sqlite3").exists())
         self.assertFalse(
             (temp / "settings" / "provider-capability-policies.sqlite3").exists()
+        )
+        self.assertFalse(
+            (temp / "settings" / "model-token-policies.sqlite3").exists()
         )
         self.assertFalse((temp / "runtime" / "dispatch.sqlite3").exists())
 
