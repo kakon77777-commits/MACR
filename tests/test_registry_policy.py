@@ -92,8 +92,8 @@ class RegistryPolicyTests(unittest.TestCase):
                     revision=1,
                     context_warning_tokens=100_000,
                     hard_context_tokens=128_000,
-                    default_output_tokens=8_192,
-                    max_output_tokens=8_192,
+                    default_output_tokens=16_384,
+                    max_output_tokens=32_768,
                     base_policy_digest=base.policy_digest,
                 ),
                 activate=True,
@@ -106,7 +106,7 @@ class RegistryPolicyTests(unittest.TestCase):
             )
 
         provider = registry.get("glm_flash_worker")
-        self.assertEqual(provider.token_policy.max_output_tokens, 8_192)
+        self.assertEqual(provider.token_policy.max_output_tokens, 32_768)
         self.assertEqual(provider.token_policy.policy_source, "operator_override:1")
 
     def test_glm_adapter_receives_exact_active_capability_binding(self) -> None:
@@ -170,7 +170,7 @@ class RegistryPolicyTests(unittest.TestCase):
             )
 
         self.assertEqual(effective.policy_source, "t1_live_preset")
-        self.assertEqual(effective.max_output_tokens, 8_192)
+        self.assertEqual(effective.max_output_tokens, 16_384)
 
     def test_google_gemini_is_configured_offline(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")

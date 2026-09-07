@@ -49,6 +49,11 @@ class ModelTokenPolicyTests(unittest.TestCase):
             (local.hard_context_tokens, local.default_output_tokens),
             (8_192, 4_096),
         )
+        self.assertEqual(grok.minimum_task_output_tokens, 32_768)
+        self.assertEqual(glm.minimum_task_output_tokens, 16_384)
+        self.assertEqual(gemini.minimum_task_output_tokens, 16_384)
+        self.assertEqual(minimax.minimum_task_output_tokens, 2_048)
+        self.assertEqual(local.minimum_task_output_tokens, 1)
         self.assertEqual(len(builtin_model_token_policies()), 7)
         self.assertEqual(len({item.policy_digest for item in builtin_model_token_policies()}), 7)
 
@@ -68,6 +73,7 @@ class ModelTokenPolicyTests(unittest.TestCase):
         invalid_changes = (
             {"context_warning_tokens": grok.hard_context_tokens},
             {"hard_context_tokens": grok.provider_context_ceiling_tokens + 1},
+            {"default_output_tokens": 8_192},
             {"default_output_tokens": grok.max_output_tokens + 1},
             {"max_output_tokens": grok.provider_output_ceiling_tokens + 1},
         )
@@ -108,8 +114,9 @@ class ModelTokenPolicyTests(unittest.TestCase):
 
         self.assertEqual(
             (live.hard_context_tokens, live.max_output_tokens),
-            (128_000, 8_192),
+            (128_000, 16_384),
         )
+        self.assertEqual(live.minimum_task_output_tokens, 16_384)
         self.assertNotEqual(live.policy_digest, general.policy_digest)
         self.assertEqual(live.policy_source, "t1_live_preset")
 

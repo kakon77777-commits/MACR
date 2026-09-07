@@ -21,6 +21,7 @@ from macr_runtime.contracts import (
 from macr_runtime.errors import (
     ConfigurationError,
     LegacyPreTierIncompatibleError,
+    ProviderOutputBudgetTooSmallError,
     ProviderPolicyError,
     ProviderUnavailableError,
 )
@@ -241,7 +242,7 @@ def delegated_task(*, max_cost_usd: float = 0.01) -> TaskContract:
         constraints=TaskConstraints(
             max_cost_usd=max_cost_usd,
             max_latency_s=30,
-            max_output_tokens=256,
+            max_output_tokens=16_384,
             internet=True,
             privacy=PrivacyLevel.PUBLIC,
         ),
@@ -528,7 +529,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             payload["thinking"],
             {"type": "enabled", "clear_thinking": False},
         )
-        self.assertEqual(payload["max_tokens"], 256)
+        self.assertEqual(payload["max_tokens"], 16_384)
         self.assertFalse(payload["stream"])
         self.assertNotIn("tools", payload)
         self.assertNotIn("tool_choice", payload)
@@ -751,6 +752,122 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             b"PARTIAL PRIVATE ANSWER",
         )
 
+    def test_reasoning_exhaustion_is_reported_as_a_distinct_failure(self):
+        document = success_document()
+        document["choices"][0]["finish_reason"] = "length"
+        document["choices"][0]["message"]["content"] = ""
+        document["usage"]["completion_tokens"] = 16_384
+        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 16_384
+        document["usage"]["total_tokens"] = 16_404
+        transport = FakeTransport(document)
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(max_cost_usd=0.01)
+        task = replace(base, delegation_approval_sha256=None)
+        task = self._approve_with_provider(provider, task)
+
+        execution = provider.invoke_observed(task)
+
+        self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(execution.result.answer, "")
+        self.assertEqual(execution.observation.answer_bytes, b"")
+        self.assertEqual(execution.observation.usage.output_tokens, 16_384)
+        self.assertEqual(execution.observation.usage.reasoning_tokens, 16_384)
+        self.assertEqual(
+            execution.result.provider_meta["failure_type"],
+            "ProviderReasoningBudgetExhaustedError",
+        )
+        self.assertTrue(
+            any(
+                "reasoning exhausted" in warning.lower()
+                for warning in execution.result.warnings
+            )
+        )
+
+    def test_max_reasoning_rejects_output_below_cloud_quality_floor(self):
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(max_cost_usd=0.02)
+        low_output = replace(
+            base,
+            constraints=replace(base.constraints, max_output_tokens=4_096),
+            delegation_approval_sha256=None,
+        )
+        recommended_output = replace(
+            base,
+            constraints=replace(base.constraints, max_output_tokens=16_384),
+            delegation_approval_sha256=None,
+        )
+
+        recommended_metadata = provider.approval_metadata(recommended_output)
+
+        with self.assertRaises(ProviderOutputBudgetTooSmallError) as caught:
+            provider.approval_metadata(low_output)
+
+        self.assertEqual(
+            caught.exception.safe_diagnostic()["minimum_max_output_tokens"],
+            16_384,
+        )
+        self.assertEqual(recommended_metadata["requested_max_output_tokens"], 16_384)
+        self.assertEqual(recommended_metadata["minimum_task_output_tokens"], 16_384)
+        self.assertEqual(recommended_metadata["reasoning_effort"], "max")
+
+    def test_t1_policy_accepts_the_cloud_quality_floor(self):
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+            token_policy=t1_glm_live_policy(),
+        )
+        base = delegated_task(max_cost_usd=0.02)
+        task = replace(
+            base,
+            constraints=replace(base.constraints, max_output_tokens=16_384),
+            delegation_approval_sha256=None,
+        )
+
+        metadata = provider.approval_metadata(task)
+
+        self.assertEqual(metadata["minimum_task_output_tokens"], 16_384)
+        self.assertEqual(metadata["max_output_tokens"], 16_384)
+
+    def test_impossible_reasoning_usage_is_not_mislabeled_as_exhaustion(self):
+        document = success_document()
+        document["choices"][0]["finish_reason"] = "length"
+        document["choices"][0]["message"]["content"] = ""
+        document["usage"]["completion_tokens"] = 16_384
+        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 16_385
+        document["usage"]["total_tokens"] = 16_404
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(document),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(max_cost_usd=0.01)
+        task = replace(base, delegation_approval_sha256=None)
+        task = self._approve_with_provider(provider, task)
+
+        execution = provider.invoke_observed(task)
+
+        self.assertEqual(
+            execution.result.provider_meta["failure_type"],
+            "ProviderProtocolError",
+        )
+
     def test_malformed_usage_preserves_other_observed_fields(self):
         document = success_document()
         document["usage"]["prompt_tokens"] = "twenty"
@@ -812,8 +929,8 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
     def test_reported_completion_tokens_cannot_exceed_requested_bound(self):
         document = success_document()
-        document["usage"]["completion_tokens"] = 257
-        document["usage"]["total_tokens"] = 277
+        document["usage"]["completion_tokens"] = 16_385
+        document["usage"]["total_tokens"] = 16_405
         provider = GlmFlashWorkerProvider(
             glm_config(),
             transport=FakeTransport(document),
@@ -1161,7 +1278,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             delegated_task(max_cost_usd=0.02),
             constraints=replace(
                 delegated_task(max_cost_usd=0.02).constraints,
-                max_output_tokens=16_384,
+                max_output_tokens=16_385,
                 max_context_tokens=128_000,
             ),
             delegation_approval_sha256=None,

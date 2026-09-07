@@ -143,7 +143,7 @@ def delegated_task(
         constraints=TaskConstraints(
             max_cost_usd=0.01,
             max_latency_s=30,
-            max_output_tokens=256,
+            max_output_tokens=16_384,
             internet=True,
         ),
         required_capabilities=("text_generation",),
@@ -391,7 +391,11 @@ class RuntimeV05Tests(unittest.TestCase):
             answer="candidate",
             model="grok-4.6",
         )
-        task = delegated_task(task_id="token-policy-evidence")
+        base = delegated_task(task_id="token-policy-evidence")
+        task = replace(
+            base,
+            constraints=replace(base.constraints, max_output_tokens=32_768),
+        )
         with d_drive_tempdir() as state_root:
             services = build_test_services(state_root)
             context = issue_context(services, provider.provider_id, task)
@@ -412,6 +416,41 @@ class RuntimeV05Tests(unittest.TestCase):
             policy.policy_digest,
         )
 
+    def test_external_cloud_output_below_quality_floor_refuses_before_dispatch(self) -> None:
+        provider = ObservedProvider(
+            "grok",
+            answer="candidate",
+            model="grok-4.6",
+        )
+        base = delegated_task(task_id="cloud-output-quality-floor")
+        task = replace(
+            base,
+            constraints=replace(base.constraints, max_output_tokens=4_096),
+        )
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            context = issue_context(services, provider.provider_id, task)
+            result = MacrRuntime(ProviderRegistry((provider,)), services).invoke(
+                provider.provider_id,
+                task,
+                context,
+            )
+            events = services.events.read_events(run_id=context.run_id)
+
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(result.failure_code, "ProviderOutputBudgetTooSmallError")
+        self.assertEqual(result.failure_stage, "token_policy")
+        self.assertEqual(
+            result.provider_meta["policy_violation"]["code"],
+            "output_budget_below_quality_floor",
+        )
+        self.assertEqual(
+            result.provider_meta["policy_violation"]["minimum_max_output_tokens"],
+            32_768,
+        )
+        self.assertEqual(provider.calls, 0)
+        self.assertEqual(events, ())
+
     def test_qwythos_output_and_grok_context_are_model_local_fail_closed(self) -> None:
         cases = (
             (
@@ -425,7 +464,7 @@ class RuntimeV05Tests(unittest.TestCase):
             ),
             (
                 ObservedProvider("grok", answer="candidate", model="grok-4.6"),
-                256,
+                16_384,
                 400_001,
             ),
         )

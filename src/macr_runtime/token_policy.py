@@ -5,12 +5,13 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from .canonical import sha256_id
-from .errors import ProviderPolicyError
+from .errors import ProviderOutputBudgetTooSmallError, ProviderPolicyError
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _QWYTHOS_MODEL = "hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M"
+_CLOUD_TEXT_QUALITY_FLOOR_TOKENS = 16_384
 
 
 def _identifier(name: str, value: object) -> str:
@@ -103,6 +104,17 @@ class ModelTokenPolicy:
             raise ValueError("context warning must be below hard context")
         if default_output > max_output:
             raise ValueError("default output must not exceed max output")
+        if (
+            self.connection_scope == "external_https"
+            and default_output
+            < min(
+                _CLOUD_TEXT_QUALITY_FLOOR_TOKENS,
+                output_ceiling,
+            )
+        ):
+            raise ValueError(
+                "external model default output is below the cloud quality floor"
+            )
         if max_output >= hard:
             raise ValueError("max output must be below hard context")
         object.__setattr__(
@@ -114,6 +126,27 @@ class ModelTokenPolicy:
     @property
     def policy_digest(self) -> str:
         return sha256_id("model_token_policy_v1", self.to_dict())
+
+    @property
+    def minimum_task_output_tokens(self) -> int:
+        if self.connection_scope != "external_https":
+            return 1
+        return self.default_output_tokens
+
+    def validate_task_output_tokens(self, requested: int) -> None:
+        if requested < self.minimum_task_output_tokens:
+            raise ProviderOutputBudgetTooSmallError(
+                requested_max_output_tokens=requested,
+                minimum_max_output_tokens=self.minimum_task_output_tokens,
+                provider_id=self.provider_id,
+                model_id=self.model_id,
+                model_token_policy_digest=self.policy_digest,
+                policy_source=self.policy_source,
+            )
+        if requested > self.max_output_tokens:
+            raise ProviderPolicyError(
+                "task output exceeds exact model token policy"
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -314,8 +347,8 @@ def t1_glm_live_policy() -> ModelTokenPolicy:
         connection_scope="external_https",
         context_warning_tokens=100_000,
         hard_context_tokens=128_000,
-        default_output_tokens=8_192,
-        max_output_tokens=8_192,
+        default_output_tokens=16_384,
+        max_output_tokens=16_384,
         provider_context_ceiling_tokens=1_000_000,
         provider_output_ceiling_tokens=131_072,
         policy_source="t1_live_preset",

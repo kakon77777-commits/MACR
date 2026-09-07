@@ -13,7 +13,11 @@ from .authority import DispatchAuthorityStore
 from .candidate_vault import CandidateCapture, CandidateVault
 from .contracts import ProviderResult, ResultStatus, TaskContract
 from .dispatch import AdmissionGate, DispatcherLeaseStore
-from .errors import MacrError, ProviderPolicyError
+from .errors import (
+    MacrError,
+    ProviderOutputBudgetTooSmallError,
+    ProviderPolicyError,
+)
 from .event_store import SqliteEventStore
 from .execution import (
     DispatchContext,
@@ -156,17 +160,20 @@ def _token_policy_failure(
     task: TaskContract,
     exc: ProviderPolicyError,
 ) -> ProviderResult:
+    provider_meta: dict[str, Any] = {
+        "provider": provider_id,
+        "failure_type": type(exc).__name__,
+        "failure_stage": "token_policy",
+    }
+    if isinstance(exc, ProviderOutputBudgetTooSmallError):
+        provider_meta["policy_violation"] = exc.safe_diagnostic()
     return ProviderResult(
         task_id=task.task_id,
         status=ResultStatus.CANDIDATE_FAILURE,
         warnings=("Provider model token policy refused the task.",),
         failure_code=type(exc).__name__,
         failure_stage="token_policy",
-        provider_meta={
-            "provider": provider_id,
-            "failure_type": type(exc).__name__,
-            "failure_stage": "token_policy",
-        },
+        provider_meta=provider_meta,
     )
 
 
@@ -237,13 +244,9 @@ class MacrRuntime:
                     provider_id,
                     store=self.services.token_policies,
                 )
-                if (
+                token_policy.validate_task_output_tokens(
                     task.constraints.max_output_tokens
-                    > token_policy.max_output_tokens
-                ):
-                    raise ProviderPolicyError(
-                        "task output exceeds exact model token policy"
-                    )
+                )
                 requested_context = task.constraints.max_context_tokens
                 if (
                     requested_context is not None

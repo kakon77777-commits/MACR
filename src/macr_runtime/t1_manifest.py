@@ -29,9 +29,9 @@ _T1_PROVIDER_KIND = "zai_glm_worker"
 _T1_MODEL = "glm-5.3-flash"
 _T1_ENDPOINT = "https://api.z.ai/api/paas/v4"
 _T1_CONTEXT_CLASS = "non_sensitive_routine"
-_T1_MEMBER_COST_USD = 0.005
-_T1_AGGREGATE_COST_USD = 0.015
-_T1_CAMPAIGN_COST_USD = 0.020
+_T1_MEMBER_COST_USD = 0.010
+_T1_AGGREGATE_COST_USD = 0.030
+_T1_CAMPAIGN_COST_USD = 0.040
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 T1_MANIFEST_SCHEMA_VERSION = 2
 
@@ -255,7 +255,7 @@ class T1ExecutionMember:
                 rel_tol=0,
                 abs_tol=1e-12,
             )
-            or task.constraints.max_output_tokens > 8_192
+            or task.constraints.max_output_tokens != 16_384
             or (
                 task.constraints.max_context_tokens is not None
                 and task.constraints.max_context_tokens > 128_000

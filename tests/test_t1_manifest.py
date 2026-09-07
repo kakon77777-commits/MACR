@@ -58,9 +58,9 @@ def task(ordinal: int) -> TaskContract:
         delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
         delegation_approval_sha256=format(ordinal + 6, "x") * 64,
         constraints=TaskConstraints(
-            max_cost_usd=0.005,
+            max_cost_usd=0.010,
             max_latency_s=180,
-            max_output_tokens=8_192,
+            max_output_tokens=16_384,
             max_context_tokens=128_000,
             internet=True,
             privacy=PrivacyLevel.PUBLIC,
@@ -82,7 +82,7 @@ def member(ordinal: int, *, route_seed: int = 1) -> T1ExecutionMember:
         role_digest=format(ordinal + 9, "x") * 64,
         privacy="public",
         context_class="non_sensitive_routine",
-        cost_ceiling_usd=0.005,
+        cost_ceiling_usd=0.010,
         target_claims=(TargetClaim.for_path(f"src/t1-{ordinal}.txt"),),
     )
 
@@ -91,8 +91,8 @@ def manifest() -> T1ExecutionManifest:
     return T1ExecutionManifest.create(
         plan_digest="a" * 64,
         members=(member(0), member(1), member(2)),
-        aggregate_cost_ceiling_usd=0.015,
-        campaign_cost_ceiling_usd=0.020,
+        aggregate_cost_ceiling_usd=0.030,
+        campaign_cost_ceiling_usd=0.040,
         expires_at="2099-01-01T00:00:00+00:00",
         authorized_dispatchers=("worker-1", "worker-2", "worker-3"),
     )

@@ -26,7 +26,11 @@ from .differential import (
     compare_differential_results,
     strict_json_bytes,
 )
-from .errors import MacrError
+from .errors import (
+    MacrError,
+    ProviderOutputBudgetTooSmallError,
+    ProviderTaskTypeError,
+)
 from .evidence_import import EvidenceImporter
 from .execution import DispatchContext, DispatchOrigin, InteractionPlane
 from .legacy_ledger import LegacyLedgerImporter
@@ -414,6 +418,7 @@ def _glm_preflight(
 ) -> int:
     layout = StorageLayout.from_environment()
     path = Path(config_path) if config_path else _default_config(layout)
+    policy_violation: dict[str, object] | None = None
     try:
         config = next(
             item
@@ -444,6 +449,9 @@ def _glm_preflight(
         )
     except StopIteration:
         failure_type = "ConfigurationError"
+    except (ProviderOutputBudgetTooSmallError, ProviderTaskTypeError) as exc:
+        failure_type = type(exc).__name__
+        policy_violation = exc.safe_diagnostic()
     except (OSError, json.JSONDecodeError, ValueError, MacrError) as exc:
         failure_type = type(exc).__name__
     else:
@@ -462,17 +470,14 @@ def _glm_preflight(
             )
         )
         return 0
-    print(
-        json.dumps(
-            {
-                "status": "approval_invalid",
-                "failure_type": failure_type,
-                "detail": "GLM task approval preflight failed; task content omitted.",
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    failure = {
+        "status": "approval_invalid",
+        "failure_type": failure_type,
+        "detail": "GLM task approval preflight failed; task content omitted.",
+    }
+    if policy_violation is not None:
+        failure["policy_violation"] = policy_violation
+    print(json.dumps(failure, ensure_ascii=False, indent=2))
     return 4
 
 
@@ -486,6 +491,7 @@ def _glm_approve(
 ) -> int:
     layout = StorageLayout.from_environment()
     path = Path(config_path) if config_path else _default_config(layout)
+    policy_violation: dict[str, object] | None = None
     try:
         config = next(
             item
@@ -529,6 +535,9 @@ def _glm_approve(
             signing_key = None
     except StopIteration:
         failure_type = "ConfigurationError"
+    except (ProviderOutputBudgetTooSmallError, ProviderTaskTypeError) as exc:
+        failure_type = type(exc).__name__
+        policy_violation = exc.safe_diagnostic()
     except (OSError, json.JSONDecodeError, ValueError, MacrError) as exc:
         failure_type = type(exc).__name__
     else:
@@ -547,17 +556,14 @@ def _glm_approve(
             )
         )
         return 0
-    print(
-        json.dumps(
-            {
-                "status": "host_approval_failed",
-                "failure_type": failure_type,
-                "detail": "GLM host approval failed; task content omitted.",
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    failure = {
+        "status": "host_approval_failed",
+        "failure_type": failure_type,
+        "detail": "GLM host approval failed; task content omitted.",
+    }
+    if policy_violation is not None:
+        failure["policy_violation"] = policy_violation
+    print(json.dumps(failure, ensure_ascii=False, indent=2))
     return 4
 
 

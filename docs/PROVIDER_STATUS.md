@@ -26,7 +26,7 @@ Accounting's `soft_warning` state remains distinct from each delegated provider 
 
 ## Exact model-token policy status
 
-The active token controls are model-local and append-only at `settings\model-token-policies.sqlite3`: Grok 4.6/4.3 hard context 400,000 and max output 65,536; ordinary GLM 5.3 Flash and Gemini 3.7 Flash hard context 512,000 and max output 65,536; MiniMax M2.7 variants hard context 180,000 and max output 2,048; Qwythos-9B-v2 hard context 8,192 and max output 4,096. The separate T1 GLM preset remains 128,000 / 8,192. An override never changes provider/model identity or immutable provider ceilings.
+The active token controls are model-local and append-only at `settings\model-token-policies.sqlite3`: Grok 4.6/4.3 hard context 400,000, default/quality floor 32,768 and max output 65,536; ordinary GLM 5.3 Flash and Gemini 3.7 Flash hard context 512,000, floor 16,384 and max output 65,536; MiniMax M2.7 variants hard context 180,000 and provider-limited 2,048 floor/max; Qwythos-9B-v2 hard context 8,192 and max output 4,096 with no cloud floor. The separate T1 GLM preset is 128,000 / 16,384. An override never changes provider/model identity or immutable provider ceilings and cannot reduce an external capable model below the 16,384 cloud quality baseline.
 
 ## Grok policy
 
@@ -77,6 +77,14 @@ code-text candidates up to 900 seconds. Both deny patches, write scope and
 tools. A task cannot select a tier; activation consumes a pre-issued authority
 witness bound to the full provider/model/tier/revision/policy/limit digest.
 
+`task_type` is the provider execution/authority class. Project-local stages such
+as Discovery, Classification, Identity, Extraction, Verification and Review do
+not become new standard-tier values merely because a workflow uses those
+labels. Routine, non-sensitive, no-tool/no-write instances may use
+`delegated_routine`; genuinely privileged analysis/review/code tasks require the
+matching extended-tier type. Preflight type rejection exposes the safe requested
+identifier and exact active-tier allowlist without task content.
+
 Dispatch requires all of:
 
 - `delegable=true` on the task contract;
@@ -87,9 +95,9 @@ Dispatch requires all of:
 - empty `workspace.write_scope`, no requested patch authority, and independent verification;
 - empty inputs or bounded text-only inputs with non-path labels.
 
-The outbound request excludes local task/workspace identity and currency budget. Credential-free preflight validates structure without reading a key; provider invocation repeats validation, reads fixed `D:\KEY\GLM.txt`, verifies the approval HMAC, and only then permits network transport. Health reads metadata only. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only.
+The outbound request excludes local task/workspace identity and currency budget. Credential-free preflight validates structure without reading a key; provider invocation repeats validation, reads fixed `D:\KEY\GLM.txt`, verifies the approval HMAC, and only then permits network transport. Health reads metadata only. Candidate output is never verification or acceptance. Budget admission and recorded currency cost use conservative list pricing; the lower dated promotional estimate is informational only. GLM max reasoning requires a task envelope of at least 16,384 output tokens. MACR never silently enlarges an approved envelope, and even 16,384 is not a guarantee of visible content. An observed no-answer `length` response whose output is effectively all reasoning becomes `ProviderReasoningBudgetExhaustedError`, retains usage/cost evidence, and is never retried automatically.
 
-For T1, `queue-status` exposes only bounded content-free state. A strict private manifest binds three ordered member digests, exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy digest, USD 0.005 per member, USD 0.015 aggregate, USD 0.020 campaign, expiry, and dispatcher set. `reconciliation_required` blocks every later claim. There is no automatic retry, fallback, verification, materialization, or acceptance.
+For T1, `queue-status` exposes only bounded content-free state. A strict private manifest binds three ordered member digests, exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy digest, 16,384 output tokens, USD 0.010 per member, USD 0.030 aggregate, USD 0.040 campaign, expiry, and dispatcher set. Old manifests retain their old digest/cost evidence and must be regenerated. `reconciliation_required` blocks every later claim. There is no automatic retry, fallback, verification, materialization, or acceptance.
 
 ## Claude boundary
 

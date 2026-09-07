@@ -56,7 +56,7 @@ There is no automatic provider routing or fallback. A failed provider never invo
 
 ## Model-local token policies
 
-Token limits are no longer one global setting. Built-ins and append-only operator overrides are keyed by exact provider/model and stored at `settings\model-token-policies.sqlite3`. A new Direct conversation pins the exact canonical policy JSON and digest; changing an active override affects only later conversations. Delegated dispatch records the same digest and refuses an over-limit task before authority admission or transport; GLM approval schema 3 binds it together with task ID, exact latency and provider-tier binding.
+Token limits are no longer one global setting. Built-ins and append-only operator overrides are keyed by exact provider/model and stored at `settings\model-token-policies.sqlite3`. A new Direct conversation pins the exact canonical policy JSON and digest; changing an active override affects only later conversations. Delegated dispatch records the same digest and refuses an under-floor or over-limit task before authority admission or transport; GLM approval schema 3 binds it together with task ID, exact latency and provider-tier binding.
 
 | Exact provider/model | Warning context | Hard context | Default output | MACR max output |
 |---|---:|---:|---:|---:|
@@ -68,7 +68,19 @@ Token limits are no longer one global setting. Built-ins and append-only operato
 | `minimax/MiniMax-M2.7-highspeed` | 160,000 | 180,000 | 2,048 | 2,048 |
 | `ollama_qwythos/Qwythos-9B-v2` | 7,000 | 8,192 | 4,096 | 4,096 |
 
-The future T1 live preset is separate and stricter: exact `glm-5.3-flash`, 128,000 context and 8,192 output. Ordinary GLM settings never enlarge a T1 member.
+`TaskConstraints.max_output_tokens` now defaults to 16,384. For external text
+models, the exact model-local default is also a hard quality floor: Grok uses
+32,768; ordinary GLM and Gemini use 16,384. MiniMax remains an explicit
+2,048-token capability exception because that is its configured provider
+ceiling. Loopback Qwythos does not inherit the cloud floor. An external
+operator override cannot lower its default below 16,384 unless the provider's
+own output ceiling is lower.
+
+The future T1 live preset is separate and stricter: exact `glm-5.3-flash`,
+128,000 context and 16,384 output. Its fixed ceilings are USD 0.010 per member,
+USD 0.030 for three members and USD 0.040 for the campaign. Older T1 manifests
+bind the previous token-policy digest and cost envelope and must be regenerated;
+they are not silently upgraded.
 
 ## Shared-core execution boundary
 
@@ -188,6 +200,25 @@ scope or tools. Activation consumes a separately pre-issued authority bound to
 the exact provider/model/tier/revision/policy/limit digest; no task field or CLI
 flag can activate it.
 
+Here `task_type` is an authority-bearing MACR execution class, not a project's
+business-stage label. A non-sensitive Discovery, Classification, Identity,
+Extraction, Verification or Review job may accurately use
+`delegated_routine`; its business role belongs in the task ID and task/return
+contract. Work that actually requires analysis, review or code authority must
+use the matching type under an explicitly activated extended tier and must not
+be relabelled as routine. When a type is rejected, `glm-preflight` returns a
+content-free structured diagnostic containing the requested safe identifier,
+active tier/revision/digest and exact allowed types.
+
+GLM 5.3 Flash keeps max reasoning. A delegated request below the model-local
+16,384-token floor is rejected before credential access or transport, rather
+than silently enlarged. Reaching the floor reduces the observed exhaustion
+risk but does not guarantee visible content: a `length` response whose output
+is entirely reasoning becomes the distinct
+`ProviderReasoningBudgetExhaustedError`, preserves safe usage/cost evidence,
+performs no automatic retry, and requires a newly approved larger envelope for
+any later attempt.
+
 Read the current tier, legacy approval/queue counts and accounting state without
 creating or migrating state:
 
@@ -198,7 +229,7 @@ creating or migrating state:
 
 ## T1 staging and worker commands
 
-`queue-status` globally enumerates bounded content-free queue rows, including `reconciliation_required`, without task bodies, answers, credentials, or paths. `t1-stage` loads one strict private three-member manifest, verifies all three existing GLM host approvals and the exact T1 token policy, signs batch plus dispatch authority, and enqueues without a provider call. `t1-worker` claims at most one exact member and performs no retry or fallback.
+`queue-status` globally enumerates bounded content-free queue rows, including `reconciliation_required`, without task bodies, answers, credentials, or paths. `t1-stage` loads one strict private three-member manifest at 16,384 output tokens and USD 0.010 per member / USD 0.030 aggregate / USD 0.040 campaign, verifies all three existing GLM host approvals and the exact T1 token policy, signs batch plus dispatch authority, and enqueues without a provider call. `t1-worker` claims at most one exact member and performs no retry or fallback.
 
 ```powershell
 .\scripts\macr.ps1 queue-status --state reconciliation_required

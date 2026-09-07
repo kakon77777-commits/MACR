@@ -204,7 +204,7 @@ class TaskContractTests(unittest.TestCase):
 
     def test_external_token_defaults_context_and_ceiling_round_trip(self) -> None:
         defaults = TaskConstraints()
-        self.assertEqual(defaults.max_output_tokens, 8_192)
+        self.assertEqual(defaults.max_output_tokens, 16_384)
         self.assertIsNone(defaults.max_context_tokens)
         expanded = TaskConstraints(
             max_output_tokens=65_536,

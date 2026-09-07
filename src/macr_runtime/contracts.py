@@ -220,7 +220,7 @@ class WorkspaceSpec:
 class TaskConstraints:
     max_cost_usd: float = 0.0
     max_latency_s: float = 300.0
-    max_output_tokens: int = 8192
+    max_output_tokens: int = 16384
     max_context_tokens: int | None = None
     internet: bool = False
     privacy: PrivacyLevel = PrivacyLevel.LOCAL_ONLY
@@ -263,7 +263,7 @@ class TaskConstraints:
         return cls(
             max_cost_usd=data.get("max_cost_usd", 0.0),
             max_latency_s=data.get("max_latency_s", 300.0),
-            max_output_tokens=data.get("max_output_tokens", 8192),
+            max_output_tokens=data.get("max_output_tokens", 16384),
             max_context_tokens=data.get("max_context_tokens"),
             internet=data.get("internet", False),
             privacy=PrivacyLevel(str(data.get("privacy", PrivacyLevel.LOCAL_ONLY.value))),

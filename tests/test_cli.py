@@ -758,7 +758,7 @@ class DoctorTests(unittest.TestCase):
                 constraints=TaskConstraints(
                     max_cost_usd=0.01,
                     max_latency_s=30,
-                    max_output_tokens=256,
+                    max_output_tokens=16_384,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -784,6 +784,49 @@ class DoctorTests(unittest.TestCase):
 
         self.assertEqual(status, 4)
         self.assertIn("TaskContradictionError", output.getvalue())
+
+    def test_glm_approve_reports_output_floor_before_key_access(self) -> None:
+        with d_drive_tempdir() as temp:
+            task = TaskContract(
+                task_id="glm-approval-output-floor",
+                goal="PUBLIC APPROVAL FLOOR BODY",
+                task_type="delegated_routine",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.02,
+                    max_latency_s=30,
+                    max_output_tokens=4_096,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_approve(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        expires_in_days=1,
+                        key_source=ExplodingKeySource(),
+                    )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 4)
+        self.assertEqual(
+            document["failure_type"],
+            "ProviderOutputBudgetTooSmallError",
+        )
+        self.assertEqual(
+            document["policy_violation"]["minimum_max_output_tokens"],
+            16_384,
+        )
+        self.assertNotIn("PUBLIC APPROVAL FLOOR BODY", output.getvalue())
+
     def test_strict_ignores_intentionally_disabled_providers(self) -> None:
         with d_drive_tempdir() as temp:
             credential = write_fake_google_credential(temp / "credential.json")
@@ -883,7 +926,7 @@ class DoctorTests(unittest.TestCase):
                 constraints=TaskConstraints(
                     max_cost_usd=0.01,
                     max_latency_s=30,
-                    max_output_tokens=256,
+                    max_output_tokens=16_384,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -954,7 +997,7 @@ class DoctorTests(unittest.TestCase):
                 constraints=TaskConstraints(
                     max_cost_usd=0.01,
                     max_latency_s=900,
-                    max_output_tokens=256,
+                    max_output_tokens=16_384,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -993,7 +1036,7 @@ class DoctorTests(unittest.TestCase):
                 constraints=TaskConstraints(
                     max_cost_usd=0.01,
                     max_latency_s=30,
-                    max_output_tokens=256,
+                    max_output_tokens=16_384,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -1019,6 +1062,134 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(document["status"], "approval_invalid")
         self.assertNotIn("PUBLIC STALE BODY", output.getvalue())
 
+    def test_glm_preflight_reports_content_free_task_type_policy(self) -> None:
+        with d_drive_tempdir() as temp:
+            task = TaskContract(
+                task_id="discovery-policy-diagnostic",
+                goal="PUBLIC TASK TYPE BODY",
+                task_type="discovery",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.02,
+                    max_latency_s=30,
+                    max_output_tokens=16_384,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_preflight(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        show_required_digest=True,
+                    )
+
+        document = json.loads(output.getvalue())
+        diagnostic = document["policy_violation"]
+        self.assertEqual(status, 4)
+        self.assertEqual(document["status"], "approval_invalid")
+        self.assertEqual(document["failure_type"], "ProviderTaskTypeError")
+        self.assertEqual(diagnostic["code"], "task_type_not_allowed")
+        self.assertEqual(diagnostic["requested_task_type"], "discovery")
+        self.assertEqual(diagnostic["provider_id"], "glm_flash_worker")
+        self.assertEqual(diagnostic["model_id"], "glm-5.3-flash")
+        self.assertEqual(diagnostic["tier_id"], "standard")
+        self.assertEqual(diagnostic["tier_revision"], 1)
+        self.assertEqual(len(diagnostic["tier_binding_digest"]), 64)
+        self.assertEqual(
+            diagnostic["allowed_task_types"],
+            ["delegated_routine", "provider_conformance"],
+        )
+        self.assertNotIn("PUBLIC TASK TYPE BODY", output.getvalue())
+
+    def test_glm_preflight_reports_cloud_output_quality_floor(self) -> None:
+        with d_drive_tempdir() as temp:
+            task = TaskContract(
+                task_id="glm-output-quality-floor",
+                goal="PUBLIC OUTPUT FLOOR BODY",
+                task_type="delegated_routine",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.02,
+                    max_latency_s=30,
+                    max_output_tokens=4_096,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_preflight(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        show_required_digest=True,
+                    )
+
+        document = json.loads(output.getvalue())
+        diagnostic = document["policy_violation"]
+        self.assertEqual(status, 4)
+        self.assertEqual(
+            document["failure_type"],
+            "ProviderOutputBudgetTooSmallError",
+        )
+        self.assertEqual(
+            diagnostic["code"],
+            "output_budget_below_quality_floor",
+        )
+        self.assertEqual(diagnostic["requested_max_output_tokens"], 4_096)
+        self.assertEqual(diagnostic["minimum_max_output_tokens"], 16_384)
+        self.assertNotIn("PUBLIC OUTPUT FLOOR BODY", output.getvalue())
+
+    def test_glm_preflight_does_not_echo_an_unsafe_task_type(self) -> None:
+        with d_drive_tempdir() as temp:
+            task = TaskContract(
+                task_id="unsafe-task-type-diagnostic",
+                goal="PUBLIC SAFE GOAL",
+                task_type="discovery SECRET_TASK_TYPE_CANARY",
+                delegable=True,
+                delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
+                constraints=TaskConstraints(
+                    max_cost_usd=0.02,
+                    max_latency_s=30,
+                    max_output_tokens=16_384,
+                    internet=True,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                required_capabilities=("text_generation",),
+            )
+            task_path = temp / "task.json"
+            task_path.write_text(json.dumps(task.to_dict()), encoding="utf-8")
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(temp)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _glm_preflight(
+                        str(task_path),
+                        str(ROOT / "config" / "providers.json"),
+                        show_required_digest=True,
+                    )
+
+        document = json.loads(output.getvalue())
+        self.assertEqual(status, 4)
+        self.assertEqual(
+            document["policy_violation"]["requested_task_type"],
+            "unavailable",
+        )
+        self.assertNotIn("SECRET_TASK_TYPE_CANARY", output.getvalue())
+
     def test_glm_preflight_applies_active_exact_model_override(self) -> None:
         with d_drive_tempdir() as temp:
             store = ModelTokenPolicyStore(temp / "settings" / "model-token-policies.sqlite3")
@@ -1030,8 +1201,8 @@ class DoctorTests(unittest.TestCase):
                     revision=1,
                     context_warning_tokens=100_000,
                     hard_context_tokens=128_000,
-                    default_output_tokens=8_192,
-                    max_output_tokens=8_192,
+                    default_output_tokens=16_384,
+                    max_output_tokens=32_768,
                     base_policy_digest=base.policy_digest,
                 ),
                 activate=True,
@@ -1045,7 +1216,7 @@ class DoctorTests(unittest.TestCase):
                 constraints=TaskConstraints(
                     max_cost_usd=0.02,
                     max_latency_s=30,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     max_context_tokens=128_000,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
@@ -1080,7 +1251,7 @@ class DoctorTests(unittest.TestCase):
                 constraints=TaskConstraints(
                     max_cost_usd=0.01,
                     max_latency_s=30,
-                    max_output_tokens=256,
+                    max_output_tokens=16_384,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -1142,7 +1313,7 @@ class DoctorTests(unittest.TestCase):
                 constraints=TaskConstraints(
                     max_cost_usd=0.01,
                     max_latency_s=30,
-                    max_output_tokens=256,
+                    max_output_tokens=16_384,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),

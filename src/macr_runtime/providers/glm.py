@@ -23,6 +23,8 @@ from ..errors import (
     MacrError,
     ProviderPolicyError,
     ProviderProtocolError,
+    ProviderReasoningBudgetExhaustedError,
+    ProviderTaskTypeError,
     ProviderUnavailableError,
 )
 from ..execution import (
@@ -475,8 +477,14 @@ class GlmFlashWorkerProvider(BaseProvider):
                 "GLM dispatch requires non_sensitive_routine delegation class"
             )
         if task.task_type not in self.capability_policy.allowed_task_types:
-            raise ProviderPolicyError(
-                "GLM dispatch requires a task type approved by the active tier"
+            raise ProviderTaskTypeError(
+                requested_task_type=task.task_type,
+                allowed_task_types=self.capability_policy.allowed_task_types,
+                provider_id=self.capability_binding.provider_id,
+                model_id=self.capability_binding.model_id,
+                tier_id=self.capability_binding.tier_id,
+                tier_revision=self.capability_binding.revision,
+                tier_binding_digest=self.capability_binding.binding_digest,
             )
         if not task.constraints.internet:
             raise ProviderPolicyError("GLM task contract must permit internet access")
@@ -507,10 +515,9 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM worker requires exactly text_generation capability"
             )
-        if task.constraints.max_output_tokens > self.token_policy.max_output_tokens:
-            raise ProviderPolicyError(
-                "GLM task output exceeds exact model token policy"
-            )
+        self.token_policy.validate_task_output_tokens(
+            task.constraints.max_output_tokens
+        )
         if (
             task.constraints.max_context_tokens is not None
             and task.constraints.max_context_tokens
@@ -636,6 +643,11 @@ class GlmFlashWorkerProvider(BaseProvider):
             "model_token_policy_digest": self.token_policy.policy_digest,
             "hard_context_tokens": self.token_policy.hard_context_tokens,
             "max_output_tokens": self.token_policy.max_output_tokens,
+            "requested_max_output_tokens": task.constraints.max_output_tokens,
+            "minimum_task_output_tokens": (
+                self.token_policy.minimum_task_output_tokens
+            ),
+            "reasoning_effort": self.config.reasoning_effort,
             "required_approval_sha256": prepared["approval_sha256"],
             "request_bytes": prepared["request_bytes"],
             "conservative_cost_ceiling_usd": prepared["cost_ceiling"],
@@ -884,9 +896,25 @@ class GlmFlashWorkerProvider(BaseProvider):
         choice = choices[0]
         if not isinstance(choice, dict):
             raise ProviderProtocolError("GLM response choice must be an object")
+        message = choice.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        output_tokens = observation.usage.output_tokens
+        reasoning_tokens = observation.usage.reasoning_tokens
+        if (
+            choice.get("finish_reason") == "length"
+            and (not isinstance(content, str) or not content.strip())
+            and output_tokens is not None
+            and output_tokens > 0
+            and reasoning_tokens is not None
+            and 0 <= output_tokens - reasoning_tokens <= 1
+        ):
+            raise ProviderReasoningBudgetExhaustedError(
+                "GLM reasoning exhausted the requested max_output_tokens before "
+                "producing answer content; increase max_output_tokens and obtain "
+                "a new approval before retrying"
+            )
         if choice.get("finish_reason") != "stop":
             raise ProviderProtocolError("GLM response finish_reason must be stop")
-        message = choice.get("message")
         if (
             not isinstance(message, dict)
             or not isinstance(message.get("content"), str)
