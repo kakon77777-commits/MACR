@@ -251,7 +251,7 @@ class MultiprocessRuntimeTests(unittest.TestCase):
         self.assertEqual(report["consecutive_zero_samples"], 5)
         self.assertNotIn("command", report)
 
-    def test_three_t1_workers_produce_exact_complete_path_evidence(self) -> None:
+    def test_five_t1_workers_produce_exact_complete_path_evidence(self) -> None:
         with d_drive_tempdir() as temp:
             provider = GlmFlashWorkerProvider(
                 glm_config(),
@@ -260,7 +260,11 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 token_policy=t1_glm_live_policy(),
             )
-            subject = approved_manifest(provider)
+            subject = approved_manifest(
+                provider,
+                member_count=5,
+                worker_count=5,
+            )
             approval_store = GlmApprovalStore(temp)
             for item in subject.members:
                 approval_store.create(
@@ -311,11 +315,11 @@ class MultiprocessRuntimeTests(unittest.TestCase):
             try:
                 deadline = time.monotonic() + 30
                 while (
-                    len(tuple(temp.glob("t1-ready-*"))) < 3
+                    len(tuple(temp.glob("t1-ready-*"))) < 5
                     and time.monotonic() < deadline
                 ):
                     time.sleep(0.005)
-                self.assertEqual(len(tuple(temp.glob("t1-ready-*"))), 3)
+                self.assertEqual(len(tuple(temp.glob("t1-ready-*"))), 5)
                 start_signal.touch()
                 completed = [
                     process.communicate(timeout=60) for process in processes
@@ -362,24 +366,24 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                 "reconciliation_required"
             ]
 
-        self.assertEqual(len({item["member_id"] for item in results}), 3)
+        self.assertEqual(len({item["member_id"] for item in results}), 5)
         self.assertEqual(
             [item.state.value for item in queue_records],
-            ["completed", "completed", "completed"],
+            ["completed", "completed", "completed", "completed", "completed"],
         )
         self.assertEqual(
             len([item for item in events if item["event_type"] == "mock.t1_transport_called"]),
-            3,
+            5,
         )
         self.assertEqual(
             len([item for item in events if item["event_type"] == "provider.dispatch_requested"]),
-            3,
+            5,
         )
         self.assertEqual(
             len([item for item in events if item["event_type"] == "provider.candidate_completed"]),
-            3,
+            5,
         )
-        self.assertEqual((capture_count, invocation_count, plan_cost_count), (3, 3, 3))
+        self.assertEqual((capture_count, invocation_count, plan_cost_count), (5, 5, 5))
         self.assertEqual(unsettled_count, 0)
         self.assertEqual(reconciliation_count, 0)
         for item in subject.members:

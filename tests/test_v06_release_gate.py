@@ -122,7 +122,7 @@ class V06ReleaseGateTests(unittest.TestCase):
         self.assertEqual(document["model_token_policy_count"], 7)
         self.assertEqual(document["provider_capability_policy_schema_version"], 2)
         self.assertEqual(document["provider_capability_policy_count"], 2)
-        self.assertEqual(document["t1_manifest_schema_version"], 3)
+        self.assertEqual(document["t1_manifest_schema_version"], 4)
         self.assertRegex(
             document["provider_capability_policy_digest"],
             r"^[0-9a-f]{64}$",

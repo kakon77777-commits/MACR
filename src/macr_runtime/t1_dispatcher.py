@@ -329,6 +329,7 @@ class T1Dispatcher:
             batch_authority=batch_reference,
             dispatch_authority=dispatch_reference,
             member_ids=member_ids,
+            worker_count=manifest.worker_count,
             expires_at=batch["expires_at"],
         )
 
@@ -377,6 +378,7 @@ class T1Dispatcher:
         if (
             bundle.manifest_digest != manifest.manifest_digest
             or bundle.batch_authority.plan_digest != manifest.plan_digest
+            or bundle.worker_count != manifest.worker_count
             or bundle.expires_at != manifest.expires_at
         ):
             raise T1DispatchError("T1 authority bundle does not match manifest")
@@ -399,7 +401,10 @@ class T1Dispatcher:
         bundle: T1AuthorityBundle,
         claim: QueueClaim,
     ) -> T1ExecutionMember:
-        if claim.plan_digest != manifest.plan_digest or not 0 <= claim.ordinal < 3:
+        if (
+            claim.plan_digest != manifest.plan_digest
+            or not 0 <= claim.ordinal < len(manifest.members)
+        ):
             raise T1DispatchError("claimed queue member is outside the exact manifest")
         member = manifest.members[claim.ordinal]
         expected = (
@@ -843,6 +848,7 @@ class T1Dispatcher:
             batch_authority=batch_reference,
             dispatch_authority=dispatch_reference,
             member_ids=member_ids,
+            worker_count=manifest.worker_count,
             expires_at=normalized_expiry,
         )
 

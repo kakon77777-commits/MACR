@@ -35,8 +35,16 @@ from tests.test_scheduler import Clock
 from tests.test_t1_manifest import manifest as unapproved_manifest
 
 
-def approved_manifest(provider: GlmFlashWorkerProvider) -> T1ExecutionManifest:
-    source = unapproved_manifest()
+def approved_manifest(
+    provider: GlmFlashWorkerProvider,
+    *,
+    member_count: int = 3,
+    worker_count: int = 3,
+) -> T1ExecutionManifest:
+    source = unapproved_manifest(
+        member_count=member_count,
+        worker_count=worker_count,
+    )
     members = []
     for original in source.members:
         unsigned = replace(original.task, delegation_approval_sha256=None)
@@ -62,6 +70,7 @@ def approved_manifest(provider: GlmFlashWorkerProvider) -> T1ExecutionManifest:
     return T1ExecutionManifest.create(
         plan_digest=source.plan_digest,
         members=tuple(members),
+        worker_count=source.worker_count,
         aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
         campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
         expires_at=source.expires_at,
@@ -93,6 +102,7 @@ def replan_manifest(
         plan_digest=plan_digest,
         plan_revision=source.plan_revision + 1,
         members=members,
+        worker_count=source.worker_count,
         aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
         campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
         expires_at=source.expires_at,
@@ -217,6 +227,7 @@ class T1DispatcherTests(unittest.TestCase):
             attacked = T1ExecutionManifest.create(
                 plan_digest=source.plan_digest,
                 members=wrong_members,
+                worker_count=source.worker_count,
                 aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
                 campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
                 expires_at=source.expires_at,
@@ -326,6 +337,56 @@ class T1DispatcherTests(unittest.TestCase):
             events[0]["payload"]["provider_tier_binding_digest"],
             subject.members[0].provider_tier_binding_digest,
         )
+
+    def test_four_worker_slots_can_drain_five_members_without_retry(self) -> None:
+        now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as state_root:
+            transport = FakeTransport(success_document())
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=transport,
+                environ={"MACR_STATE_ROOT": str(state_root)},
+                key_source=StaticKeySource(),
+                approval_store=AllowingApprovalStore(),
+                token_policy=t1_glm_live_policy(),
+            )
+            services = build_test_services(state_root)
+            dispatcher = T1Dispatcher(
+                ProviderRegistry((provider,)),
+                services,
+                now=clock,
+            )
+            subject = approved_manifest(
+                provider,
+                member_count=5,
+                worker_count=4,
+            )
+            bundle = dispatcher.stage(
+                subject,
+                subject.authorized_dispatchers,
+                subject.expires_at,
+            )
+
+            results = tuple(
+                dispatcher.run_one(
+                    subject,
+                    bundle,
+                    subject.authorized_dispatchers[index % subject.worker_count],
+                    DispatchOrigin("test", "process_id", str(2_000 + index)),
+                    allow_network=True,
+                    allow_local=False,
+                )
+                for index in range(len(subject.members))
+            )
+            counts = dispatcher.queue.state_counts()
+
+        self.assertEqual(bundle.worker_count, 4)
+        self.assertEqual(len(bundle.member_ids), 5)
+        self.assertEqual([item.queue_state for item in results], ["completed"] * 5)
+        self.assertEqual(counts["completed"], 5)
+        self.assertEqual(counts["queued"], 0)
+        self.assertEqual(len(transport.posts), 5)
 
     def test_unknown_after_dispatch_requires_global_reconciliation_and_blocks_next(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
@@ -459,6 +520,7 @@ class T1DispatcherTests(unittest.TestCase):
             changed = T1ExecutionManifest.create(
                 plan_digest=source.plan_digest,
                 members=(changed_member, *source.members[1:]),
+                worker_count=source.worker_count,
                 aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
                 campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
                 expires_at=source.expires_at,

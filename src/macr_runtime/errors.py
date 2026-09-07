@@ -149,3 +149,7 @@ class LegacyPreTierIncompatibleError(MacrError):
 
 class LegacyOutputPolicyIncompatibleError(MacrError):
     """Historical output-policy evidence cannot satisfy a current dispatch."""
+
+
+class LegacyFixedWorkerTopologyIncompatibleError(MacrError):
+    """Historical fixed-worker T1 evidence cannot satisfy dynamic dispatch."""

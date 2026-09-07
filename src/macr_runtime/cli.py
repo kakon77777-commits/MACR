@@ -328,6 +328,8 @@ def _t1_stage(
                 "status": "t1_staged",
                 "network_activity": False,
                 "provider_call_performed": False,
+                "worker_count": manifest.worker_count,
+                "member_count": len(manifest.members),
                 "authority_bundle": bundle.to_dict(),
             },
             ensure_ascii=False,
@@ -407,6 +409,8 @@ def _t1_worker(
             {
                 "status": status,
                 "network_activity": result.provider_attempted,
+                "worker_count": manifest.worker_count,
+                "member_count": len(manifest.members),
                 "result": result.to_dict(),
             },
             ensure_ascii=False,
@@ -1300,7 +1304,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     t1_stage = sub.add_parser(
         "t1-stage",
-        help="stage one exact three-member T1 manifest without provider calls",
+        help="stage one exact dynamic T1 manifest without provider calls",
     )
     t1_stage.add_argument("manifest")
     t1_stage.add_argument("--config", help="provider configuration JSON path")

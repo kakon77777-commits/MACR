@@ -7,6 +7,7 @@ from pathlib import Path
 
 from macr_runtime.canonical import sha256_id
 from macr_runtime.errors import (
+    LegacyFixedWorkerTopologyIncompatibleError,
     LegacyOutputPolicyIncompatibleError,
     LegacyPreTierIncompatibleError,
 )
@@ -59,7 +60,10 @@ def task(ordinal: int) -> TaskContract:
         task_type="delegated_routine",
         delegable=True,
         delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
-        delegation_approval_sha256=format(ordinal + 6, "x") * 64,
+        delegation_approval_sha256=sha256_id(
+            "test_t1_approval_v1",
+            {"ordinal": ordinal},
+        ),
         constraints=TaskConstraints(
             max_cost_usd=0.010,
             max_latency_s=180,
@@ -82,7 +86,7 @@ def member(ordinal: int, *, route_seed: int = 1) -> T1ExecutionMember:
         provider_tier_binding_digest=(
             glm_standard_policy().binding().binding_digest
         ),
-        role_digest=format(ordinal + 9, "x") * 64,
+        role_digest=sha256_id("test_t1_role_v1", {"ordinal": ordinal}),
         privacy="public",
         context_class="non_sensitive_routine",
         cost_ceiling_usd=0.010,
@@ -90,19 +94,193 @@ def member(ordinal: int, *, route_seed: int = 1) -> T1ExecutionMember:
     )
 
 
-def manifest() -> T1ExecutionManifest:
+def manifest(
+    *,
+    member_count: int = 3,
+    worker_count: int = 3,
+    campaign_cost_ceiling_usd: float | None = None,
+) -> T1ExecutionManifest:
+    aggregate = 0.010 * member_count
     return T1ExecutionManifest.create(
         plan_digest="a" * 64,
-        members=(member(0), member(1), member(2)),
-        aggregate_cost_ceiling_usd=0.030,
-        campaign_cost_ceiling_usd=0.040,
+        members=tuple(member(ordinal) for ordinal in range(member_count)),
+        worker_count=worker_count,
+        aggregate_cost_ceiling_usd=aggregate,
+        campaign_cost_ceiling_usd=(
+            aggregate
+            if campaign_cost_ceiling_usd is None
+            else campaign_cost_ceiling_usd
+        ),
         expires_at="2099-01-01T00:00:00+00:00",
-        authorized_dispatchers=("worker-1", "worker-2", "worker-3"),
+        authorized_dispatchers=tuple(
+            f"worker-{ordinal + 1}" for ordinal in range(worker_count)
+        ),
     )
 
 
 class T1ManifestTests(unittest.TestCase):
-    def test_schema_three_and_member_digest_bind_provider_tier(self) -> None:
+    def test_worker_count_is_explicit_and_independent_of_member_count(self) -> None:
+        members = (member(0), member(1), member(2))
+        two_workers = T1ExecutionManifest.create(
+            plan_digest="a" * 64,
+            members=members,
+            worker_count=2,
+            aggregate_cost_ceiling_usd=0.030,
+            campaign_cost_ceiling_usd=0.200,
+            expires_at="2099-01-01T00:00:00+00:00",
+            authorized_dispatchers=("worker-1", "worker-2"),
+        )
+        three_workers = T1ExecutionManifest.create(
+            plan_digest="a" * 64,
+            members=members,
+            worker_count=3,
+            aggregate_cost_ceiling_usd=0.030,
+            campaign_cost_ceiling_usd=0.200,
+            expires_at="2099-01-01T00:00:00+00:00",
+            authorized_dispatchers=("worker-1", "worker-2", "worker-3"),
+        )
+
+        self.assertEqual(two_workers.schema_version, 4)
+        self.assertEqual(two_workers.worker_count, 2)
+        self.assertEqual(len(two_workers.members), 3)
+        self.assertNotEqual(two_workers.manifest_digest, three_workers.manifest_digest)
+
+    def test_member_and_worker_counts_are_not_capped_at_three(self) -> None:
+        members = tuple(member(ordinal) for ordinal in range(5))
+
+        subject = T1ExecutionManifest.create(
+            plan_digest="a" * 64,
+            members=members,
+            worker_count=5,
+            aggregate_cost_ceiling_usd=0.050,
+            campaign_cost_ceiling_usd=1.000,
+            expires_at="2099-01-01T00:00:00+00:00",
+            authorized_dispatchers=tuple(
+                f"worker-{ordinal + 1}" for ordinal in range(5)
+            ),
+        )
+
+        self.assertEqual(tuple(item.ordinal for item in subject.members), tuple(range(5)))
+        self.assertEqual(len(subject.authorized_dispatchers), 5)
+        self.assertEqual(
+            subject.members[4].member_digest,
+            sha256_id(
+                "t1_execution_member_v4",
+                subject.members[4].canonical_member(),
+            ),
+        )
+        self.assertEqual(
+            subject.manifest_digest,
+            sha256_id("t1_execution_manifest_v4", subject.canonical_manifest()),
+        )
+
+    def test_member_and_manifest_cost_envelopes_are_dynamic(self) -> None:
+        base_task = task(0)
+        expensive_task = replace(
+            base_task,
+            constraints=replace(base_task.constraints, max_cost_usd=0.025),
+        )
+        expensive_member = T1ExecutionMember.create(
+            plan_digest="a" * 64,
+            ordinal=0,
+            task=expensive_task,
+            route=proposal(),
+            token_policy_digest=t1_glm_live_policy().policy_digest,
+            provider_tier_binding_digest=(
+                glm_standard_policy().binding().binding_digest
+            ),
+            role_digest="9" * 64,
+            privacy="public",
+            context_class="non_sensitive_routine",
+            cost_ceiling_usd=0.025,
+            target_claims=(TargetClaim.for_path("src/dynamic-cost.txt"),),
+        )
+
+        subject = T1ExecutionManifest.create(
+            plan_digest="a" * 64,
+            members=(expensive_member,),
+            worker_count=1,
+            aggregate_cost_ceiling_usd=0.025,
+            campaign_cost_ceiling_usd=10.000,
+            expires_at="2099-01-01T00:00:00+00:00",
+            authorized_dispatchers=("worker-1",),
+        )
+
+        self.assertEqual(subject.aggregate_cost_ceiling_usd, 0.025)
+        self.assertEqual(subject.campaign_cost_ceiling_usd, 10.000)
+
+    def test_dynamic_worker_and_cost_relations_fail_closed(self) -> None:
+        members = (member(0), member(1), member(2))
+        cases = (
+            {
+                "members": members,
+                "worker_count": 0,
+                "aggregate_cost_ceiling_usd": 0.030,
+                "campaign_cost_ceiling_usd": 0.030,
+                "authorized_dispatchers": (),
+            },
+            {
+                "members": members,
+                "worker_count": 4,
+                "aggregate_cost_ceiling_usd": 0.030,
+                "campaign_cost_ceiling_usd": 0.030,
+                "authorized_dispatchers": (
+                    "worker-1",
+                    "worker-2",
+                    "worker-3",
+                    "worker-4",
+                ),
+            },
+            {
+                "members": members,
+                "worker_count": 2,
+                "aggregate_cost_ceiling_usd": 0.030,
+                "campaign_cost_ceiling_usd": 0.030,
+                "authorized_dispatchers": (
+                    "worker-1",
+                    "worker-2",
+                    "worker-3",
+                ),
+            },
+            {
+                "members": members,
+                "worker_count": 3,
+                "aggregate_cost_ceiling_usd": 0.040,
+                "campaign_cost_ceiling_usd": 0.040,
+                "authorized_dispatchers": (
+                    "worker-1",
+                    "worker-2",
+                    "worker-3",
+                ),
+            },
+            {
+                "members": members,
+                "worker_count": 3,
+                "aggregate_cost_ceiling_usd": 0.030,
+                "campaign_cost_ceiling_usd": 0.020,
+                "authorized_dispatchers": (
+                    "worker-1",
+                    "worker-2",
+                    "worker-3",
+                ),
+            },
+            {
+                "members": (),
+                "worker_count": 1,
+                "aggregate_cost_ceiling_usd": 0.0,
+                "campaign_cost_ceiling_usd": 0.0,
+                "authorized_dispatchers": ("worker-1",),
+            },
+        )
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                T1ExecutionManifest.create(
+                    plan_digest="a" * 64,
+                    expires_at="2099-01-01T00:00:00+00:00",
+                    **case,
+                )
+
+    def test_schema_four_and_member_digest_bind_provider_tier(self) -> None:
         first = manifest()
         original = first.members[0]
         changed = T1ExecutionMember.create(
@@ -119,10 +297,10 @@ class T1ManifestTests(unittest.TestCase):
             target_claims=original.target_claims,
         )
 
-        self.assertEqual(first.schema_version, 3)
+        self.assertEqual(first.schema_version, 4)
         self.assertEqual(
             original.member_digest,
-            sha256_id("t1_execution_member_v3", original.canonical_member()),
+            sha256_id("t1_execution_member_v4", original.canonical_member()),
         )
         self.assertNotEqual(original.member_digest, changed.member_digest)
 
@@ -143,9 +321,11 @@ class T1ManifestTests(unittest.TestCase):
             legacy_members.append(document)
         legacy_manifest = current.to_dict()
         legacy_manifest["schema_version"] = 1
+        legacy_manifest.pop("worker_count")
         legacy_manifest["members"] = legacy_members
         canonical_manifest = current.canonical_manifest()
         canonical_manifest["schema_version"] = 1
+        canonical_manifest.pop("worker_count")
         canonical_manifest["ordered_member_digests"] = legacy_member_digests
         legacy_manifest["manifest_digest"] = sha256_id(
             "t1_execution_manifest_v1",
@@ -174,8 +354,10 @@ class T1ManifestTests(unittest.TestCase):
         current = manifest()
         legacy_manifest = current.to_dict()
         legacy_manifest["schema_version"] = 2
+        legacy_manifest.pop("worker_count")
         canonical_manifest = current.canonical_manifest()
         canonical_manifest["schema_version"] = 2
+        canonical_manifest.pop("worker_count")
         legacy_manifest["manifest_digest"] = sha256_id(
             "t1_execution_manifest_v2",
             canonical_manifest,
@@ -199,6 +381,48 @@ class T1ManifestTests(unittest.TestCase):
         self.assertEqual(inspection.manifest_digest, legacy_manifest["manifest_digest"])
         self.assertEqual(after, raw)
 
+    def test_schema_three_is_audit_visible_but_fixed_worker_incompatible(self) -> None:
+        current = manifest()
+        legacy_members = []
+        legacy_member_digests = []
+        for member_value in current.members:
+            document = member_value.to_dict()
+            document["member_digest"] = sha256_id(
+                "t1_execution_member_v3",
+                member_value.canonical_member(),
+            )
+            legacy_member_digests.append(document["member_digest"])
+            legacy_members.append(document)
+        legacy_manifest = current.to_dict()
+        legacy_manifest["schema_version"] = 3
+        legacy_manifest.pop("worker_count")
+        legacy_manifest["members"] = legacy_members
+        canonical_manifest = current.canonical_manifest()
+        canonical_manifest["schema_version"] = 3
+        canonical_manifest.pop("worker_count")
+        canonical_manifest["ordered_member_digests"] = legacy_member_digests
+        legacy_manifest["manifest_digest"] = sha256_id(
+            "t1_execution_manifest_v3",
+            canonical_manifest,
+        )
+
+        with d_drive_tempdir() as temp:
+            path = temp / "legacy-fixed-three-t1.json"
+            raw = json.dumps(legacy_manifest, sort_keys=True).encode("utf-8")
+            path.write_bytes(raw)
+            inspection = inspect_t1_manifest(path)
+            with self.assertRaisesRegex(
+                LegacyFixedWorkerTopologyIncompatibleError,
+                "legacy_fixed_worker_topology",
+            ):
+                load_t1_manifest(path)
+            after = path.read_bytes()
+
+        self.assertEqual(inspection.status, "legacy_fixed_three_workers")
+        self.assertEqual(inspection.schema_version, 3)
+        self.assertEqual(inspection.member_count, 3)
+        self.assertEqual(after, raw)
+
     def test_member_and_manifest_digest_bind_order_task_route_policy_cost_and_targets(
         self,
     ) -> None:
@@ -212,6 +436,7 @@ class T1ManifestTests(unittest.TestCase):
             T1ExecutionManifest.create(
                 plan_digest=first.plan_digest,
                 members=tuple(reversed(first.members)),
+                worker_count=first.worker_count,
                 aggregate_cost_ceiling_usd=first.aggregate_cost_ceiling_usd,
                 campaign_cost_ceiling_usd=first.campaign_cost_ceiling_usd,
                 expires_at=first.expires_at,
@@ -238,6 +463,7 @@ class T1ManifestTests(unittest.TestCase):
         reversed_manifest = T1ExecutionManifest.create(
             plan_digest=first.plan_digest,
             members=reordered_members,
+            worker_count=first.worker_count,
             aggregate_cost_ceiling_usd=first.aggregate_cost_ceiling_usd,
             campaign_cost_ceiling_usd=first.campaign_cost_ceiling_usd,
             expires_at=first.expires_at,

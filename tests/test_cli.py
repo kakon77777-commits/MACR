@@ -196,10 +196,15 @@ class DoctorTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 token_policy=t1_glm_live_policy(),
             )
-            source = approved_manifest(provider)
+            source = approved_manifest(
+                provider,
+                member_count=5,
+                worker_count=4,
+            )
             subject = T1ExecutionManifest.create(
                 plan_digest=source.plan_digest,
                 members=source.members,
+                worker_count=source.worker_count,
                 aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
                 campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
                 expires_at=(
@@ -257,8 +262,14 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(worker_status, 0)
         self.assertEqual(document["status"], "t1_staged")
         self.assertEqual(worker_document["status"], "t1_worker_completed")
-        self.assertEqual(counts["queued"], 2)
+        self.assertEqual(counts["queued"], 4)
         self.assertEqual(counts["completed"], 1)
+        self.assertEqual(document["worker_count"], 4)
+        self.assertEqual(document["member_count"], 5)
+        self.assertEqual(document["authority_bundle"]["worker_count"], 4)
+        self.assertEqual(len(document["authority_bundle"]["member_ids"]), 5)
+        self.assertEqual(worker_document["worker_count"], 4)
+        self.assertEqual(worker_document["member_count"], 5)
         self.assertFalse(document["network_activity"])
         self.assertNotIn("T1_MEMBER_", output.getvalue())
         self.assertNotIn("T1_MEMBER_", worker_output.getvalue())
@@ -314,6 +325,7 @@ class DoctorTests(unittest.TestCase):
             subject = T1ExecutionManifest.create(
                 plan_digest=source.plan_digest,
                 members=source.members,
+                worker_count=source.worker_count,
                 aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
                 campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
                 expires_at=(

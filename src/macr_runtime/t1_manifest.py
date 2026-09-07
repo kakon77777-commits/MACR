@@ -13,6 +13,7 @@ from .canonical import aware_iso8601, sha256_id
 from .contracts import DelegationClass, PrivacyLevel, TaskContract
 from .execution import AuthorizationReference
 from .errors import (
+    LegacyFixedWorkerTopologyIncompatibleError,
     LegacyOutputPolicyIncompatibleError,
     LegacyPreTierIncompatibleError,
 )
@@ -32,11 +33,8 @@ _T1_PROVIDER_KIND = "zai_glm_worker"
 _T1_MODEL = "glm-5.3-flash"
 _T1_ENDPOINT = "https://api.z.ai/api/paas/v4"
 _T1_CONTEXT_CLASS = "non_sensitive_routine"
-_T1_MEMBER_COST_USD = 0.010
-_T1_AGGREGATE_COST_USD = 0.030
-_T1_CAMPAIGN_COST_USD = 0.040
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
-T1_MANIFEST_SCHEMA_VERSION = 3
+T1_MANIFEST_SCHEMA_VERSION = 4
 
 
 def _digest(name: str, value: object) -> str:
@@ -57,13 +55,6 @@ def _cost(name: str, value: object) -> float:
     normalized = float(value)
     if not math.isfinite(normalized) or normalized < 0:
         raise ValueError(f"{name} must be finite non-negative")
-    return normalized
-
-
-def _exact_cost(name: str, value: object, expected: float) -> float:
-    normalized = _cost(name, value)
-    if not math.isclose(normalized, expected, rel_tol=0, abs_tol=1e-12):
-        raise ValueError(f"{name} does not match the fixed T1 ceiling")
     return normalized
 
 
@@ -164,9 +155,9 @@ class T1ExecutionMember:
         if (
             isinstance(self.ordinal, bool)
             or not isinstance(self.ordinal, int)
-            or not 0 <= self.ordinal <= 2
+            or self.ordinal < 0
         ):
-            raise ValueError("T1 member ordinal must be between 0 and 2")
+            raise ValueError("T1 member ordinal must be non-negative")
         if not isinstance(self.task, TaskContract):
             raise ValueError("T1 member task must be a TaskContract")
         if not isinstance(self.route, ExecutionRouteProposal):
@@ -198,11 +189,7 @@ class T1ExecutionMember:
         object.__setattr__(
             self,
             "cost_ceiling_usd",
-            _exact_cost(
-                "cost_ceiling_usd",
-                self.cost_ceiling_usd,
-                _T1_MEMBER_COST_USD,
-            ),
+            _cost("cost_ceiling_usd", self.cost_ceiling_usd),
         )
         if isinstance(self.target_claims, (str, bytes)):
             raise ValueError("T1 target_claims must be an array")
@@ -215,7 +202,7 @@ class T1ExecutionMember:
         object.__setattr__(self, "target_claims", claims)
         self._validate_fixed_route()
         self._validate_task()
-        expected = sha256_id("t1_execution_member_v3", self.canonical_member())
+        expected = sha256_id("t1_execution_member_v4", self.canonical_member())
         if self.member_digest != expected:
             raise ValueError("T1 member digest does not match exact member")
 
@@ -251,7 +238,7 @@ class T1ExecutionMember:
             not in {PrivacyLevel.PUBLIC, PrivacyLevel.INTERNAL_APPROVED}
             or self.privacy != task.constraints.privacy.value
             or not task.constraints.internet
-            or task.constraints.max_cost_usd > _T1_MEMBER_COST_USD + 1e-12
+            or task.constraints.max_cost_usd <= 0
             or not math.isclose(
                 task.constraints.max_cost_usd,
                 self.cost_ceiling_usd,
@@ -327,7 +314,7 @@ class T1ExecutionMember:
             "cost_ceiling_usd": values["cost_ceiling_usd"],
             "target_claims": [item.to_dict() for item in normalized_claims],
         }
-        digest = sha256_id("t1_execution_member_v3", canonical)
+        digest = sha256_id("t1_execution_member_v4", canonical)
         return cls(member_digest=digest, **values)
 
     @classmethod
@@ -403,6 +390,7 @@ class T1ExecutionManifest:
     plan_digest: str
     plan_revision: int
     members: tuple[T1ExecutionMember, ...]
+    worker_count: int
     aggregate_cost_ceiling_usd: float
     campaign_cost_ceiling_usd: float
     expires_at: str
@@ -425,37 +413,43 @@ class T1ExecutionManifest:
         ):
             raise ValueError("T1 plan_revision must be a positive integer")
         members = tuple(self.members)
-        if len(members) != 3 or any(
+        if not members or any(
             not isinstance(item, T1ExecutionMember) for item in members
         ):
-            raise ValueError("T1 manifest must contain exactly three members")
-        if tuple(item.ordinal for item in members) != (0, 1, 2):
+            raise ValueError("T1 manifest must contain at least one member")
+        if tuple(item.ordinal for item in members) != tuple(range(len(members))):
             raise ValueError("T1 manifest member ordinals must be exact and ordered")
         if any(item.plan_digest != self.plan_digest for item in members):
             raise ValueError("T1 member plan digest does not match manifest")
-        if len({item.member_digest for item in members}) != 3:
+        if len({item.member_digest for item in members}) != len(members):
             raise ValueError("T1 manifest members must be unique")
-        if len({item.task.task_id for item in members}) != 3:
+        if len({item.task.task_id for item in members}) != len(members):
             raise ValueError("T1 manifest task IDs must be unique")
         if len({item.provider_tier_binding_digest for item in members}) != 1:
             raise ValueError("T1 manifest members must use one provider tier binding")
         object.__setattr__(self, "members", members)
+        if (
+            isinstance(self.worker_count, bool)
+            or not isinstance(self.worker_count, int)
+            or not 1 <= self.worker_count <= len(members)
+        ):
+            raise ValueError(
+                "T1 worker_count must be between 1 and the member count"
+            )
         object.__setattr__(
             self,
             "aggregate_cost_ceiling_usd",
-            _exact_cost(
+            _cost(
                 "aggregate_cost_ceiling_usd",
                 self.aggregate_cost_ceiling_usd,
-                _T1_AGGREGATE_COST_USD,
             ),
         )
         object.__setattr__(
             self,
             "campaign_cost_ceiling_usd",
-            _exact_cost(
+            _cost(
                 "campaign_cost_ceiling_usd",
                 self.campaign_cost_ceiling_usd,
-                _T1_CAMPAIGN_COST_USD,
             ),
         )
         if not math.isclose(
@@ -465,6 +459,10 @@ class T1ExecutionManifest:
             abs_tol=1e-12,
         ):
             raise ValueError("T1 member costs do not match aggregate ceiling")
+        if self.campaign_cost_ceiling_usd + 1e-12 < self.aggregate_cost_ceiling_usd:
+            raise ValueError(
+                "T1 campaign cost ceiling must cover the aggregate ceiling"
+            )
         object.__setattr__(
             self,
             "expires_at",
@@ -478,10 +476,15 @@ class T1ExecutionManifest:
                 for item in self.authorized_dispatchers
             )
         )
-        if len(dispatchers) != 3 or len(set(dispatchers)) != 3:
-            raise ValueError("T1 manifest requires three unique dispatchers")
+        if (
+            len(dispatchers) != self.worker_count
+            or len(set(dispatchers)) != self.worker_count
+        ):
+            raise ValueError(
+                "T1 authorized dispatchers must match worker_count exactly"
+            )
         object.__setattr__(self, "authorized_dispatchers", dispatchers)
-        expected = sha256_id("t1_execution_manifest_v3", self.canonical_manifest())
+        expected = sha256_id("t1_execution_manifest_v4", self.canonical_manifest())
         if self.manifest_digest != expected:
             raise ValueError("T1 manifest digest does not match exact manifest")
 
@@ -491,6 +494,7 @@ class T1ExecutionManifest:
         *,
         plan_digest: str,
         members: Sequence[T1ExecutionMember],
+        worker_count: int,
         aggregate_cost_ceiling_usd: float,
         campaign_cost_ceiling_usd: float,
         expires_at: str,
@@ -516,16 +520,18 @@ class T1ExecutionManifest:
             "plan_digest": plan_digest,
             "plan_revision": plan_revision,
             "ordered_member_digests": [item.member_digest for item in normalized_members],
+            "worker_count": worker_count,
             "aggregate_cost_ceiling_usd": float(aggregate_cost_ceiling_usd),
             "campaign_cost_ceiling_usd": float(campaign_cost_ceiling_usd),
             "expires_at": aware_iso8601("expires_at", expires_at),
             "authorized_dispatchers": list(normalized_dispatchers),
         }
         return cls(
-            manifest_digest=sha256_id("t1_execution_manifest_v3", canonical),
+            manifest_digest=sha256_id("t1_execution_manifest_v4", canonical),
             plan_digest=plan_digest,
             plan_revision=plan_revision,
             members=normalized_members,
+            worker_count=worker_count,
             aggregate_cost_ceiling_usd=aggregate_cost_ceiling_usd,
             campaign_cost_ceiling_usd=campaign_cost_ceiling_usd,
             expires_at=expires_at,
@@ -538,6 +544,14 @@ class T1ExecutionManifest:
             raise LegacyPreTierIncompatibleError(
                 "legacy_pre_tier_incompatible: T1 schema 1 is audit-only"
             )
+        if isinstance(value, Mapping) and value.get("schema_version") == 2:
+            raise LegacyOutputPolicyIncompatibleError(
+                "legacy_output_policy_incompatible: T1 schema 2 is audit-only"
+            )
+        if isinstance(value, Mapping) and value.get("schema_version") == 3:
+            raise LegacyFixedWorkerTopologyIncompatibleError(
+                "legacy_fixed_worker_topology: T1 schema 3 is audit-only"
+            )
         expected = {
             "manifest_digest",
             "schema_version",
@@ -545,6 +559,7 @@ class T1ExecutionManifest:
             "plan_digest",
             "plan_revision",
             "members",
+            "worker_count",
             "aggregate_cost_ceiling_usd",
             "campaign_cost_ceiling_usd",
             "expires_at",
@@ -562,6 +577,7 @@ class T1ExecutionManifest:
             plan_digest=data["plan_digest"],
             plan_revision=data["plan_revision"],
             members=tuple(T1ExecutionMember.from_dict(item) for item in data["members"]),
+            worker_count=data["worker_count"],
             aggregate_cost_ceiling_usd=data["aggregate_cost_ceiling_usd"],
             campaign_cost_ceiling_usd=data["campaign_cost_ceiling_usd"],
             expires_at=data["expires_at"],
@@ -575,6 +591,7 @@ class T1ExecutionManifest:
             "plan_digest": self.plan_digest,
             "plan_revision": self.plan_revision,
             "ordered_member_digests": [item.member_digest for item in self.members],
+            "worker_count": self.worker_count,
             "aggregate_cost_ceiling_usd": self.aggregate_cost_ceiling_usd,
             "campaign_cost_ceiling_usd": self.campaign_cost_ceiling_usd,
             "expires_at": self.expires_at,
@@ -589,6 +606,7 @@ class T1ExecutionManifest:
             "plan_digest": self.plan_digest,
             "plan_revision": self.plan_revision,
             "members": [item.to_dict() for item in self.members],
+            "worker_count": self.worker_count,
             "aggregate_cost_ceiling_usd": self.aggregate_cost_ceiling_usd,
             "campaign_cost_ceiling_usd": self.campaign_cost_ceiling_usd,
             "expires_at": self.expires_at,
@@ -602,6 +620,7 @@ class T1AuthorityBundle:
     batch_authority: BatchAuthorityReference
     dispatch_authority: AuthorizationReference
     member_ids: tuple[str, ...]
+    worker_count: int
     expires_at: str
 
     def __post_init__(self) -> None:
@@ -615,9 +634,15 @@ class T1AuthorityBundle:
         if not isinstance(self.dispatch_authority, AuthorizationReference):
             raise ValueError("dispatch_authority is invalid")
         members = tuple(_digest("member_id", item) for item in self.member_ids)
-        if len(members) != 3 or len(set(members)) != 3:
-            raise ValueError("T1 authority bundle requires three member IDs")
+        if not members or len(set(members)) != len(members):
+            raise ValueError("T1 authority bundle requires unique member IDs")
         object.__setattr__(self, "member_ids", members)
+        if (
+            isinstance(self.worker_count, bool)
+            or not isinstance(self.worker_count, int)
+            or not 1 <= self.worker_count <= len(members)
+        ):
+            raise ValueError("T1 authority bundle worker_count is invalid")
         object.__setattr__(
             self,
             "expires_at",
@@ -642,6 +667,7 @@ class T1AuthorityBundle:
                 "scope": self.dispatch_authority.scope,
             },
             "member_ids": list(self.member_ids),
+            "worker_count": self.worker_count,
             "expires_at": self.expires_at,
         }
 
@@ -690,16 +716,19 @@ def inspect_t1_manifest(path: str | Path) -> T1ManifestInspection:
     schema_version = document.get("schema_version")
     members = document.get("members")
     manifest_digest = document.get("manifest_digest")
-    if schema_version not in {1, 2, 3}:
+    if schema_version not in {1, 2, 3, 4}:
         raise ValueError("T1 manifest schema_version is unsupported")
-    if not isinstance(members, list) or len(members) != 3:
-        raise ValueError("T1 manifest must contain exactly three members")
+    if not isinstance(members, list) or not members:
+        raise ValueError("T1 manifest must contain at least one member")
+    if schema_version in {1, 2, 3} and len(members) != 3:
+        raise ValueError("legacy T1 manifest must contain exactly three members")
     digest = _digest("manifest_digest", manifest_digest)
     if schema_version == T1_MANIFEST_SCHEMA_VERSION:
         T1ExecutionManifest.from_dict(document)
     status = {
         1: "legacy_pre_tier",
         2: "legacy_pre_quality_floor",
+        3: "legacy_fixed_three_workers",
         T1_MANIFEST_SCHEMA_VERSION: "current",
     }[schema_version]
     return T1ManifestInspection(
@@ -719,6 +748,10 @@ def load_t1_manifest(path: str | Path) -> T1ExecutionManifest:
     if document.get("schema_version") == 2:
         raise LegacyOutputPolicyIncompatibleError(
             "legacy_output_policy_incompatible: T1 schema 2 is audit-only"
+        )
+    if document.get("schema_version") == 3:
+        raise LegacyFixedWorkerTopologyIncompatibleError(
+            "legacy_fixed_worker_topology: T1 schema 3 is audit-only"
         )
     return T1ExecutionManifest.from_dict(document)
 
