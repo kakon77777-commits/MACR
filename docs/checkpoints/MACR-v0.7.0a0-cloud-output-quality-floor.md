@@ -115,5 +115,39 @@ authorization.
 
 ## Verification
 
-Verification results will be sealed here only after the final clean candidate
-and full offline gates exist.
+Final clean implementation subject before this evidence-only amendment:
+
+- commit `a024662098999e88d93b647e7cc014328e19433a`;
+- tree `daaa73eb8fe5b879e7b47eccef77eb0d63cd98f4`.
+
+Fresh direct discovery ran 808 tests with zero failures and two existing
+platform-capability skips. A complete clean `verify-v07-phase-c.ps1` run then
+reported:
+
+- Phase C focused 98, Phase B focused 76, Phase A focused 91, inherited 808;
+- 32 bootstrap processes, eight semantic commit contenders, two attach fault
+  points and six commit fault points;
+- fresh package replay and installed-import isolation true;
+- wheel SHA-256
+  `5b88abb6a16dc9ef437f33d85042a862658541649243c809acdddd7519e8a934`;
+- `network_activity=false`, `provider_generation=false`,
+  `phase_d_started=false`, `git_clean=true`.
+
+One earlier full-suite attempt correctly failed four census controls because a
+separate Claude process was actively running two MACR GLM invocations. The
+predicate was not weakened and that run was not treated as product evidence.
+After the external process completed naturally, census returned zero and the
+fresh 808-test plus Phase-C gates above passed.
+
+The governing Twin independently replayed each successive blocker. On exact
+`a024662` / tree `daaa73eb`, it reported `CONCUR` for exact-v1 versus arbitrary
+digest discrimination, zero activation drift, byte-preserved override rows,
+T1 member/manifest v3, and local-only Qwythos-v1 compatibility. Its concurrence
+is scoped verification, not merge, release, deployment, provider-call or
+shared-state authority.
+
+All nine concrete `universal-directory/agents/discovery` manifests were then
+replayed through credential-free policy-v2
+`glm-preflight --show-required-digest`: each returned `approval_required`,
+`tier=standard`, requested/minimum output 16,384 and a current policy digest.
+No credential was read and no provider generation occurred.
