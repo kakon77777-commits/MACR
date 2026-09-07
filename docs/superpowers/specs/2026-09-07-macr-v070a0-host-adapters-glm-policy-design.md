@@ -284,11 +284,26 @@ grants a provider, tier, task type, member digest, or plane outside that scope.
 
 This slice delivers a reusable in-process host adapter and verifier protocols,
 tested with synthetic Codex and Claude bindings. It does not add a CLI that
-accepts arbitrary native identifiers as trusted identity. A future Codex or
-Claude embedding supplies a verified `HostSessionBinding`; preflight then
-performs no state write, key read or provider call, while invoke preserves the
-existing explicit connectivity opt-in. Native IDs remain bounded origin
-metadata and are never echoed in public accounting summaries.
+accepts arbitrary native identifiers as trusted identity.
+
+The concrete Claude Code integration consumes the official `SessionStart` hook
+JSON `session_id`, creates a bounded short-lived binding capability whose secret
+is never printed or stored in plaintext, and persists the token only through the
+hook-owned session environment file. Later Claude shell invocations must present
+that capability and, when present, a matching `CLAUDE_CODE_SESSION_ID`. A plain
+shell that merely fabricates the environment variable cannot produce
+`task_local_host_observed` attribution or mint host-bound authority.
+
+Codex keeps a separate injected host-owned verifier contract. The locally
+observed `CODEX_THREAD_ID` and `CODEX_SESSION_ID` are distinct and never treated
+as aliases; only a host-owned verifier may bind `codex_thread_id` from
+`CODEX_THREAD_ID`. Until that embedding exists, a generic Codex shell call is
+`operator_asserted`/CLI origin rather than host-observed.
+
+After binding verification, preflight performs no state write, key read or
+provider call, while invoke preserves the existing explicit connectivity
+opt-in. Native IDs remain bounded origin metadata and are never echoed in public
+accounting summaries.
 
 Because the verified Bridge is currently `live=false` with
 `herdr_not_running`, live Claude availability and an end-to-end Claude-origin
@@ -318,6 +333,11 @@ Required positives and negatives include:
 - unsupported host, wrong identifier kind, `claude_subscription` target,
   unverified/manual-as-trusted binding, missing connectivity opt-in, stale
   authority, and tier-policy mismatch fail before provider/key/state write;
+- a plain shell can fabricate each matching host environment variable but still
+  cannot obtain `task_local_host_observed` attribution or host-bound authority;
+- Claude hook `session_id` plus its unprinted capability verifies, while missing,
+  empty, cross-host, conflicting or changed-after-capture values fail before
+  authority/state/key/provider access;
 - host invoke records exact host origin, tier and failure type through runtime,
   accounting and terminal event;
 - a typed top-level invocation outcome exposes stable failure code/stage without
