@@ -288,9 +288,11 @@ The implementation train is append-only:
 | governed shared host adapter and read-only status surfaces | `0a0ba159` |
 | pre-issued-authority tier activation verifier | `f838bf87eb4b002a08dd2fc6dcf6c124027f857f` |
 | deterministic wheel verification | `6547c3af6b8cbc46e08a73ba1fd4137bc7e4ca24` |
+| close injected verifier, rogue policy and cached-head escalation | `c938136cecd2836f0182ad57ef431dd28251b939` |
+| canonical state-root governance and schema-2 migration | `36b73bebd6e07a81332c5b8d18ecff01ff46af15` |
 
-The final code/gate subject is `6547c3af6b8cbc46e08a73ba1fd4137bc7e4ca24` /
-tree `851fede0e18069b26d7faac19bf720e69104b478`. Package version remains
+The final code/gate subject is `36b73bebd6e07a81332c5b8d18ecff01ff46af15` /
+tree `ad6182a50afc1c15ba8b97e3ab2ed5cc707bbca9`. Package version remains
 `0.7.0a0`.
 
 The former GLM transport `min(max_latency_s, 300)` was replaced by exact tier
@@ -330,3 +332,21 @@ gates on `6547c3a` each ran 778 inherited tests and produced identical wheel SHA
 epoch `1788771048`, and identical state/replay digests. No key read, real
 provider call, shared-state migration/activation, merge, tag, push, release,
 deployment or adoption occurred in this candidate.
+
+The governing twin rejected the earlier green candidate after reproducing an
+allow-all activation-verifier attack, a rogue 3,600-second patch/write policy,
+cached active-head drift, foreign-state-root authority reuse, and a missing
+schema migration for activation authority provenance. The repaired governance
+surface has no public raw activation method, accepts only adapter-published
+policies, rereads active head before runtime/T1 admission, requires canonical
+sibling settings/runtime databases, and migrates schema-1 policy state to
+schema 2 without trusting its old active pointer.
+
+On exact `36b73be`, the twin independently verified foreign-root zero drift and
+literal schema-1 preservation/fail-closed/reauthorization, then returned
+`CONCUR` after 114 passing focused tests and one existing platform skip. Two
+primary clean Phase C runs each executed 787 inherited tests and produced
+identical wheel SHA
+`b67e13954b4c85e12749169590d23953e72fc977aafa0f3bed757fdd4e613ccd`,
+epoch `1788773322`, identical state/replay digests, network false, provider
+generation false, Phase D false, and clean Git state.

@@ -13,8 +13,8 @@ worktree         D:\Ai\work together\MACR\.worktrees\v070a0-host-adapters-glm-po
 branch           feature/v070a0-host-adapters-glm-policy
 base commit      20a2d5e02e34c0faf74fcaa5c40721df9aa37763
 base tree        a16a181a96e7ede415648872b68263db43a02d13
-code commit      6547c3af6b8cbc46e08a73ba1fd4137bc7e4ca24
-code tree        851fede0e18069b26d7faac19bf720e69104b478
+code commit      36b73bebd6e07a81332c5b8d18ecff01ff46af15
+code tree        ad6182a50afc1c15ba8b97e3ab2ed5cc707bbca9
 package version  0.7.0a0
 ```
 
@@ -109,6 +109,49 @@ git clean           true
 
 All Agent, semantic, graph, projection, attachment, commit and replay digests
 were byte-identical between the two summaries.
+
+### Governing-twin challenge and supersession
+
+The governing twin rejected the earlier `af5e787`/`6547c3a` candidate despite
+green gates. Its attacks proved that an injected allow-all verifier could
+activate a tier, a rogue stored policy could exceed the GLM adapter ceiling, a
+cached extended registry could survive an active-head downgrade, a foreign
+state-root authority could activate the target policy store, and the initial
+authority-digest column lacked schema migration.
+
+Commits `c938136` and `36b73be` supersede that candidate:
+
+- public raw activation is removed; `ProviderCapabilityGovernance` consumes a
+  real pre-issued authority and private activation permit;
+- store/effective reads and the GLM constructor accept only exact
+  adapter-published standard/extended definitions;
+- runtime and T1 reread current active head before approval/admission;
+- governance requires canonical sibling
+  `settings/provider-capability-policies.sqlite3` and
+  `runtime/dispatch.sqlite3` under one state root;
+- capability-store schema 2 migrates schema-1 active rows with
+  `authority_digest=NULL`, preserves their policy/pointer fields, and refuses
+  them until canonical reauthorization.
+
+The twin independently replayed the foreign-root and literal schema-1 attacks
+on `36b73be` / tree `ad6182a50afc1c15ba8b97e3ab2ed5cc707bbca9` and returned
+`CONCUR`: 114 focused tests passed with one existing symbolic-link skip, no
+network/provider/key/shared-state action, and a clean worktree.
+
+The primary seat then ran two consecutive clean complete Phase C gates on that
+exact subject. Both summaries were byte-identical:
+
+```text
+inherited tests      787
+failures               0
+platform skips         2
+wheel sha256          b67e13954b4c85e12749169590d23953e72fc977aafa0f3bed757fdd4e613ccd
+source date epoch     1788773322
+network activity   false
+provider generation false
+phase D started    false
+git clean           true
+```
 
 ## Claude and Codex operational status
 

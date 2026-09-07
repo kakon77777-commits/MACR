@@ -118,7 +118,7 @@ git commit -m "test: make Windows verification locale safe"
 - Modify: `src/macr_runtime/__init__.py`
 
 **Interfaces:**
-- Produces: `ProviderCapabilityPolicy`, `ProviderTierBinding`, `ProviderCapabilityResolver`, `ProviderCapabilityPolicyStore`, and `OperatorTierActivationVerifier`.
+- Produces: `ProviderCapabilityPolicy`, `ProviderTierBinding`, `ProviderCapabilityResolver`, `ProviderCapabilityPolicyStore`, and `ProviderCapabilityGovernance`.
 - Produces: `glm_standard_policy()` and `glm_extended_text_policy()` built-ins.
 - Produces: `StorageLayout.provider_capability_policy_db_path` at `settings/provider-capability-policies.sqlite3`.
 - Produces: a read-only resolution path that treats an absent database as built-in standard and never creates a file during preflight.
@@ -176,7 +176,7 @@ Expected: import failure for `ProviderCapabilityPolicyStore`.
 
 - [ ] **Step 5: Implement append-only SQLite policy store**
 
-Use three tables: `provider_capability_schema_meta`, `provider_capability_policies`, and `provider_capability_active`. Save canonical policy bytes plus SHA-256; activation points to an existing exact revision and binding digest. `activate()` requires a separately injected verifier to validate a pre-existing operator witness for that exact digest; the store cannot issue one. All writes use `BEGIN IMMEDIATE`, WAL, FULL synchronous, and the existing D-drive storage policy. `read_effective_binding(path, provider_id, model)` opens an existing database read-only and returns built-in standard when the file is absent; it never initializes a database.
+Use three tables: `provider_capability_schema_meta`, `provider_capability_policies`, and `provider_capability_active`. Save canonical policy bytes plus SHA-256; activation points to an existing exact revision, binding digest and authority digest. Only `ProviderCapabilityGovernance` may activate, using the canonical sibling runtime authority database; the store has no public raw activation path. Schema 1 migrates to 2 by preserving definitions/pointers and adding nullable authority provenance, so old active rows fail closed until reauthorized. All writes use `BEGIN IMMEDIATE`, WAL, FULL synchronous, and the existing D-drive storage policy. `read_effective_binding(path, provider_id, model)` opens an existing database read-only and returns built-in standard when the file is absent; it never initializes a database.
 
 - [ ] **Step 6: Wire storage and runtime services, then run focused tests**
 

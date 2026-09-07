@@ -175,6 +175,13 @@ witness, and this slice exposes no shell command that both creates authorization
 and activates a tier. A failed or missing witness leaves the active pointer and
 all other state unchanged.
 
+`ProviderCapabilityGovernance` also requires the policy store and authority
+store to be the canonical sibling paths under one state root. A valid authority
+from another database/root is not transferable. Only exact adapter-published
+policy definitions may be saved or resolved; a canonical but unsupported row
+fails closed. Runtime and T1 resolve active head immediately before
+approval/admission so a cached provider cannot survive a downgrade.
+
 Existing schema-2 approvals remain immutable historical records but are
 explicitly incompatible with new GLM dispatch. Pending old approval/T1 state is
 enumerated before any future shared-state activation; it is not rewritten.
@@ -336,6 +343,9 @@ Required positives and negatives include:
   and unapproved privacy;
 - task or model cannot select/activate a tier, and another provider cannot
   inherit GLM's active tier;
+- allow-all verifier injection, foreign-root authority, rogue policy rows and
+  cached-head downgrade each leave authority/activation/event/provider state
+  unchanged;
 - Codex and Claude adapters are equal except origin and request identity;
 - unsupported host, wrong identifier kind, `claude_subscription` target,
   unverified/manual-as-trusted binding, missing connectivity opt-in, stale
