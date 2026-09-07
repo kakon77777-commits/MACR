@@ -29,7 +29,10 @@
 - Create: `tests/helpers/process_capture.py`
 - Create: `tests/helpers/unittest_json.py`
 - Create: `tests/test_process_capture.py`
+- Create: `tests/test_unittest_json.py`
+- Create: `tests/fixtures/unittest-json-subject/test_sample.py`
 - Modify: `tests/test_direct_launcher_scripts.py`
+- Modify: `scripts/verify.ps1`
 - Modify: `scripts/verify-v07-phase-a.ps1`
 - Modify: `scripts/verify-v07-phase-b.ps1`
 - Modify: `scripts/verify-v07-phase-c.ps1`
@@ -97,7 +100,7 @@ Expected: focused tests pass; Phase C emits one summary with `network_activity=f
 - [ ] **Step 6: Commit the locale repair**
 
 ```powershell
-git add tests/helpers/process_capture.py tests/helpers/unittest_json.py tests/test_process_capture.py tests/test_direct_launcher_scripts.py scripts/verify-v07-phase-a.ps1 scripts/verify-v07-phase-b.ps1 scripts/verify-v07-phase-c.ps1
+git add tests/helpers/process_capture.py tests/helpers/unittest_json.py tests/test_process_capture.py tests/test_unittest_json.py tests/fixtures/unittest-json-subject/test_sample.py tests/test_direct_launcher_scripts.py scripts/verify.ps1 scripts/verify-v07-phase-a.ps1 scripts/verify-v07-phase-b.ps1 scripts/verify-v07-phase-c.ps1
 git commit -m "test: make Windows verification locale safe"
 ```
 
@@ -115,7 +118,7 @@ git commit -m "test: make Windows verification locale safe"
 - Modify: `src/macr_runtime/__init__.py`
 
 **Interfaces:**
-- Produces: `ProviderCapabilityPolicy`, `ProviderTierBinding`, `ProviderCapabilityResolver`, `ProviderCapabilityPolicyStore`.
+- Produces: `ProviderCapabilityPolicy`, `ProviderTierBinding`, `ProviderCapabilityResolver`, `ProviderCapabilityPolicyStore`, and `OperatorTierActivationVerifier`.
 - Produces: `glm_standard_policy()` and `glm_extended_text_policy()` built-ins.
 - Produces: `StorageLayout.provider_capability_policy_db_path` at `settings/provider-capability-policies.sqlite3`.
 - Produces: a read-only resolution path that treats an absent database as built-in standard and never creates a file during preflight.
@@ -165,7 +168,7 @@ The resolver returns immutable GLM standard revision 1 when no activation exists
 
 - [ ] **Step 4: Write store RED tests**
 
-Cover create-once idempotence, conflicting same revision, explicit activation, absent-activation standard fallback, corrupt body/digest rejection, wrong provider/model/tier activation, and another provider being unable to inherit GLM policy.
+Cover create-once idempotence, conflicting same revision, authorized activation, absent-activation standard fallback, corrupt body/digest rejection, wrong provider/model/tier activation, another provider being unable to inherit GLM policy, and missing/fabricated activation witness leaving the active pointer byte-for-byte unchanged.
 
 Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_provider_capability_store -v`
 
@@ -173,7 +176,7 @@ Expected: import failure for `ProviderCapabilityPolicyStore`.
 
 - [ ] **Step 5: Implement append-only SQLite policy store**
 
-Use three tables: `provider_capability_schema_meta`, `provider_capability_policies`, and `provider_capability_active`. Save canonical policy bytes plus SHA-256; activation points to an existing exact revision and binding digest. All writes use `BEGIN IMMEDIATE`, WAL, FULL synchronous, and the existing D-drive storage policy. `read_effective_binding(path, provider_id, model)` opens an existing database read-only and returns built-in standard when the file is absent; it never initializes a database.
+Use three tables: `provider_capability_schema_meta`, `provider_capability_policies`, and `provider_capability_active`. Save canonical policy bytes plus SHA-256; activation points to an existing exact revision and binding digest. `activate()` requires a separately injected verifier to validate a pre-existing operator witness for that exact digest; the store cannot issue one. All writes use `BEGIN IMMEDIATE`, WAL, FULL synchronous, and the existing D-drive storage policy. `read_effective_binding(path, provider_id, model)` opens an existing database read-only and returns built-in standard when the file is absent; it never initializes a database.
 
 - [ ] **Step 6: Wire storage and runtime services, then run focused tests**
 
@@ -403,34 +406,27 @@ git commit -m "feat: bind T1 manifests to provider capability policy"
 
 **Files:**
 - Create: `src/macr_runtime/host_adapter.py`
-- Create: `src/macr_runtime/host_binding_store.py`
 - Create: `tests/test_host_adapter.py`
-- Create: `tests/test_host_binding_store.py`
-- Modify: `src/macr_runtime/cli.py`
 - Modify: `src/macr_runtime/__init__.py`
-- Modify: `src/macr_runtime/storage.py`
-- Create: `scripts/register-claude-session.ps1`
 - Create: `integrations/claude-code/README.md`
 - Create: `integrations/codex/README.md`
 
 **Interfaces:**
 - `HostKind`: `codex` and `claude_code`.
-- `ClaudeHookBindingRegistrar.register(hook_json, env_file) -> HostSessionBindingReference` consumes official `SessionStart` hook JSON.
-- `HostBindingStore.verify(reference_token, host_kind, observed_session_id) -> HostSessionBinding` stores only a token hash.
-- `CodexHostBindingVerifier` is injected by a host-owned embedding; generic shell environment is never trusted as host-observed.
-- The CLI accepts neither a native-ID argument nor a binding token argument; a Claude binding token is read from the hook-owned environment only.
+- `HostBindingVerifier.verify() -> VerifiedHostBinding` is injected by a host-owned embedding; caller data and generic shell environment are never trusted as host-observed.
+- `HostInvocationGrant` contains a pre-issued dispatch authority and connectivity grant; the adapter cannot issue either.
 - `MacrHostAdapter.preflight(...) -> HostDispatchPreparation` performs no write/key/network action.
-- `MacrHostAdapter.invoke(...) -> ProviderResult` uses the same `MacrRuntime`, authority, budget, approval, vault and accounting services as the ordinary CLI.
+- `MacrHostAdapter.invoke(..., grant: HostInvocationGrant) -> ProviderResult` uses the same `MacrRuntime`, authority, budget, approval, vault and accounting services as the ordinary CLI.
 
 - [ ] **Step 1: Write host-binding RED tests**
 
-Cover a trusted injected Codex verifier and an official Claude `SessionStart` hook registration. Add attacks for an ordinary shell fabricating `CODEX_THREAD_ID` or `CLAUDE_CODE_SESSION_ID`; missing capability token; empty, overlong or malformed IDs; wrong host/variable pair; changed-after-capture session; manually supplied ID rejection; and `claude_subscription` provider rejection. Assert no display/resident/model name or transcript path enters the binding.
+Cover trusted injected Codex and Claude verifiers. Add attacks for an ordinary shell fabricating `CODEX_THREAD_ID`, `CLAUDE_CODE_SESSION_ID`, `SessionStart` JSON and `CLAUDE_ENV_FILE`; direct construction of trusted-looking DTO data; empty, overlong or malformed IDs; wrong host/identifier-kind pair; manually supplied ID rejection; and `claude_subscription` provider rejection. Every attack must leave authority, activation, state, key and provider evidence unchanged. Assert no display/resident/model name or transcript path enters the verified binding.
 
 - [ ] **Step 2: Run host tests and observe RED**
 
 Run: `$env:PYTHONPATH='src'; python -m unittest tests.test_host_adapter -v`
 
-Expected: import failure for `macr_runtime.host_adapter` and `host_binding_store`.
+Expected: import failure for `macr_runtime.host_adapter`.
 
 - [ ] **Step 3: Implement binding and preparation contracts**
 
@@ -440,34 +436,27 @@ class HostKind(str, Enum):
     CLAUDE_CODE = "claude_code"
 
 @dataclass(frozen=True)
-class HostSessionBinding:
+class VerifiedHostBinding:
     host_kind: HostKind
     identifier_kind: str
     native_id: str
-    binding_source: str = "task_local_host_observed"
+    binding_source: str
+    verifier_digest: str
 ```
 
-The binding digest contains only the four fields above. The Claude registrar accepts only `hook_event_name=SessionStart`, validates the official JSON `session_id`, creates a random 256-bit capability, stores only its SHA-256 with expiry, and appends the token to `CLAUDE_ENV_FILE` without printing it. Verification requires both the token and exact session equality. Preflight resolves provider, token and capability policy, validates task/approval/connectivity requirements, and returns bounded metadata without issuing authority or opening a key.
+`VerifiedHostBinding` has no trusted default and is not accepted directly from an invocation request. `MacrHostAdapter` calls its injected verifier and binds the returned verifier digest. Preflight resolves provider, token and capability policy, validates task/approval/connectivity requirements, and returns bounded metadata without issuing authority or opening a key. Concrete host-owned enrollment remains outside this slice and `NotMeasured`.
 
 - [ ] **Step 4: Write equal-rights and invoke RED tests**
 
-With identical task/provider inputs and fake transport, Codex and Claude preparations must match in provider, model-token digest, capability binding, task digest, budget and approval, differing only in origin/binding/request digests. Invoke must record exact host origin and binding through dispatch, accounting and terminal event. Missing connectivity opt-in and stale/mismatched authority fail before key/state write.
+With identical task/provider inputs and synthetic host-owned verifiers, Codex and Claude preparations must match in provider, model-token digest, capability binding, task digest, budget and approval, differing only in origin/binding/request digests. Invoke must record exact host origin and binding through dispatch, accounting and terminal event. Invocation without a pre-issued authority/connectivity grant, or with a stale/mismatched grant, fails before state/key/provider access. Assert the adapter never calls `DispatchAuthorityStore.issue()`.
 
-- [ ] **Step 5: Implement shared adapter and environment-only CLI commands**
+- [ ] **Step 5: Implement the shared adapter without a self-authorizing CLI**
 
-Add:
-
-```text
-macr claude-register-session
-macr host-preflight <provider> <task> --host-kind claude_code [--allow-network|--allow-local]
-macr host-invoke    <provider> <task> --host-kind claude_code [--allow-network|--allow-local]
-```
-
-`claude-register-session` reads hook JSON from stdin and the environment-file path from `CLAUDE_ENV_FILE`; neither token nor session ID is printed. No `--native-id` or `--binding-token` option exists. `host-invoke` issues only the existing short-lived, exact provider/task/member/tier authority after verified binding and explicit connectivity opt-in. A generic Codex shell continues to use ordinary CLI origin until the Codex host-owned verifier is embedded. The adapter never reads Direct Chat history.
+Expose only the in-process adapter API. It consumes `HostInvocationGrant`; it has no `issue`, activation or caller-supplied native-ID path. A generic Claude or Codex shell continues to use the existing ordinary MACR CLI under `cli`/`operator_asserted` origin. The adapter never reads Direct Chat history.
 
 - [ ] **Step 6: Add operator-facing integration instructions**
 
-Document the exact Claude Code `SessionStart` hook entry and PowerShell commands Claude can run from its own shell subprocess. State that hook JSON `session_id` is the authoritative capture, `CLAUDE_CODE_SESSION_ID` is only an equality check, Bridge liveness is not required for shell invocation, Codex embedding remains synthetic/not measured, and live provider acceptance remains unmeasured until the operator intentionally invokes it.
+Document the exact existing PowerShell commands Claude Code can run from its shell subprocess to use MACR today, with honest CLI attribution. State that `SessionStart` JSON and environment variables alone are forgeable discovery evidence, Bridge liveness is not required for ordinary CLI invocation, both host-owned embeddings remain synthetic/not measured, and live provider acceptance remains unmeasured until the operator intentionally invokes it.
 
 - [ ] **Step 7: Run host/CLI tests and commit**
 
@@ -475,13 +464,13 @@ Run:
 
 ```powershell
 $env:PYTHONPATH='src'
-python -m unittest tests.test_host_adapter tests.test_host_binding_store tests.test_cli tests.test_runtime_v05 -v
+python -m unittest tests.test_host_adapter tests.test_cli tests.test_runtime_v05 -v
 ```
 
 Expected: all tests pass with fake transports and isolated D-drive state.
 
 ```powershell
-git add src/macr_runtime/host_adapter.py src/macr_runtime/host_binding_store.py src/macr_runtime/cli.py src/macr_runtime/__init__.py src/macr_runtime/storage.py scripts/register-claude-session.ps1 tests/test_host_adapter.py tests/test_host_binding_store.py tests/test_cli.py integrations/claude-code/README.md integrations/codex/README.md
+git add src/macr_runtime/host_adapter.py src/macr_runtime/__init__.py tests/test_host_adapter.py integrations/claude-code/README.md integrations/codex/README.md
 git commit -m "feat: add shared Codex Claude provider adapter"
 ```
 
@@ -500,16 +489,16 @@ git commit -m "feat: add shared Codex Claude provider adapter"
 
 **Interfaces:**
 - `macr capability-status [--provider <id>]` is read-only and content-free.
-- `macr capability-activate <provider> <model> <tier> <revision> <binding-digest>` writes only the capability policy store after exact digest validation.
 - `macr accounting-status` prints the fixed-query `AccountingStatusSnapshot` without origin native IDs, tasks, prompts, answers, keys or remote bodies.
+- No CLI command can issue an activation witness and activate a tier in the same path.
 
 - [ ] **Step 1: Write CLI RED tests**
 
-Assert status commands perform no network/key access; activation requires exact provider/model/tier/revision/digest and cannot accept task input; accounting output contains only the documented aggregate fields. Invalid or legacy state returns typed, content-free failures.
+Assert status commands perform no network/key access; fabricated shell activation arguments are unrecognized and leave the capability database absent or byte-identical; accounting output contains only the documented aggregate fields. Invalid or legacy state returns typed, content-free failures.
 
 - [ ] **Step 2: Implement operator commands**
 
-Activation saves no new policy supplied by the CLI: only an already-defined built-in/store revision can become active. `capability-status` displays current binding ID/digest and limits. `accounting-status` serializes the snapshot directly.
+`capability-status` displays current binding ID/digest and limits. `accounting-status` serializes the snapshot directly. Tier activation remains an internal operation that consumes a separately pre-issued operator witness; this slice exposes no self-authorizing shell mutation.
 
 - [ ] **Step 3: Update gate summary and human documentation**
 

@@ -169,6 +169,12 @@ fail before key resolution or transport. The exact binding digest is recorded
 in the host request, `AuthorityScope`, approval manifest, dispatch policy/event,
 accounting observation and T1 member evidence.
 
+Tier activation consumes a pre-existing operator authorization witness whose
+scope names the exact binding digest. The capability store cannot issue that
+witness, and this slice exposes no shell command that both creates authorization
+and activates a tier. A failed or missing witness leaves the active pointer and
+all other state unchanged.
+
 Existing schema-2 approvals remain immutable historical records but are
 explicitly incompatible with new GLM dispatch. Pending old approval/T1 state is
 enumerated before any future shared-state activation; it is not rewritten.
@@ -274,36 +280,36 @@ provider route.
 
 ### Authority
 
-An explicit host invocation may issue the same short-lived, single-provider
-dispatch authority currently issued by the CLI only after a trusted binding is
-verified. Authority source records the host kind and exact task/run occurrence;
-its scope binds the exact `ProviderTierBinding.binding_digest`. Host kind alone never
-grants a provider, tier, task type, member digest, or plane outside that scope.
+A host-adapter invocation consumes a pre-issued operator dispatch authority and
+a pre-issued connectivity grant; it never calls `issue()` from host metadata,
+model-controlled flags or task content. Authority source records the host kind
+and exact task/run occurrence; its scope binds the exact
+`ProviderTierBinding.binding_digest`. Host kind alone never grants a provider,
+tier, task type, member digest, connection scope or plane outside those grants.
 
 ### Integration surface
 
-This slice delivers a reusable in-process host adapter and verifier protocols,
-tested with synthetic Codex and Claude bindings. It does not add a CLI that
-accepts arbitrary native identifiers as trusted identity.
+This slice delivers a reusable in-process host adapter and separate verifier
+protocols, tested with synthetic Codex and Claude bindings. It does not add a
+CLI that accepts arbitrary native identifiers or caller-constructed trusted
+metadata.
 
-The concrete Claude Code integration consumes the official `SessionStart` hook
-JSON `session_id`, creates a bounded short-lived binding capability whose secret
-is never printed or stored in plaintext, and persists the token only through the
-hook-owned session environment file. Later Claude shell invocations must present
-that capability and, when present, a matching `CLAUDE_CODE_SESSION_ID`. A plain
-shell that merely fabricates the environment variable cannot produce
-`task_local_host_observed` attribution or mint host-bound authority.
+Claude Code's official `SessionStart` hook JSON and the locally observed
+`CLAUDE_CODE_SESSION_ID` are useful discovery evidence, but a model-controlled
+shell can fabricate both hook JSON and its environment. They therefore remain
+`operator_asserted`, not `task_local_host_observed`, until a pre-existing
+host-owned enrollment/verifier unavailable to generic shells exists. Likewise,
+the locally observed `CODEX_THREAD_ID` and `CODEX_SESSION_ID` are distinct and
+never treated as aliases; only an injected Codex host-owned verifier may bind
+`codex_thread_id` from `CODEX_THREAD_ID`.
 
-Codex keeps a separate injected host-owned verifier contract. The locally
-observed `CODEX_THREAD_ID` and `CODEX_SESSION_ID` are distinct and never treated
-as aliases; only a host-owned verifier may bind `codex_thread_id` from
-`CODEX_THREAD_ID`. Until that embedding exists, a generic Codex shell call is
-`operator_asserted`/CLI origin rather than host-observed.
-
-After binding verification, preflight performs no state write, key read or
-provider call, while invoke preserves the existing explicit connectivity
-opt-in. Native IDs remain bounded origin metadata and are never echoed in public
-accounting summaries.
+The immediately usable Claude path is the existing MACR CLI under honest
+`cli`/`operator_asserted` origin. It already reaches the same provider registry,
+budgets, approvals, vault and accounting as Codex. The new host adapter accepts
+only a freshly verified binding handle plus pre-issued authority/connectivity
+grants. Preflight performs no state write, key read or provider call. Native IDs
+remain bounded origin metadata and are never echoed in public accounting
+summaries. Live host-observed Codex and Claude bindings remain `NotMeasured`.
 
 Because the verified Bridge is currently `live=false` with
 `herdr_not_running`, live Claude availability and an end-to-end Claude-origin
@@ -333,11 +339,12 @@ Required positives and negatives include:
 - unsupported host, wrong identifier kind, `claude_subscription` target,
   unverified/manual-as-trusted binding, missing connectivity opt-in, stale
   authority, and tier-policy mismatch fail before provider/key/state write;
-- a plain shell can fabricate each matching host environment variable but still
-  cannot obtain `task_local_host_observed` attribution or host-bound authority;
-- Claude hook `session_id` plus its unprinted capability verifies, while missing,
-  empty, cross-host, conflicting or changed-after-capture values fail before
-  authority/state/key/provider access;
+- a plain shell can fabricate matching environment variables, `SessionStart`
+  JSON and an attacker-controlled environment file but still cannot obtain
+  `task_local_host_observed`, mint host-bound authority or activate a tier;
+- direct trusted-DTO construction, host invocation without pre-issued authority
+  and shell-triggered tier activation fail before authority/state/key/provider
+  access;
 - host invoke records exact host origin, tier and failure type through runtime,
   accounting and terminal event;
 - a typed top-level invocation outcome exposes stable failure code/stage without
@@ -355,6 +362,7 @@ It does not authorize:
 - a real Claude-originated provider call;
 - a real GLM elevated/long-timeout call;
 - activation of any provider tier in shared runtime state;
+- a live `task_local_host_observed` Codex or Claude integration;
 - shared-state migration or re-signing all historical approvals;
 - filesystem/tool authority for GLM or other workers;
 - Phase D, Agent loop, merge, tag, push, release, or deployment.
