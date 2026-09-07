@@ -44,6 +44,7 @@ _LOCAL_PATH_MARKER = re.compile(
 _OPERATIONAL_PAYLOAD_KEYS = {
     "provider.dispatch_requested": frozenset(
         {
+            "dispatch_contract_version",
             "provider_id",
             "task_id",
             "task_type",
@@ -59,6 +60,7 @@ _OPERATIONAL_PAYLOAD_KEYS = {
             "authority_scope_sha256",
             "policy_snapshot_sha256",
             "model_token_policy_digest",
+            "provider_tier_binding_digest",
             "batch_id",
             "member_digest",
             "relay_is_authorship",
@@ -71,6 +73,7 @@ _OPERATIONAL_PAYLOAD_KEYS = {
     ),
     "provider.candidate_completed": frozenset(
         {
+            "terminal_contract_version",
             "provider_id",
             "task_id",
             "dispatch_event_id",
@@ -97,6 +100,7 @@ _OPERATIONAL_PAYLOAD_KEYS = {
             "return_contract_state",
             "return_contract_reason",
             "failure_type",
+            "failure_stage",
             "authority_digest",
             "authority_revision",
             "authority_epoch",
@@ -104,6 +108,7 @@ _OPERATIONAL_PAYLOAD_KEYS = {
             "plan_revision",
             "role_slot_id",
             "route_id",
+            "provider_tier_binding_digest",
         }
     ),
 }
@@ -125,6 +130,7 @@ _OPERATIONAL_REQUIRED_KEYS = {
 }
 _OPERATIONAL_FIELD_KINDS = {
     "provider.dispatch_requested": {
+        "dispatch_contract_version": "integer",
         "provider_id": "text",
         "task_id": "text",
         "task_type": "text",
@@ -140,6 +146,7 @@ _OPERATIONAL_FIELD_KINDS = {
         "authority_scope_sha256": "text",
         "policy_snapshot_sha256": "text",
         "model_token_policy_digest": "optional_text",
+        "provider_tier_binding_digest": "optional_text",
         "batch_id": "optional_text",
         "member_digest": "optional_text",
         "relay_is_authorship": "boolean",
@@ -150,6 +157,7 @@ _OPERATIONAL_FIELD_KINDS = {
         "route_id": "optional_text",
     },
     "provider.candidate_completed": {
+        "terminal_contract_version": "integer",
         "provider_id": "text",
         "task_id": "text",
         "dispatch_event_id": "text",
@@ -176,6 +184,7 @@ _OPERATIONAL_FIELD_KINDS = {
         "return_contract_state": "text",
         "return_contract_reason": "optional_text",
         "failure_type": "optional_text",
+        "failure_stage": "optional_text",
         "authority_digest": "text",
         "authority_revision": "integer",
         "authority_epoch": "integer",
@@ -183,6 +192,7 @@ _OPERATIONAL_FIELD_KINDS = {
         "plan_revision": "optional_integer",
         "role_slot_id": "optional_text",
         "route_id": "optional_text",
+        "provider_tier_binding_digest": "optional_text",
     },
 }
 _CANDIDATE_CAPTURE_FIELD_KINDS = {

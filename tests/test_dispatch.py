@@ -28,17 +28,50 @@ class Clock:
         return self.value
 
 
-def context_for(reference, *, run_id: str = RUN_ONE) -> DispatchContext:
+def context_for(
+    reference,
+    *,
+    run_id: str = RUN_ONE,
+    provider_tier_binding_digest: str | None = None,
+) -> DispatchContext:
     return DispatchContext(
         run_id=run_id,
         plane=InteractionPlane.DELEGATION,
         origin=DispatchOrigin("test", "process_id", "1234"),
         authorization=reference,
         policy_snapshot_sha256="d" * 64,
+        provider_tier_binding_digest=provider_tier_binding_digest,
     )
 
 
 class DispatcherLeaseStoreTests(unittest.TestCase):
+    def test_admission_passes_exact_tier_binding_to_authority(self) -> None:
+        now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        binding = "a" * 64
+        with d_drive_tempdir() as temp:
+            database = temp / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(database, now=Clock(now))
+            leases = DispatcherLeaseStore(database, now=Clock(now))
+            reference = authorities.issue(
+                source_kind="test",
+                source_id="tier-authority",
+                scope=AuthorityScope(
+                    providers=("glm_flash_worker",),
+                    planes=("delegation",),
+                    provider_tier_binding_digests=(binding,),
+                ),
+                expires_at=(now + timedelta(days=1)).isoformat(),
+            )
+
+            with self.assertRaisesRegex(DispatchAuthorizationError, "scope"):
+                AdmissionGate(authorities, leases).admit(
+                    context_for(reference, provider_tier_binding_digest="b" * 64),
+                    resource_key="provider:glm_flash_worker",
+                    provider_id="glm_flash_worker",
+                    task_type="delegated_routine",
+                )
+            self.assertIsNone(leases.read("provider:glm_flash_worker"))
+
     def test_two_runs_cannot_hold_one_slot(self) -> None:
         now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
         with d_drive_tempdir() as temp:

@@ -62,6 +62,38 @@ class BudgetAccountingDecision:
     warning: str | None
 
 
+@dataclass(frozen=True)
+class AccountingStatusSnapshot:
+    known_cost_usd: float
+    unknown_after_dispatch_count: int
+    unsettled_count: int
+    legacy_pre_tier_count: int
+    pending_invocation_outbox_count: int
+    pending_plan_cost_outbox_count: int
+    pending_bill_observation_outbox_count: int
+    by_provider_billing_state: tuple[dict[str, Any], ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "known_cost_usd": self.known_cost_usd,
+            "unknown_after_dispatch_count": self.unknown_after_dispatch_count,
+            "unsettled_count": self.unsettled_count,
+            "legacy_pre_tier_count": self.legacy_pre_tier_count,
+            "pending_invocation_outbox_count": (
+                self.pending_invocation_outbox_count
+            ),
+            "pending_plan_cost_outbox_count": (
+                self.pending_plan_cost_outbox_count
+            ),
+            "pending_bill_observation_outbox_count": (
+                self.pending_bill_observation_outbox_count
+            ),
+            "by_provider_billing_state": [
+                dict(item) for item in self.by_provider_billing_state
+            ],
+        }
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -153,7 +185,7 @@ def _canonical_json(value: dict[str, Any]) -> str:
 
 
 class AccountingStore:
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(
         self,
@@ -223,7 +255,10 @@ class AccountingStore:
                     billing_state TEXT NOT NULL,
                     candidate_status TEXT,
                     soft_warning INTEGER NOT NULL DEFAULT 0,
-                    policy_snapshot_sha256 TEXT NOT NULL
+                    policy_snapshot_sha256 TEXT NOT NULL,
+                    provider_tier_binding_digest TEXT,
+                    failure_code TEXT,
+                    failure_stage TEXT
                 )""",
                 """CREATE TABLE IF NOT EXISTS provider_accounts (
                     account_id TEXT PRIMARY KEY,
@@ -336,7 +371,31 @@ class AccountingStore:
                     """,
                     (self.SCHEMA_VERSION,),
                 )
+                row = {"version": self.SCHEMA_VERSION}
             elif row["version"] == 1:
+                connection.execute(
+                    """UPDATE accounting_schema_meta SET version = ?
+                    WHERE component = 'accounting'""",
+                    (2,),
+                )
+                row = {"version": 2}
+            if row["version"] == 2:
+                columns = {
+                    item["name"]
+                    for item in connection.execute(
+                        "PRAGMA table_info(invocations)"
+                    ).fetchall()
+                }
+                additions = (
+                    ("provider_tier_binding_digest", "TEXT"),
+                    ("failure_code", "TEXT"),
+                    ("failure_stage", "TEXT"),
+                )
+                for name, declaration in additions:
+                    if name not in columns:
+                        connection.execute(
+                            f"ALTER TABLE invocations ADD COLUMN {name} {declaration}"
+                        )
                 connection.execute(
                     """UPDATE accounting_schema_meta SET version = ?
                     WHERE component = 'accounting'""",
@@ -725,6 +784,7 @@ class AccountingStore:
             estimate,
             int(soft_warning),
             context.policy_snapshot_sha256,
+            context.provider_tier_binding_digest,
         )
         connection = self._connect()
         try:
@@ -744,6 +804,7 @@ class AccountingStore:
                     existing["estimate_usd"],
                     existing["soft_warning"],
                     existing["policy_snapshot_sha256"],
+                    existing["provider_tier_binding_digest"],
                 )
                 if actual != values:
                     raise AccountingConflict(
@@ -757,10 +818,19 @@ class AccountingStore:
                     run_id, origin_host, origin_identifier_kind,
                     origin_native_id, interaction_plane, provider_id,
                     model, dispatched_at, estimate_usd, billing_state,
-                    soft_warning, policy_snapshot_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'dispatched', ?, ?)
+                    soft_warning, policy_snapshot_sha256,
+                    provider_tier_binding_digest
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'dispatched', ?, ?, ?)
                 """,
-                (run, *values[:6], dispatched_at, values[6], values[7], values[8]),
+                (
+                    run,
+                    *values[:6],
+                    dispatched_at,
+                    values[6],
+                    values[7],
+                    values[8],
+                    values[9],
+                ),
             )
             connection.commit()
             return True
@@ -854,12 +924,26 @@ class AccountingStore:
         *,
         candidate_status: str,
         billing_state: str,
+        failure_code: str | None = None,
+        failure_stage: str | None = None,
     ) -> None:
         run = _uuid4("run_id", run_id)
         if candidate_status not in _CANDIDATE_STATES:
             raise ValueError("candidate_status is invalid")
         if billing_state not in _BILLING_STATES - {"dispatched"}:
             raise ValueError("billing_state is invalid for terminal state")
+        if (failure_code is None) != (failure_stage is None):
+            raise ValueError("failure_code and failure_stage must be set together")
+        normalized_failure_code = (
+            _safe_id("failure_code", failure_code)
+            if failure_code is not None
+            else None
+        )
+        normalized_failure_stage = (
+            _safe_id("failure_stage", failure_stage)
+            if failure_stage is not None
+            else None
+        )
         terminal_at = self._current_time()
         connection = self._connect()
         try:
@@ -874,6 +958,8 @@ class AccountingStore:
                 if (
                     row["candidate_status"] == candidate_status
                     and row["billing_state"] == billing_state
+                    and row["failure_code"] == normalized_failure_code
+                    and row["failure_stage"] == normalized_failure_stage
                 ):
                     connection.commit()
                     return
@@ -887,10 +973,18 @@ class AccountingStore:
             connection.execute(
                 """
                 UPDATE invocations
-                SET terminal_at = ?, candidate_status = ?, billing_state = ?
+                SET terminal_at = ?, candidate_status = ?, billing_state = ?,
+                    failure_code = ?, failure_stage = ?
                 WHERE run_id = ?
                 """,
-                (terminal_at, candidate_status, billing_state, run),
+                (
+                    terminal_at,
+                    candidate_status,
+                    billing_state,
+                    normalized_failure_code,
+                    normalized_failure_stage,
+                    run,
+                ),
             )
             updated = connection.execute(
                 "SELECT * FROM invocations WHERE run_id = ?",
@@ -906,7 +1000,7 @@ class AccountingStore:
                 INSERT INTO accounting_outbox(
                     outbox_id, run_id, schema_version, payload_json,
                     payload_sha256, state, created_at, synced_at
-                ) VALUES (?, ?, 1, ?, ?, 'pending', ?, NULL)
+                ) VALUES (?, ?, 2, ?, ?, 'pending', ?, NULL)
                 """,
                 (
                     str(uuid.uuid4()),
@@ -996,6 +1090,61 @@ class AccountingStore:
         finally:
             connection.close()
         return int(row["count"])
+
+    def status_snapshot(self) -> AccountingStatusSnapshot:
+        connection = self._connect()
+        try:
+            provider_rows = connection.execute(
+                """SELECT provider_id, billing_state, COUNT(*) AS run_count,
+                          COALESCE(SUM(currency_cost_usd), 0.0) AS known_cost_usd
+                FROM invocations
+                GROUP BY provider_id, billing_state
+                ORDER BY provider_id, billing_state"""
+            ).fetchall()
+            totals = connection.execute(
+                """SELECT
+                    COALESCE(SUM(currency_cost_usd), 0.0) AS known_cost_usd,
+                    COALESCE(SUM(CASE WHEN billing_state = 'unknown_after_dispatch'
+                                      THEN 1 ELSE 0 END), 0)
+                        AS unknown_after_dispatch_count,
+                    COALESCE(SUM(CASE WHEN terminal_at IS NULL THEN 1 ELSE 0 END), 0)
+                        AS unsettled_count,
+                    COALESCE(SUM(CASE WHEN provider_tier_binding_digest IS NULL
+                                      THEN 1 ELSE 0 END), 0)
+                        AS legacy_pre_tier_count
+                FROM invocations"""
+            ).fetchone()
+            outboxes = connection.execute(
+                """SELECT
+                    (SELECT COUNT(*) FROM accounting_outbox
+                     WHERE state = 'pending') AS invocation_count,
+                    (SELECT COUNT(*) FROM plan_cost_outbox
+                     WHERE state = 'pending') AS plan_cost_count,
+                    (SELECT COUNT(*) FROM bill_observation_outbox
+                     WHERE state = 'pending') AS bill_count"""
+            ).fetchone()
+        finally:
+            connection.close()
+        return AccountingStatusSnapshot(
+            known_cost_usd=float(totals["known_cost_usd"]),
+            unknown_after_dispatch_count=int(
+                totals["unknown_after_dispatch_count"]
+            ),
+            unsettled_count=int(totals["unsettled_count"]),
+            legacy_pre_tier_count=int(totals["legacy_pre_tier_count"]),
+            pending_invocation_outbox_count=int(outboxes["invocation_count"]),
+            pending_plan_cost_outbox_count=int(outboxes["plan_cost_count"]),
+            pending_bill_observation_outbox_count=int(outboxes["bill_count"]),
+            by_provider_billing_state=tuple(
+                {
+                    "provider_id": row["provider_id"],
+                    "billing_state": row["billing_state"],
+                    "run_count": int(row["run_count"]),
+                    "known_cost_usd": float(row["known_cost_usd"]),
+                }
+                for row in provider_rows
+            ),
+        )
 
     def upsert_provider_account(
         self,
@@ -1271,5 +1420,8 @@ class AccountingStore:
             "candidate_status",
             "soft_warning",
             "policy_snapshot_sha256",
+            "provider_tier_binding_digest",
+            "failure_code",
+            "failure_stage",
         )
         return {key: row[key] for key in keys}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import sqlite3
+import uuid
 from dataclasses import replace
 
 from macr_runtime.accounting import AccountingStore, CostClass
@@ -35,6 +36,7 @@ CONTEXT = DispatchContext(
     ),
     policy_snapshot_sha256="b" * 64,
 )
+TIER_CONTEXT = replace(CONTEXT, provider_tier_binding_digest="c" * 64)
 NON_STOP_OBSERVATION = RawProviderObservation(
     provider_id="glm_flash_worker",
     model="glm-5.3-flash",
@@ -53,6 +55,142 @@ PRICING_BASIS = "d" * 64
 
 
 class AccountingStoreTests(unittest.TestCase):
+    def test_schema_two_upgrades_without_rewriting_historical_invocation(self) -> None:
+        with d_drive_tempdir() as temp:
+            database = temp / "accounting.sqlite3"
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "CREATE TABLE accounting_schema_meta(component TEXT PRIMARY KEY, version INTEGER NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO accounting_schema_meta VALUES ('accounting', 2)"
+            )
+            connection.execute(
+                """CREATE TABLE invocations (
+                    run_id TEXT PRIMARY KEY, origin_host TEXT NOT NULL,
+                    origin_identifier_kind TEXT NOT NULL,
+                    origin_native_id TEXT NOT NULL,
+                    interaction_plane TEXT NOT NULL, provider_id TEXT NOT NULL,
+                    model TEXT, returned_model TEXT, dispatched_at TEXT NOT NULL,
+                    terminal_at TEXT, input_tokens INTEGER, output_tokens INTEGER,
+                    reasoning_tokens INTEGER, cached_tokens INTEGER,
+                    duration_ms INTEGER, estimate_usd REAL,
+                    currency_cost_usd REAL, cost_kind TEXT,
+                    pricing_basis_version TEXT, finish_reason TEXT,
+                    billing_state TEXT NOT NULL, candidate_status TEXT,
+                    soft_warning INTEGER NOT NULL DEFAULT 0,
+                    policy_snapshot_sha256 TEXT NOT NULL
+                )"""
+            )
+            connection.execute(
+                """INSERT INTO invocations(
+                    run_id, origin_host, origin_identifier_kind, origin_native_id,
+                    interaction_plane, provider_id, dispatched_at, billing_state,
+                    policy_snapshot_sha256
+                ) VALUES (?, 'legacy', 'process_id', '1234', 'delegation',
+                          'glm_flash_worker', '2026-08-27T00:00:00+00:00',
+                          'dispatched', ?)""",
+                (RUN_ID, "b" * 64),
+            )
+            connection.commit()
+            before = connection.execute(
+                "SELECT run_id, origin_host, provider_id, dispatched_at, billing_state FROM invocations"
+            ).fetchone()
+            connection.close()
+
+            store = AccountingStore(database)
+            after = store.read_invocation(RUN_ID)
+
+        self.assertEqual(AccountingStore.SCHEMA_VERSION, 3)
+        self.assertEqual(tuple(after[key] for key in ("run_id", "origin_host", "provider_id", "dispatched_at", "billing_state")), before)
+        self.assertIsNone(after["provider_tier_binding_digest"])
+        self.assertIsNone(after["failure_code"])
+        self.assertIsNone(after["failure_stage"])
+
+    def test_new_terminal_outbox_binds_tier_and_typed_failure(self) -> None:
+        with d_drive_tempdir() as temp:
+            store = AccountingStore(temp / "accounting.sqlite3")
+            store.record_dispatch(
+                RUN_ID,
+                TIER_CONTEXT,
+                provider_id="glm_flash_worker",
+                model="glm-5.3-flash",
+                estimate_usd=0.001,
+            )
+            store.record_terminal(
+                RUN_ID,
+                candidate_status="candidate_failure",
+                billing_state="unknown_after_dispatch",
+                failure_code="TimeoutError",
+                failure_stage="provider_execution",
+            )
+
+            row = store.read_invocation(RUN_ID)
+            outbox = store.pending_outbox()
+
+        self.assertEqual(row["provider_tier_binding_digest"], "c" * 64)
+        self.assertEqual(row["failure_code"], "TimeoutError")
+        self.assertEqual(row["failure_stage"], "provider_execution")
+        self.assertEqual(outbox[0]["schema_version"], 2)
+        self.assertEqual(outbox[0]["payload"]["provider_tier_binding_digest"], "c" * 64)
+        self.assertEqual(outbox[0]["payload"]["failure_code"], "TimeoutError")
+        self.assertEqual(outbox[0]["payload"]["failure_stage"], "provider_execution")
+
+    def test_status_snapshot_query_count_is_invariant_with_run_count(self) -> None:
+        class CountingStore(AccountingStore):
+            def __init__(self, *args, **kwargs):
+                self.statements: list[str] = []
+                super().__init__(*args, **kwargs)
+
+            def _connect(self):
+                connection = super()._connect()
+                connection.set_trace_callback(self.statements.append)
+                return connection
+
+        with d_drive_tempdir() as temp:
+            store = CountingStore(temp / "accounting.sqlite3")
+            store.statements.clear()
+            empty = store.status_snapshot()
+            empty_queries = sum(
+                statement.lstrip().upper().startswith(("SELECT", "WITH"))
+                for statement in store.statements
+            )
+
+            for index in range(100):
+                run_id = str(uuid.uuid4())
+                context = replace(TIER_CONTEXT, run_id=run_id)
+                store.record_dispatch(
+                    run_id,
+                    context,
+                    provider_id="glm_flash_worker",
+                    model="glm-5.3-flash",
+                    estimate_usd=None,
+                )
+                if index % 2 == 0:
+                    store.record_terminal(
+                        run_id,
+                        candidate_status="candidate_failure",
+                        billing_state="unknown_after_dispatch",
+                        failure_code="TimeoutError",
+                        failure_stage="provider_execution",
+                    )
+            store.statements.clear()
+            populated = store.status_snapshot()
+            populated_queries = sum(
+                statement.lstrip().upper().startswith(("SELECT", "WITH"))
+                for statement in store.statements
+            )
+
+        self.assertEqual(empty_queries, populated_queries)
+        self.assertLessEqual(populated_queries, 3)
+        self.assertEqual(empty.unsettled_count, 0)
+        self.assertEqual(populated.unsettled_count, 50)
+        self.assertEqual(populated.unknown_after_dispatch_count, 50)
+        self.assertEqual(populated.legacy_pre_tier_count, 0)
+        self.assertEqual(populated.pending_invocation_outbox_count, 50)
+        self.assertEqual(populated.pending_plan_cost_outbox_count, 0)
+        self.assertEqual(populated.pending_bill_observation_outbox_count, 0)
+
     def test_accounting_schema_one_upgrades_additively_without_invocation_rewrite(self) -> None:
         with d_drive_tempdir() as temp:
             database = temp / "accounting.sqlite3"
@@ -93,7 +231,7 @@ class AccountingStoreTests(unittest.TestCase):
             }
             connection.close()
 
-        self.assertEqual(version, 2)
+        self.assertEqual(version, 3)
         self.assertEqual(invocation["provider_id"], "glm_flash_worker")
         self.assertIn("plan_costs", tables)
         self.assertIn("bill_observations", tables)

@@ -19,6 +19,73 @@ class Clock:
 
 
 class DispatchAuthorityStoreTests(unittest.TestCase):
+    def test_tier_binding_digest_is_exact_authority_scope(self) -> None:
+        now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        binding = "a" * 64
+        with d_drive_tempdir() as temp:
+            store = DispatchAuthorityStore(temp / "dispatch.sqlite3", now=Clock(now))
+            reference = store.issue(
+                source_kind="operator_profile",
+                source_id="tier-bound-v1",
+                scope=AuthorityScope(
+                    providers=("glm_flash_worker",),
+                    planes=("delegation",),
+                    provider_tier_binding_digests=(binding,),
+                ),
+                expires_at=(now + timedelta(days=1)).isoformat(),
+            )
+
+            store.verify(
+                reference,
+                provider_id="glm_flash_worker",
+                plane="delegation",
+                task_type="delegated_routine",
+                provider_tier_binding_digest=binding,
+            )
+            for candidate in (None, "b" * 64):
+                with self.subTest(candidate=candidate):
+                    with self.assertRaisesRegex(DispatchAuthorizationError, "scope"):
+                        store.verify(
+                            reference,
+                            provider_id="glm_flash_worker",
+                            plane="delegation",
+                            task_type="delegated_routine",
+                            provider_tier_binding_digest=candidate,
+                        )
+
+    def test_legacy_scope_is_readable_but_cannot_authorize_tier_binding(self) -> None:
+        scope = AuthorityScope.from_dict(
+            {
+                "providers": ["glm_flash_worker"],
+                "planes": ["delegation"],
+                "task_types": [],
+                "batch_ids": [],
+                "member_digests": [],
+            }
+        )
+
+        self.assertEqual(scope.scope_contract_version, 1)
+        self.assertEqual(
+            scope.to_dict(),
+            {
+                "providers": ["glm_flash_worker"],
+                "planes": ["delegation"],
+                "task_types": [],
+                "batch_ids": [],
+                "member_digests": [],
+            },
+        )
+        self.assertFalse(
+            scope.permits(
+                provider_id="glm_flash_worker",
+                plane="delegation",
+                task_type="delegated_routine",
+                batch_id=None,
+                member_digest=None,
+                provider_tier_binding_digest="a" * 64,
+            )
+        )
+
     def test_current_exact_authority_verifies(self) -> None:
         now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
         with d_drive_tempdir() as temp:

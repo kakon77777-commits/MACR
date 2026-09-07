@@ -264,6 +264,9 @@ class AdmissionGate:
             "task_type": task_type,
             "batch_id": context.batch_id,
             "member_digest": context.member_digest,
+            "provider_tier_binding_digest": (
+                context.provider_tier_binding_digest
+            ),
         }
         self.authorities.verify(context.authorization, **verification)
         permit = self.leases.acquire(

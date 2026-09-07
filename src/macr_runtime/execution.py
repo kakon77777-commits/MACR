@@ -182,6 +182,7 @@ class DispatchContext:
     role_slot_id: str | None = None
     route_id: str | None = None
     model_token_policy_digest: str | None = None
+    provider_tier_binding_digest: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_id", _uuid4("run_id", self.run_id))
@@ -239,6 +240,15 @@ class DispatchContext:
                 _digest(
                     "model_token_policy_digest",
                     self.model_token_policy_digest,
+                ),
+            )
+        if self.provider_tier_binding_digest is not None:
+            object.__setattr__(
+                self,
+                "provider_tier_binding_digest",
+                _digest(
+                    "provider_tier_binding_digest",
+                    self.provider_tier_binding_digest,
                 ),
             )
 

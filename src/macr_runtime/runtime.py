@@ -118,6 +118,8 @@ def _admission_failure(
         task_id=task.task_id,
         status=ResultStatus.CANDIDATE_FAILURE,
         warnings=("Provider dispatch was refused before invocation.",),
+        failure_code=type(exc).__name__,
+        failure_stage="admission",
         provider_meta={
             "provider": provider_id,
             "failure_type": type(exc).__name__,
@@ -135,8 +137,11 @@ def _post_dispatch_failure(
         task_id=task.task_id,
         status=ResultStatus.CANDIDATE_FAILURE,
         warnings=(
-            "Provider execution failed after dispatch; exception details were omitted.",
+            f"Provider execution failed after dispatch ({type(exc).__name__}); "
+            "exception details were omitted.",
         ),
+        failure_code=type(exc).__name__,
+        failure_stage="provider_execution",
         provider_meta={
             "provider": provider_id,
             "failure_type": type(exc).__name__,
@@ -154,6 +159,8 @@ def _token_policy_failure(
         task_id=task.task_id,
         status=ResultStatus.CANDIDATE_FAILURE,
         warnings=("Provider model token policy refused the task.",),
+        failure_code=type(exc).__name__,
+        failure_stage="token_policy",
         provider_meta={
             "provider": provider_id,
             "failure_type": type(exc).__name__,
@@ -279,6 +286,8 @@ class MacrRuntime:
                 context.run_id,
                 candidate_status=execution.result.status.value,
                 billing_state=billing_state,
+                failure_code=execution.result.failure_code,
+                failure_stage=execution.result.failure_stage,
             )
             self.services.events.finish_run(
                 run_id=context.run_id,
@@ -343,6 +352,8 @@ class MacrRuntime:
                     **dict(result.provider_meta),
                     "failure_type": "ReturnContractError",
                 },
+                failure_code="ReturnContractError",
+                failure_stage="return_contract",
             )
         return (
             replace(
@@ -361,6 +372,7 @@ class MacrRuntime:
         fencing_token: int,
     ) -> dict[str, Any]:
         return {
+            "dispatch_contract_version": 2,
             "provider_id": provider_id,
             "task_id": task.task_id,
             "task_type": task.task_type,
@@ -378,6 +390,9 @@ class MacrRuntime:
             ).hexdigest(),
             "policy_snapshot_sha256": context.policy_snapshot_sha256,
             "model_token_policy_digest": context.model_token_policy_digest,
+            "provider_tier_binding_digest": (
+                context.provider_tier_binding_digest
+            ),
             "batch_id": context.batch_id,
             "member_digest": context.member_digest,
             "relay_is_authorship": context.relay_is_authorship,
@@ -410,6 +425,7 @@ class MacrRuntime:
             return value
 
         return {
+            "terminal_contract_version": 2,
             "provider_id": provider_id,
             "task_id": task.task_id,
             "dispatch_event_id": dispatch_event_id,
@@ -437,7 +453,11 @@ class MacrRuntime:
             ),
             "return_contract_state": execution.return_contract_state.value,
             "return_contract_reason": return_reason,
-            "failure_type": execution.result.provider_meta.get("failure_type"),
+            "failure_type": (
+                execution.result.failure_code
+                or execution.result.provider_meta.get("failure_type")
+            ),
+            "failure_stage": execution.result.failure_stage,
             "authority_digest": context.authorization.digest,
             "authority_revision": context.authorization.revision,
             "authority_epoch": context.authorization.epoch,
@@ -445,4 +465,7 @@ class MacrRuntime:
             "plan_revision": context.plan_revision,
             "role_slot_id": context.role_slot_id,
             "route_id": context.route_id,
+            "provider_tier_binding_digest": (
+                context.provider_tier_binding_digest
+            ),
         }

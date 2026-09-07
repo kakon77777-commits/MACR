@@ -136,7 +136,13 @@ def delegated_task(
     )
 
 
-def issue_context(services, provider_id: str, task: TaskContract) -> DispatchContext:
+def issue_context(
+    services,
+    provider_id: str,
+    task: TaskContract,
+    *,
+    provider_tier_binding_digest: str | None = None,
+) -> DispatchContext:
     reference = services.authorities.issue(
         source_kind="test",
         source_id=f"{provider_id}:{task.task_id}:{uuid.uuid4()}",
@@ -144,6 +150,11 @@ def issue_context(services, provider_id: str, task: TaskContract) -> DispatchCon
             providers=(provider_id,),
             planes=(InteractionPlane.DELEGATION.value,),
             task_types=(task.task_type,),
+            provider_tier_binding_digests=(
+                (provider_tier_binding_digest,)
+                if provider_tier_binding_digest is not None
+                else ()
+            ),
         ),
         expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
     )
@@ -153,10 +164,44 @@ def issue_context(services, provider_id: str, task: TaskContract) -> DispatchCon
         origin=DispatchOrigin("test", "process_id", "1234"),
         authorization=reference,
         policy_snapshot_sha256="a" * 64,
+        provider_tier_binding_digest=provider_tier_binding_digest,
     )
 
 
 class RuntimeV05Tests(unittest.TestCase):
+    def test_dispatch_event_binds_exact_provider_tier_digest(self) -> None:
+        provider = ObservedProvider("test_provider", answer="candidate")
+        task = delegated_task(task_id="tier-policy-evidence")
+        binding_digest = "f" * 64
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            context = issue_context(
+                services,
+                provider.provider_id,
+                task,
+                provider_tier_binding_digest=binding_digest,
+            )
+            result = MacrRuntime(ProviderRegistry((provider,)), services).invoke(
+                provider.provider_id,
+                task,
+                context,
+            )
+            events = services.events.read_events(run_id=context.run_id)
+            dispatch = events[0]
+            terminal = events[-1]
+
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_SUCCESS)
+        self.assertEqual(dispatch["payload"]["dispatch_contract_version"], 2)
+        self.assertEqual(
+            dispatch["payload"]["provider_tier_binding_digest"],
+            binding_digest,
+        )
+        self.assertEqual(
+            terminal["payload"]["provider_tier_binding_digest"],
+            binding_digest,
+        )
+        self.assertEqual(terminal["payload"]["terminal_contract_version"], 2)
+
     def test_model_token_policy_refuses_before_authority_or_provider(self) -> None:
         provider = ObservedProvider(
             "minimax",
@@ -199,6 +244,8 @@ class RuntimeV05Tests(unittest.TestCase):
             events = services.events.read_events(run_id=context.run_id)
 
         self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(result.failure_code, "ProviderPolicyError")
+        self.assertEqual(result.failure_stage, "token_policy")
         self.assertEqual(result.provider_meta["failure_type"], "ProviderPolicyError")
         self.assertEqual(result.provider_meta["failure_stage"], "token_policy")
         self.assertEqual(provider.calls, 0)
@@ -332,6 +379,8 @@ class RuntimeV05Tests(unittest.TestCase):
             events = services.events.read_events(run_id=context.run_id)
 
         self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(result.failure_code, "DispatchAuthorizationError")
+        self.assertEqual(result.failure_stage, "admission")
         self.assertEqual(result.provider_meta["failure_type"], "DispatchAuthorizationError")
         self.assertEqual(provider.calls, 0)
         self.assertEqual(events, ())
@@ -392,6 +441,9 @@ class RuntimeV05Tests(unittest.TestCase):
 
         self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
         self.assertEqual(provider.calls, 1)
+        self.assertEqual(result.failure_code, "RuntimeError")
+        self.assertEqual(result.failure_stage, "provider_execution")
+        self.assertIn("RuntimeError", result.warnings[0])
         self.assertEqual(accounting["billing_state"], "unknown_after_dispatch")
         self.assertEqual(accounting["candidate_status"], "candidate_failure")
         self.assertEqual(len(events), 2)
@@ -421,6 +473,8 @@ class RuntimeV05Tests(unittest.TestCase):
 
         self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
         self.assertEqual(result.answer, "")
+        self.assertEqual(result.failure_code, "ReturnContractError")
+        self.assertEqual(result.failure_stage, "return_contract")
         self.assertEqual(capture.sha256, hashlib.sha256(b"WRONG").hexdigest())
         self.assertEqual(terminal["payload"]["return_contract_state"], "invalid")
         self.assertEqual(terminal["payload"]["return_contract_reason"], "exact_text_mismatch")

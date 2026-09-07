@@ -67,6 +67,8 @@ class AuthorityScope:
     task_types: tuple[str, ...] = ()
     batch_ids: tuple[str, ...] = ()
     member_digests: tuple[str, ...] = ()
+    provider_tier_binding_digests: tuple[str, ...] = ()
+    scope_contract_version: int = 2
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -101,25 +103,80 @@ class AuthorityScope:
             "member_digests",
             tuple(item.lower() for item in digests),
         )
+        tier_digests = _string_tuple(
+            "authority provider_tier_binding_digests",
+            self.provider_tier_binding_digests,
+            required=False,
+        )
+        if any(not _SHA256.fullmatch(item.lower()) for item in tier_digests):
+            raise ValueError(
+                "authority provider_tier_binding_digests must be SHA-256 hex"
+            )
+        object.__setattr__(
+            self,
+            "provider_tier_binding_digests",
+            tuple(item.lower() for item in tier_digests),
+        )
+        if self.scope_contract_version not in {1, 2}:
+            raise ValueError("authority scope contract version is unsupported")
+        if self.scope_contract_version == 1 and tier_digests:
+            raise ValueError("legacy authority scope cannot bind provider tiers")
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "AuthorityScope":
+        version = data.get("scope_contract_version", 1)
+        if version == 1:
+            expected = {
+                "providers",
+                "planes",
+                "task_types",
+                "batch_ids",
+                "member_digests",
+            }
+        elif version == 2:
+            expected = {
+                "scope_contract_version",
+                "providers",
+                "planes",
+                "task_types",
+                "batch_ids",
+                "member_digests",
+                "provider_tier_binding_digests",
+            }
+        else:
+            raise ValueError("authority scope contract version is unsupported")
+        if set(data) != expected:
+            raise ValueError("authority scope fields must be exact")
         return cls(
             providers=data.get("providers", ()),
             planes=data.get("planes", ()),
             task_types=data.get("task_types", ()),
             batch_ids=data.get("batch_ids", ()),
             member_digests=data.get("member_digests", ()),
+            provider_tier_binding_digests=data.get(
+                "provider_tier_binding_digests",
+                (),
+            ),
+            scope_contract_version=version,
         )
 
-    def to_dict(self) -> dict[str, list[str]]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        document: dict[str, Any] = {
             "providers": list(self.providers),
             "planes": list(self.planes),
             "task_types": list(self.task_types),
             "batch_ids": list(self.batch_ids),
             "member_digests": list(self.member_digests),
         }
+        if self.scope_contract_version == 2:
+            document = {
+                "scope_contract_version": 2,
+                **document,
+                "provider_tier_binding_digests": list(
+                    self.provider_tier_binding_digests
+                ),
+            }
+        return document
 
     def canonical_json(self) -> str:
         return _canonical_json(self.to_dict())
@@ -132,7 +189,17 @@ class AuthorityScope:
         task_type: str,
         batch_id: str | None,
         member_digest: str | None,
+        provider_tier_binding_digest: str | None = None,
     ) -> bool:
+        tier_permitted = (
+            provider_tier_binding_digest is None
+            and not self.provider_tier_binding_digests
+        ) or (
+            self.scope_contract_version == 2
+            and isinstance(provider_tier_binding_digest, str)
+            and provider_tier_binding_digest.lower()
+            in self.provider_tier_binding_digests
+        )
         return (
             provider_id in self.providers
             and plane in self.planes
@@ -145,6 +212,7 @@ class AuthorityScope:
                     and member_digest.lower() in self.member_digests
                 )
             )
+            and tier_permitted
         )
 
 
@@ -331,6 +399,7 @@ class DispatchAuthorityStore:
         task_type: str,
         batch_id: str | None = None,
         member_digest: str | None = None,
+        provider_tier_binding_digest: str | None = None,
     ) -> AuthorizationReference:
         if not isinstance(reference, AuthorizationReference):
             raise DispatchAuthorizationError(
@@ -403,6 +472,7 @@ class DispatchAuthorityStore:
             task_type=_non_empty("task_type", task_type),
             batch_id=batch_id,
             member_digest=member_digest,
+            provider_tier_binding_digest=provider_tier_binding_digest,
         ):
             raise DispatchAuthorizationError(
                 "dispatch authorization scope does not permit request"

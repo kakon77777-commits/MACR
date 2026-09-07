@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 _TASK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_FAILURE_ID = re.compile(r"^[A-Za-z][A-Za-z0-9._-]{0,127}$")
 
 
 def _non_empty(name: str, value: str) -> str:
@@ -512,13 +513,23 @@ class ProviderResult:
     cost: Mapping[str, Any] = field(default_factory=dict)
     warnings: tuple[str, ...] = ()
     provider_meta: Mapping[str, Any] = field(default_factory=dict)
+    failure_code: str | None = None
+    failure_stage: str | None = None
 
     def __post_init__(self) -> None:
         if not _TASK_ID.fullmatch(self.task_id):
             raise ValueError("ProviderResult.task_id is invalid")
+        if (self.failure_code is None) != (self.failure_stage is None):
+            raise ValueError(
+                "ProviderResult failure_code and failure_stage must be set together"
+            )
+        for name in ("failure_code", "failure_stage"):
+            value = getattr(self, name)
+            if value is not None and not _FAILURE_ID.fullmatch(value):
+                raise ValueError(f"ProviderResult.{name} is invalid")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        document = {
             "task_id": self.task_id,
             "status": self.status.value,
             "answer": self.answer,
@@ -530,3 +541,7 @@ class ProviderResult:
             "warnings": list(self.warnings),
             "provider_meta": dict(self.provider_meta),
         }
+        if self.failure_code is not None:
+            document["failure_code"] = self.failure_code
+            document["failure_stage"] = self.failure_stage
+        return document
