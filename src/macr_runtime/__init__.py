@@ -53,6 +53,12 @@ _MODULE_EXPORTS = {
     ),
     "plan_runtime": ("PlanExecutionResult", "PlanRuntime", "VerificationReport"),
     "model_token_store": ("ModelTokenPolicyStore",),
+    "provider_capability_store": ("ProviderCapabilityPolicyStore",),
+    "provider_capability": (
+        "ProviderCapabilityPolicy", "ProviderCapabilityResolver",
+        "ProviderTierBinding", "builtin_provider_capability_policies",
+        "glm_extended_text_policy", "glm_standard_policy",
+    ),
     "token_policy": (
         "ModelTokenOverride", "ModelTokenPolicy", "ModelTokenPolicyResolver",
         "builtin_model_token_policies", "t1_glm_live_policy",
@@ -99,6 +105,8 @@ __all__ = [
     "DispatchContext", "DispatchOrigin", "InteractionPlane", "ImportReport",
     "MacrRuntime", "ModelSubject", "ModelTokenOverride", "ModelTokenPolicy",
     "ModelTokenPolicyResolver", "ModelTokenPolicyStore", "ModelBinding",
+    "ProviderCapabilityPolicy", "ProviderCapabilityPolicyStore",
+    "ProviderCapabilityResolver", "ProviderTierBinding",
     "ModelObservatory", "ModelPassport", "ModelPassportProjector",
     "OperatorPolicyProfile", "PlanExecutionMode", "PlanExecutionResult",
     "PlanRuntime", "PlanQueue", "PlanningCandidate", "PlanningError",
@@ -117,6 +125,8 @@ __all__ = [
     "VerificationReport", "VerificationSpec", "VerificationState",
     "WorkspaceSpec", "aware_iso8601", "canonical_json_bytes",
     "canonical_policy_snapshot", "builtin_model_token_policies",
+    "builtin_provider_capability_policies", "glm_extended_text_policy",
+    "glm_standard_policy",
     "load_t1_manifest", "sha256_id", "t1_glm_live_policy",
     "wilson_lower_bound",
 ]

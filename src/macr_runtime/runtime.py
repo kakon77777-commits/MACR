@@ -22,6 +22,7 @@ from .execution import (
     ReturnContractState,
 )
 from .model_token_store import ModelTokenPolicyStore
+from .provider_capability_store import ProviderCapabilityPolicyStore
 from .registry import ProviderRegistry
 from .return_contracts import validate_return_contract
 from .storage import StorageLayout
@@ -37,6 +38,7 @@ class RuntimeServices:
     accounting: AccountingStore
     vault: CandidateVault
     token_policies: ModelTokenPolicyStore
+    capability_policies: ProviderCapabilityPolicyStore | None = None
 
     @classmethod
     def from_layout(cls, layout: StorageLayout) -> "RuntimeServices":
@@ -53,6 +55,9 @@ class RuntimeServices:
             accounting=AccountingStore(layout.accounting_db_path),
             vault=CandidateVault(layout.candidate_root, layout.runtime_db_path),
             token_policies=ModelTokenPolicyStore(layout.model_token_policy_db_path),
+            capability_policies=ProviderCapabilityPolicyStore(
+                layout.provider_capability_policy_db_path
+            ),
         )
 
 

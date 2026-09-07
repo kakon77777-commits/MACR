@@ -48,6 +48,10 @@ class StorageLayoutTests(unittest.TestCase):
             state_root / "settings" / "model-token-policies.sqlite3",
         )
         self.assertEqual(
+            layout.provider_capability_policy_db_path,
+            state_root / "settings" / "provider-capability-policies.sqlite3",
+        )
+        self.assertEqual(
             layout.direct_instance_path,
             state_root / "direct" / "instance.json",
         )
