@@ -113,13 +113,20 @@ class V06ReleaseGateTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, msg=completed.stderr)
         document = json.loads(completed.stdout)
-        self.assertEqual(document["runtime_schema_version"], 6)
+        self.assertEqual(document["runtime_schema_version"], 7)
         self.assertEqual(document["observatory_schema_version"], 2)
-        self.assertEqual(document["accounting_schema_version"], 2)
+        self.assertEqual(document["accounting_schema_version"], 3)
         self.assertEqual(document["version"], "0.7.0a0")
         self.assertEqual(document["direct_conversation_schema_version"], 2)
         self.assertEqual(document["model_token_policy_schema_version"], 1)
         self.assertEqual(document["model_token_policy_count"], 7)
+        self.assertEqual(document["provider_capability_policy_schema_version"], 1)
+        self.assertEqual(document["provider_capability_policy_count"], 2)
+        self.assertEqual(document["t1_manifest_schema_version"], 2)
+        self.assertRegex(
+            document["provider_capability_policy_digest"],
+            r"^[0-9a-f]{64}$",
+        )
         self.assertEqual(document["t1_complete_path_processes"], 3)
         self.assertEqual(document["quiet_census_samples"], 5)
         self.assertFalse(document["network_activity"])

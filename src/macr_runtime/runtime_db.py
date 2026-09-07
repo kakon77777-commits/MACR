@@ -10,7 +10,7 @@ from .errors import EventStoreConflict, StoragePolicyError
 class RuntimeDatabase:
     """Connection policy and schema owner for MACR runtime coordination state."""
 
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
 
     def __init__(self, path: str | Path) -> None:
         candidate = Path(path)
@@ -371,6 +371,23 @@ class RuntimeDatabase:
                 connection.execute(
                     "UPDATE schema_meta SET version = ? WHERE component = ?",
                     (6, "runtime"),
+                )
+                version = 6
+            if version == 6:
+                columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(plan_queue_members)"
+                    ).fetchall()
+                }
+                if "provider_tier_binding_digest" not in columns:
+                    connection.execute(
+                        """ALTER TABLE plan_queue_members
+                        ADD COLUMN provider_tier_binding_digest TEXT"""
+                    )
+                connection.execute(
+                    "UPDATE schema_meta SET version = ? WHERE component = ?",
+                    (7, "runtime"),
                 )
             connection.commit()
         except Exception:

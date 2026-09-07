@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import sqlite3
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -17,7 +18,11 @@ from .batch_authority import (
     BatchMemberScope,
 )
 from .canonical import canonical_json_bytes, sha256_id
-from .errors import DispatchAuthorizationError, DispatchLeaseError
+from .errors import (
+    DispatchAuthorizationError,
+    DispatchLeaseError,
+    StoragePolicyError,
+)
 from .runtime_db import RuntimeDatabase
 from .target_leases import normalize_repository_relative_path
 
@@ -128,6 +133,7 @@ class QueueMember:
     privacy: str
     context_class: str
     cost_ceiling_usd: float
+    provider_tier_binding_digest: str | None = None
     target_claims: tuple[TargetClaim, ...] = ()
 
     def __post_init__(self) -> None:
@@ -159,6 +165,15 @@ class QueueMember:
         if len(keys) != len(set(keys)):
             raise ValueError("target_claims must not contain duplicate targets")
         object.__setattr__(self, "target_claims", claims)
+        if self.provider_tier_binding_digest is not None:
+            object.__setattr__(
+                self,
+                "provider_tier_binding_digest",
+                _digest(
+                    "provider_tier_binding_digest",
+                    self.provider_tier_binding_digest,
+                ),
+            )
 
     def authority_scope(self) -> BatchMemberScope:
         return BatchMemberScope(
@@ -174,6 +189,7 @@ class QueueMember:
     def to_dict(self) -> dict[str, object]:
         return {
             **self.authority_scope().to_dict(),
+            "provider_tier_binding_digest": self.provider_tier_binding_digest,
             "target_claims": [item.to_dict() for item in self.target_claims],
         }
 
@@ -226,6 +242,7 @@ class QueueClaim:
     privacy: str
     context_class: str
     cost_ceiling_usd: float
+    provider_tier_binding_digest: str | None
     dispatcher_id: str
     fencing_token: int
     lease_expires_at: str
@@ -246,6 +263,7 @@ class QueueMemberRecord:
     terminal_at: str | None
     terminal_evidence_digest: str | None
     observed_cost_usd: float | None
+    provider_tier_binding_digest: str | None
 
 
 class PlanQueue:
@@ -392,10 +410,11 @@ class PlanQueue:
                         member_id, plan_digest, ordinal, member_digest,
                         provider_id, route_id, role_digest, privacy,
                         context_class, cost_ceiling_usd, state,
+                        provider_tier_binding_digest,
                         lease_holder, fencing_token, lease_expires_at,
                         attempts, terminal_at, terminal_evidence_digest,
                         observed_cost_usd
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued',
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?,
                               NULL, NULL, NULL, 0, NULL, NULL, NULL)
                     """,
                     (
@@ -409,6 +428,7 @@ class PlanQueue:
                         member.privacy,
                         member.context_class,
                         member.cost_ceiling_usd,
+                        member.provider_tier_binding_digest,
                     ),
                 )
                 for claim in member.target_claims:
@@ -586,6 +606,9 @@ class PlanQueue:
                 privacy=selected["privacy"],
                 context_class=selected["context_class"],
                 cost_ceiling_usd=selected["cost_ceiling_usd"],
+                provider_tier_binding_digest=selected[
+                    "provider_tier_binding_digest"
+                ],
                 dispatcher_id=dispatcher,
                 fencing_token=token,
                 lease_expires_at=expires_at,
@@ -675,6 +698,9 @@ class PlanQueue:
             privacy=row["privacy"],
             context_class=row["context_class"],
             cost_ceiling_usd=row["cost_ceiling_usd"],
+            provider_tier_binding_digest=row[
+                "provider_tier_binding_digest"
+            ],
             dispatcher_id=dispatcher,
             fencing_token=fencing_token,
             lease_expires_at=expires_at,
@@ -964,6 +990,9 @@ class PlanQueue:
             terminal_at=row["terminal_at"],
             terminal_evidence_digest=row["terminal_evidence_digest"],
             observed_cost_usd=row["observed_cost_usd"],
+            provider_tier_binding_digest=row[
+                "provider_tier_binding_digest"
+            ],
         )
 
     def read_member(self, member_id: str) -> QueueMemberRecord:
@@ -1090,10 +1119,91 @@ class PlanQueue:
             for state in QueueMemberState
         }
 
+    def tier_status(self) -> dict[str, int]:
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """SELECT
+                    COUNT(*) AS total_count,
+                    COALESCE(SUM(CASE
+                        WHEN provider_tier_binding_digest IS NULL THEN 1 ELSE 0
+                    END), 0) AS legacy_pre_tier_count,
+                    COALESCE(SUM(CASE
+                        WHEN provider_tier_binding_digest IS NOT NULL THEN 1 ELSE 0
+                    END), 0) AS current_tier_bound_count
+                FROM plan_queue_members"""
+            ).fetchone()
+        finally:
+            connection.close()
+        return {
+            "current_tier_bound_count": int(row["current_tier_bound_count"]),
+            "legacy_pre_tier_count": int(row["legacy_pre_tier_count"]),
+            "total_count": int(row["total_count"]),
+        }
+
 
 QueueMemberSpec = QueueMember
 QueueTargetClaim = TargetClaim
 QueuePlan = T1QueuePlan
+
+
+def read_queue_tier_status(path: str | Path) -> dict[str, int]:
+    candidate = Path(path)
+    if not candidate.is_absolute() or candidate.drive.upper() != "D:":
+        raise StoragePolicyError("runtime database path must be absolute on D:")
+    empty = {
+        "current_tier_bound_count": 0,
+        "legacy_pre_tier_count": 0,
+        "total_count": 0,
+    }
+    if not candidate.exists():
+        return empty
+    uri = candidate.absolute().as_uri() + "?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        version = connection.execute(
+            "SELECT version FROM schema_meta WHERE component = 'runtime'"
+        ).fetchone()
+        if version is None or not 5 <= version["version"] <= 7:
+            raise DispatchLeaseError("runtime queue schema is unsupported")
+        columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(plan_queue_members)"
+            ).fetchall()
+        }
+        if not columns:
+            return empty
+        tier_expression = (
+            "provider_tier_binding_digest IS NOT NULL"
+            if "provider_tier_binding_digest" in columns
+            else "0"
+        )
+        legacy_expression = (
+            "provider_tier_binding_digest IS NULL"
+            if "provider_tier_binding_digest" in columns
+            else "1"
+        )
+        row = connection.execute(
+            f"""SELECT COUNT(*) AS total_count,
+                COALESCE(SUM(CASE WHEN {legacy_expression}
+                                  THEN 1 ELSE 0 END), 0)
+                    AS legacy_pre_tier_count,
+                COALESCE(SUM(CASE WHEN {tier_expression}
+                                  THEN 1 ELSE 0 END), 0)
+                    AS current_tier_bound_count
+            FROM plan_queue_members"""
+        ).fetchone()
+        return {
+            "current_tier_bound_count": int(row["current_tier_bound_count"]),
+            "legacy_pre_tier_count": int(row["legacy_pre_tier_count"]),
+            "total_count": int(row["total_count"]),
+        }
+    except sqlite3.Error as exc:
+        raise DispatchLeaseError("runtime queue database is invalid") from exc
+    finally:
+        connection.close()
 
 
 __all__ = [
@@ -1107,4 +1217,5 @@ __all__ = [
     "QueueTargetClaim",
     "T1QueuePlan",
     "TargetClaim",
+    "read_queue_tier_status",
 ]

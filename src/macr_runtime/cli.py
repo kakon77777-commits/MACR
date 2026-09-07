@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .authority import AuthorityScope
+from .accounting import read_accounting_status
 from .coordination import CoordinationPlan, PlanExecutionMode
 from .config import (
     ConnectionScope,
@@ -40,8 +41,14 @@ from .discovery.openrouter import (
 )
 from .registry import ProviderRegistry
 from .providers.glm import GlmFlashWorkerProvider
+from .glm_approval import GlmApprovalStore
 from .runtime import MacrRuntime, RuntimeServices
-from .scheduler import PlanQueue, QueueMemberRecord, QueueMemberState
+from .scheduler import (
+    PlanQueue,
+    QueueMemberRecord,
+    QueueMemberState,
+    read_queue_tier_status,
+)
 from .storage import StorageLayout
 from .t1_dispatcher import T1Dispatcher
 from .t1_manifest import load_t1_manifest
@@ -92,6 +99,105 @@ def _init_state() -> int:
     return 0
 
 
+def _capability_status(
+    provider_id: str | None,
+    config_path: str | None,
+) -> int:
+    layout = StorageLayout.from_environment()
+    path = Path(config_path) if config_path else _default_config(layout)
+    try:
+        configs = load_provider_configs(path)
+        selected = tuple(
+            item
+            for item in configs
+            if item.kind == "zai_glm_worker"
+            and (provider_id is None or item.id == provider_id)
+        )
+        if not selected:
+            raise ValueError("no provider capability policy matches selection")
+        providers = []
+        for config in selected:
+            policy = read_effective_policy(
+                layout.provider_capability_policy_db_path,
+                config.id,
+                config.model or "",
+            )
+            binding = policy.binding()
+            providers.append(
+                {
+                    "provider_id": policy.provider_id,
+                    "model_id": policy.model_id,
+                    "tier_id": policy.tier_id,
+                    "revision": policy.revision,
+                    "binding_digest": binding.binding_digest,
+                    "complete_policy_digest": policy.complete_policy_digest,
+                    "max_latency_s": policy.max_latency_s,
+                    "allowed_task_types": list(policy.allowed_task_types),
+                    "patch_allowed": policy.patch_allowed,
+                    "write_scope_allowed": policy.write_scope_allowed,
+                    "tools_allowed": policy.tools_allowed,
+                }
+            )
+        report = {
+            "status": "provider_capability_status",
+            "providers": providers,
+            "approval_records": GlmApprovalStore(
+                layout.state_root
+            ).status_snapshot(),
+            "t1_queue": read_queue_tier_status(layout.runtime_db_path),
+            "network_activity": False,
+            "provider_generation": False,
+        }
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "provider_capability_status_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "provider_generation": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _accounting_status() -> int:
+    layout = StorageLayout.from_environment()
+    try:
+        snapshot = read_accounting_status(layout.accounting_db_path)
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "accounting_status_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "accounting_status",
+                "accounting": snapshot.to_dict(),
+                "network_activity": False,
+                "provider_generation": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def _validate_task(path: str) -> int:
     document = json.loads(Path(path).read_text(encoding="utf-8"))
     task = TaskContract.from_dict(document)
@@ -114,6 +220,9 @@ def _public_queue_member(record: QueueMemberRecord) -> dict[str, object]:
         "terminal_at": record.terminal_at,
         "terminal_evidence_digest": record.terminal_evidence_digest,
         "observed_cost_usd": record.observed_cost_usd,
+        "provider_tier_binding_digest": (
+            record.provider_tier_binding_digest
+        ),
     }
 
 
@@ -1108,6 +1217,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init-state", help="create the configured D runtime-state directories")
 
+    capability_status = sub.add_parser(
+        "capability-status",
+        help="read current provider capability and legacy state without writes",
+    )
+    capability_status.add_argument("--provider")
+    capability_status.add_argument(
+        "--config",
+        help="provider configuration JSON path",
+    )
+
+    sub.add_parser(
+        "accounting-status",
+        help="read bounded aggregate accounting state without writes",
+    )
+
     migrate = sub.add_parser(
         "migrate-ledger",
         help="copy-import the preserved legacy JSONL ledger into SQLite",
@@ -1305,6 +1429,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _doctor(args.config, args.strict)
     if args.command == "init-state":
         return _init_state()
+    if args.command == "capability-status":
+        return _capability_status(args.provider, args.config)
+    if args.command == "accounting-status":
+        return _accounting_status()
     if args.command == "migrate-ledger":
         return _migrate_ledger(
             dry_run=args.dry_run,

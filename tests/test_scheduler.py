@@ -16,7 +16,9 @@ from macr_runtime.scheduler import (
     QueueMemberState,
     T1QueuePlan,
     TargetClaim,
+    read_queue_tier_status,
 )
+from macr_runtime.runtime_db import RuntimeDatabase
 
 from tests.support import d_drive_tempdir
 
@@ -34,6 +36,7 @@ def _member(
     *,
     target: TargetClaim | None = None,
     cost: float = 0.05,
+    provider_tier_binding_digest: str | None = None,
 ) -> QueueMember:
     seed = format(ordinal + 1, "x")
     return QueueMember(
@@ -44,6 +47,7 @@ def _member(
         privacy="public_text",
         context_class="non_sensitive_routine",
         cost_ceiling_usd=cost,
+        provider_tier_binding_digest=provider_tier_binding_digest,
         target_claims=() if target is None else (target,),
     )
 
@@ -86,6 +90,88 @@ def _authorize(
 
 
 class PlanQueueTests(unittest.TestCase):
+    def test_readonly_queue_tier_status_does_not_create_absent_database(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+
+            status = read_queue_tier_status(path)
+
+            self.assertEqual(
+                status,
+                {
+                    "current_tier_bound_count": 0,
+                    "legacy_pre_tier_count": 0,
+                    "total_count": 0,
+                },
+            )
+            self.assertFalse(path.exists())
+
+    def test_runtime_schema_six_queue_row_upgrades_as_legacy_pre_tier(self) -> None:
+        with d_drive_tempdir() as temp:
+            database = temp / "dispatch.sqlite3"
+            connection = sqlite3.connect(database)
+            connection.execute(
+                "CREATE TABLE schema_meta(component TEXT PRIMARY KEY, version INTEGER NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO schema_meta VALUES ('runtime', 6)"
+            )
+            connection.execute(
+                "CREATE TABLE plan_queue_members(member_id TEXT PRIMARY KEY, state TEXT NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO plan_queue_members VALUES ('legacy-member', 'queued')"
+            )
+            connection.commit()
+            connection.close()
+
+            RuntimeDatabase(database)
+            connection = sqlite3.connect(database)
+            try:
+                version = connection.execute(
+                    "SELECT version FROM schema_meta WHERE component = 'runtime'"
+                ).fetchone()[0]
+                row = connection.execute(
+                    "SELECT member_id, state, provider_tier_binding_digest FROM plan_queue_members"
+                ).fetchone()
+            finally:
+                connection.close()
+
+        self.assertEqual(version, 7)
+        self.assertEqual(row, ("legacy-member", "queued", None))
+
+    def test_global_tier_status_distinguishes_legacy_and_bound_members(self) -> None:
+        now = datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as temp:
+            database = temp / "dispatch.sqlite3"
+            queue = PlanQueue(database, now=clock)
+            legacy = _authorize(
+                database,
+                clock,
+                (_member(0),),
+                plan_digest="e" * 64,
+            )
+            current = _authorize(
+                database,
+                clock,
+                (_member(1, provider_tier_binding_digest="c" * 64),),
+                plan_digest="f" * 64,
+            )
+            queue.enqueue(legacy)
+            queue.enqueue(current)
+
+            status = queue.tier_status()
+
+        self.assertEqual(
+            status,
+            {
+                "current_tier_bound_count": 1,
+                "legacy_pre_tier_count": 1,
+                "total_count": 2,
+            },
+        )
+
     def test_plan_scoped_claim_never_consumes_another_manifest(self) -> None:
         now = datetime(2026, 8, 29, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)

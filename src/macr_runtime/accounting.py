@@ -94,6 +94,79 @@ class AccountingStatusSnapshot:
         }
 
 
+def _status_snapshot_from_connection(
+    connection: sqlite3.Connection,
+    *,
+    has_tier_column: bool,
+) -> AccountingStatusSnapshot:
+    provider_rows = connection.execute(
+        """SELECT provider_id, billing_state, COUNT(*) AS run_count,
+                  COALESCE(SUM(currency_cost_usd), 0.0) AS known_cost_usd
+        FROM invocations
+        GROUP BY provider_id, billing_state
+        ORDER BY provider_id, billing_state"""
+    ).fetchall()
+    legacy_expression = (
+        "COALESCE(SUM(CASE WHEN provider_tier_binding_digest IS NULL "
+        "THEN 1 ELSE 0 END), 0)"
+        if has_tier_column
+        else "COUNT(*)"
+    )
+    totals = connection.execute(
+        f"""SELECT
+            COALESCE(SUM(currency_cost_usd), 0.0) AS known_cost_usd,
+            COALESCE(SUM(CASE WHEN billing_state = 'unknown_after_dispatch'
+                              THEN 1 ELSE 0 END), 0)
+                AS unknown_after_dispatch_count,
+            COALESCE(SUM(CASE WHEN terminal_at IS NULL THEN 1 ELSE 0 END), 0)
+                AS unsettled_count,
+            {legacy_expression} AS legacy_pre_tier_count
+        FROM invocations"""
+    ).fetchone()
+    outboxes = connection.execute(
+        """SELECT
+            (SELECT COUNT(*) FROM accounting_outbox
+             WHERE state = 'pending') AS invocation_count,
+            (SELECT COUNT(*) FROM plan_cost_outbox
+             WHERE state = 'pending') AS plan_cost_count,
+            (SELECT COUNT(*) FROM bill_observation_outbox
+             WHERE state = 'pending') AS bill_count"""
+    ).fetchone()
+    return AccountingStatusSnapshot(
+        known_cost_usd=float(totals["known_cost_usd"]),
+        unknown_after_dispatch_count=int(
+            totals["unknown_after_dispatch_count"]
+        ),
+        unsettled_count=int(totals["unsettled_count"]),
+        legacy_pre_tier_count=int(totals["legacy_pre_tier_count"]),
+        pending_invocation_outbox_count=int(outboxes["invocation_count"]),
+        pending_plan_cost_outbox_count=int(outboxes["plan_cost_count"]),
+        pending_bill_observation_outbox_count=int(outboxes["bill_count"]),
+        by_provider_billing_state=tuple(
+            {
+                "provider_id": row["provider_id"],
+                "billing_state": row["billing_state"],
+                "run_count": int(row["run_count"]),
+                "known_cost_usd": float(row["known_cost_usd"]),
+            }
+            for row in provider_rows
+        ),
+    )
+
+
+def _empty_status_snapshot() -> AccountingStatusSnapshot:
+    return AccountingStatusSnapshot(
+        known_cost_usd=0.0,
+        unknown_after_dispatch_count=0,
+        unsettled_count=0,
+        legacy_pre_tier_count=0,
+        pending_invocation_outbox_count=0,
+        pending_plan_cost_outbox_count=0,
+        pending_bill_observation_outbox_count=0,
+        by_provider_billing_state=(),
+    )
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1094,57 +1167,12 @@ class AccountingStore:
     def status_snapshot(self) -> AccountingStatusSnapshot:
         connection = self._connect()
         try:
-            provider_rows = connection.execute(
-                """SELECT provider_id, billing_state, COUNT(*) AS run_count,
-                          COALESCE(SUM(currency_cost_usd), 0.0) AS known_cost_usd
-                FROM invocations
-                GROUP BY provider_id, billing_state
-                ORDER BY provider_id, billing_state"""
-            ).fetchall()
-            totals = connection.execute(
-                """SELECT
-                    COALESCE(SUM(currency_cost_usd), 0.0) AS known_cost_usd,
-                    COALESCE(SUM(CASE WHEN billing_state = 'unknown_after_dispatch'
-                                      THEN 1 ELSE 0 END), 0)
-                        AS unknown_after_dispatch_count,
-                    COALESCE(SUM(CASE WHEN terminal_at IS NULL THEN 1 ELSE 0 END), 0)
-                        AS unsettled_count,
-                    COALESCE(SUM(CASE WHEN provider_tier_binding_digest IS NULL
-                                      THEN 1 ELSE 0 END), 0)
-                        AS legacy_pre_tier_count
-                FROM invocations"""
-            ).fetchone()
-            outboxes = connection.execute(
-                """SELECT
-                    (SELECT COUNT(*) FROM accounting_outbox
-                     WHERE state = 'pending') AS invocation_count,
-                    (SELECT COUNT(*) FROM plan_cost_outbox
-                     WHERE state = 'pending') AS plan_cost_count,
-                    (SELECT COUNT(*) FROM bill_observation_outbox
-                     WHERE state = 'pending') AS bill_count"""
-            ).fetchone()
+            return _status_snapshot_from_connection(
+                connection,
+                has_tier_column=True,
+            )
         finally:
             connection.close()
-        return AccountingStatusSnapshot(
-            known_cost_usd=float(totals["known_cost_usd"]),
-            unknown_after_dispatch_count=int(
-                totals["unknown_after_dispatch_count"]
-            ),
-            unsettled_count=int(totals["unsettled_count"]),
-            legacy_pre_tier_count=int(totals["legacy_pre_tier_count"]),
-            pending_invocation_outbox_count=int(outboxes["invocation_count"]),
-            pending_plan_cost_outbox_count=int(outboxes["plan_cost_count"]),
-            pending_bill_observation_outbox_count=int(outboxes["bill_count"]),
-            by_provider_billing_state=tuple(
-                {
-                    "provider_id": row["provider_id"],
-                    "billing_state": row["billing_state"],
-                    "run_count": int(row["run_count"]),
-                    "known_cost_usd": float(row["known_cost_usd"]),
-                }
-                for row in provider_rows
-            ),
-        )
 
     def upsert_provider_account(
         self,
@@ -1425,3 +1453,39 @@ class AccountingStore:
             "failure_stage",
         )
         return {key: row[key] for key in keys}
+
+
+def read_accounting_status(path: str | Path) -> AccountingStatusSnapshot:
+    candidate = Path(path)
+    if not candidate.is_absolute() or candidate.drive.upper() != "D:":
+        raise StoragePolicyError(
+            "accounting database path must be absolute on D:"
+        )
+    if not candidate.exists():
+        return _empty_status_snapshot()
+    uri = candidate.absolute().as_uri() + "?mode=ro"
+    connection = sqlite3.connect(uri, uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        row = connection.execute(
+            """SELECT version FROM accounting_schema_meta
+            WHERE component = 'accounting'"""
+        ).fetchone()
+        if row is None or row["version"] not in {2, 3}:
+            raise AccountingConflict(
+                "accounting database schema version is unsupported"
+            )
+        columns = {
+            item["name"]
+            for item in connection.execute(
+                "PRAGMA table_info(invocations)"
+            ).fetchall()
+        }
+        return _status_snapshot_from_connection(
+            connection,
+            has_tier_column="provider_tier_binding_digest" in columns,
+        )
+    except sqlite3.Error as exc:
+        raise AccountingConflict("accounting database is invalid") from exc
+    finally:
+        connection.close()

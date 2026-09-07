@@ -18,6 +18,11 @@ _MODULE_EXPORTS = {
         "TaskPolicyClauses", "VerificationSpec", "WorkspaceSpec",
     ),
     "runtime": ("MacrRuntime", "RuntimeServices"),
+    "host_adapter": (
+        "HostBindingEvidence", "HostDispatchPreparation",
+        "HostInvocationGrant", "HostKind", "MacrHostAdapter",
+        "VerifiedHostBinding",
+    ),
     "storage": ("StorageLayout",),
     "canonical": ("aware_iso8601", "canonical_json_bytes", "sha256_id"),
     "model_identity": (
@@ -67,9 +72,9 @@ _MODULE_EXPORTS = {
     "t1_dispatcher": ("T1DispatchError", "T1DispatchResult", "T1Dispatcher"),
     "t1_manifest": (
         "T1AuthorityBundle", "T1ExecutionManifest", "T1ExecutionMember",
-        "load_t1_manifest",
+        "T1ManifestInspection", "inspect_t1_manifest", "load_t1_manifest",
     ),
-    "accounting": ("CostClass",),
+    "accounting": ("AccountingStatusSnapshot", "CostClass"),
     "billing_port": ("BillObservation", "BillingReconciliationPort"),
     "direct_contracts": (
         "DirectConversationSpec", "DirectMessage", "DirectProviderId",
@@ -91,7 +96,7 @@ _LAZY_EXPORTS = {
 }
 
 __all__ = [
-    "ApprovalMode", "BudgetMode", "BillObservation",
+    "AccountingStatusSnapshot", "ApprovalMode", "BudgetMode", "BillObservation",
     "BillingReconciliationPort", "BudgetEvaluation", "ContextCapsule",
     "ContextSourceItem", "CostClass", "CoordinationPlan", "DelegationClass",
     "DirectConversationSpec", "DirectMessage", "DirectProviderId",
@@ -103,7 +108,9 @@ __all__ = [
     "FallbackRule", "IdentityStatus", "IngestReport", "ImportMode",
     "AcceptanceState", "AuthorizationReference", "CaptureState",
     "DispatchContext", "DispatchOrigin", "InteractionPlane", "ImportReport",
-    "MacrRuntime", "ModelSubject", "ModelTokenOverride", "ModelTokenPolicy",
+    "HostBindingEvidence", "HostDispatchPreparation", "HostInvocationGrant",
+    "HostKind",
+    "MacrHostAdapter", "MacrRuntime", "ModelSubject", "ModelTokenOverride", "ModelTokenPolicy",
     "ModelTokenPolicyResolver", "ModelTokenPolicyStore", "ModelBinding",
     "ProviderCapabilityPolicy", "ProviderCapabilityPolicyStore",
     "ProviderCapabilityResolver", "ProviderTierBinding",
@@ -122,12 +129,13 @@ __all__ = [
     "TaskPolicyClauses", "T1AuthorityBundle", "T1DispatchError",
     "T1DispatchResult", "T1Dispatcher", "T1ExecutionManifest",
     "T1ExecutionMember", "TopologyId", "VerifierGraph", "VerifierNode",
+    "T1ManifestInspection", "VerifiedHostBinding",
     "VerificationReport", "VerificationSpec", "VerificationState",
     "WorkspaceSpec", "aware_iso8601", "canonical_json_bytes",
     "canonical_policy_snapshot", "builtin_model_token_policies",
     "builtin_provider_capability_policies", "glm_extended_text_policy",
     "glm_standard_policy",
-    "load_t1_manifest", "sha256_id", "t1_glm_live_policy",
+    "inspect_t1_manifest", "load_t1_manifest", "sha256_id", "t1_glm_live_policy",
     "wilson_lower_bound",
 ]
 

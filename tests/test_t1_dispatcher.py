@@ -222,6 +222,10 @@ class T1DispatcherTests(unittest.TestCase):
         self.assertEqual(result.queue_state, "completed")
         self.assertEqual(result.acceptance_state, "pending")
         self.assertEqual(queue_record.state.value, "completed")
+        self.assertEqual(
+            queue_record.provider_tier_binding_digest,
+            subject.members[0].provider_tier_binding_digest,
+        )
         self.assertEqual(len(transport.posts), 1)
         self.assertEqual(
             [item["event_type"] for item in events],

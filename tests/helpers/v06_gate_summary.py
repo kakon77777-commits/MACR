@@ -22,6 +22,9 @@ from macr_runtime.observatory_db import ObservatoryDatabase
 from macr_runtime.planner import DynamicCoordinationPlanner
 from macr_runtime.runtime_db import RuntimeDatabase
 from macr_runtime.model_token_store import ModelTokenPolicyStore
+from macr_runtime.provider_capability import builtin_provider_capability_policies
+from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
+from macr_runtime.t1_manifest import T1_MANIFEST_SCHEMA_VERSION
 from macr_runtime.token_policy import (
     builtin_model_token_policies,
     t1_glm_live_policy,
@@ -88,15 +91,18 @@ def main() -> int:
         runtime_path = temp / "runtime.sqlite3"
         observatory_path = temp / "observatory.sqlite3"
         accounting_path = temp / "accounting.sqlite3"
+        capability_path = temp / "provider-capabilities.sqlite3"
         RuntimeDatabase(runtime_path)
         ObservatoryDatabase(observatory_path, temp / "snapshots")
         AccountingStore(accounting_path)
+        ProviderCapabilityPolicyStore(capability_path)
         schema_fingerprint = sha256_id(
             "v06_schema_fingerprint_v1",
             {
                 "runtime": list(_tables(runtime_path)),
                 "observatory": list(_tables(observatory_path)),
                 "accounting": list(_tables(accounting_path)),
+                "provider_capability": list(_tables(capability_path)),
             },
         )
 
@@ -128,6 +134,20 @@ def main() -> int:
             "model_token_policy_set_v1",
             [item.to_dict() for item in builtin_model_token_policies()],
         ),
+        "provider_capability_policy_schema_version": (
+            ProviderCapabilityPolicyStore.SCHEMA_VERSION
+        ),
+        "provider_capability_policy_count": len(
+            builtin_provider_capability_policies()
+        ),
+        "provider_capability_policy_digest": sha256_id(
+            "provider_capability_policy_set_v1",
+            [
+                item.to_dict()
+                for item in builtin_provider_capability_policies()
+            ],
+        ),
+        "t1_manifest_schema_version": T1_MANIFEST_SCHEMA_VERSION,
         "t1_live_policy_digest": t1_glm_live_policy().policy_digest,
         "schema_fingerprint": schema_fingerprint,
         "planner_replay_digest": _planner_replay_digest(),

@@ -125,6 +125,9 @@ class T1Dispatcher:
             privacy=member.privacy,
             context_class=member.context_class,
             cost_ceiling_usd=member.cost_ceiling_usd,
+            provider_tier_binding_digest=(
+                member.provider_tier_binding_digest
+            ),
             target_claims=member.target_claims,
         )
 
@@ -392,6 +395,7 @@ class T1Dispatcher:
             member.privacy,
             member.context_class,
             member.cost_ceiling_usd,
+            member.provider_tier_binding_digest,
         )
         actual = (
             claim.member_id,
@@ -402,6 +406,7 @@ class T1Dispatcher:
             claim.privacy,
             claim.context_class,
             claim.cost_ceiling_usd,
+            claim.provider_tier_binding_digest,
         )
         if actual != expected:
             raise T1DispatchError("claimed queue member does not match manifest")

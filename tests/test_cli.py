@@ -15,6 +15,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from macr_runtime.cli import (
+    _accounting_status,
+    _capability_status,
     _doctor,
     _evidence_import,
     _evidence_inspect,
@@ -30,6 +32,7 @@ from macr_runtime.cli import (
     _queue_status,
     _t1_stage,
     _t1_worker,
+    build_parser,
 )
 from macr_runtime.contracts import (
     DelegationClass,
@@ -108,6 +111,54 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_readonly_capability_and_accounting_status_create_no_state(self) -> None:
+        with d_drive_tempdir() as temp:
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(temp),
+                "MACR_ROOT": str(ROOT),
+            }
+            capability_output = io.StringIO()
+            accounting_output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(capability_output):
+                    capability_exit = _capability_status(
+                        "glm_flash_worker",
+                        str(ROOT / "config" / "providers.json"),
+                    )
+                with contextlib.redirect_stdout(accounting_output):
+                    accounting_exit = _accounting_status()
+
+            capability = json.loads(capability_output.getvalue())
+            accounting = json.loads(accounting_output.getvalue())
+
+        self.assertEqual(capability_exit, 0)
+        self.assertEqual(accounting_exit, 0)
+        self.assertEqual(capability["providers"][0]["tier_id"], "standard")
+        self.assertEqual(capability["providers"][0]["max_latency_s"], 300)
+        self.assertEqual(
+            capability["approval_records"]["legacy_pre_tier_count"],
+            0,
+        )
+        self.assertEqual(capability["t1_queue"]["legacy_pre_tier_count"], 0)
+        self.assertEqual(accounting["accounting"]["known_cost_usd"], 0.0)
+        self.assertFalse((temp / "accounting" / "accounting.sqlite3").exists())
+        self.assertFalse(
+            (temp / "settings" / "provider-capability-policies.sqlite3").exists()
+        )
+        self.assertFalse((temp / "runtime" / "dispatch.sqlite3").exists())
+
+    def test_cli_exposes_no_self_authorizing_capability_activation_command(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                build_parser().parse_args(
+                    [
+                        "capability-activate",
+                        "glm_flash_worker",
+                        "extended_text_candidate",
+                    ]
+                )
+
     def test_t1_worker_requires_network_opt_in_before_manifest_or_state(self) -> None:
         with d_drive_tempdir() as root:
             state_root = root / "must-not-exist"
@@ -266,6 +317,7 @@ class DoctorTests(unittest.TestCase):
                 "terminal_at",
                 "terminal_evidence_digest",
                 "observed_cost_usd",
+                "provider_tier_binding_digest",
             },
         )
         self.assertFalse(document["network_activity"])

@@ -5,7 +5,7 @@ import sqlite3
 import uuid
 from dataclasses import replace
 
-from macr_runtime.accounting import AccountingStore, CostClass
+from macr_runtime.accounting import AccountingStore, CostClass, read_accounting_status
 from macr_runtime.errors import AccountingConflict, StoragePolicyError
 from macr_runtime.execution import (
     AuthorizationReference,
@@ -55,6 +55,16 @@ PRICING_BASIS = "d" * 64
 
 
 class AccountingStoreTests(unittest.TestCase):
+    def test_readonly_status_does_not_create_absent_database(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "accounting" / "accounting.sqlite3"
+
+            status = read_accounting_status(path)
+
+            self.assertEqual(status.known_cost_usd, 0.0)
+            self.assertEqual(status.unsettled_count, 0)
+            self.assertFalse(path.exists())
+
     def test_schema_two_upgrades_without_rewriting_historical_invocation(self) -> None:
         with d_drive_tempdir() as temp:
             database = temp / "accounting.sqlite3"

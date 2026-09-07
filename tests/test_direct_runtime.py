@@ -216,9 +216,10 @@ class DirectRuntimeTests(unittest.TestCase):
             scope = reference.scope
             self.assertEqual(
                 scope,
-                '{"batch_ids":[],"member_digests":[],"planes":["direct"],'
-                '"providers":["grok","ollama_qwythos"],'
-                '"task_types":["direct_chat"]}',
+            '{"batch_ids":[],"member_digests":[],"planes":["direct"],'
+            '"provider_tier_binding_digests":[],"providers":'
+            '["grok","ollama_qwythos"],"scope_contract_version":2,'
+            '"task_types":["direct_chat"]}',
             )
             services.authorities.verify(
                 reference,

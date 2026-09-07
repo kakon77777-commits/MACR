@@ -33,6 +33,7 @@ _T1_MEMBER_COST_USD = 0.005
 _T1_AGGREGATE_COST_USD = 0.015
 _T1_CAMPAIGN_COST_USD = 0.020
 _MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+T1_MANIFEST_SCHEMA_VERSION = 2
 
 
 def _digest(name: str, value: object) -> str:
@@ -403,11 +404,11 @@ class T1ExecutionManifest:
     campaign_cost_ceiling_usd: float
     expires_at: str
     authorized_dispatchers: tuple[str, ...]
-    schema_version: int = 2
+    schema_version: int = T1_MANIFEST_SCHEMA_VERSION
     topology_id: str = _T1_TOPOLOGY
 
     def __post_init__(self) -> None:
-        if self.schema_version != 2:
+        if self.schema_version != T1_MANIFEST_SCHEMA_VERSION:
             raise ValueError("T1 manifest schema_version must be 2")
         if self.topology_id != _T1_TOPOLOGY:
             raise ValueError("T1 manifest topology must be T1_FANOUT_VERIFIED")
@@ -713,6 +714,7 @@ __all__ = [
     "T1ExecutionManifest",
     "T1ExecutionMember",
     "T1ManifestInspection",
+    "T1_MANIFEST_SCHEMA_VERSION",
     "inspect_t1_manifest",
     "load_t1_manifest",
 ]
