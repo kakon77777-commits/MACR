@@ -199,6 +199,61 @@ class ModelTokenPolicyStoreTests(unittest.TestCase):
         self.assertEqual(status["invalid_count"], 1)
         self.assertEqual(status["total_count"], 1)
 
+    def test_known_provider_random_base_digest_is_invalid_not_legacy(self) -> None:
+        with d_drive_tempdir() as temp:
+            database = temp / "settings" / "model-token-policies.sqlite3"
+            store = ModelTokenPolicyStore(database)
+            forged = dataclasses.replace(
+                grok_override(revision=3),
+                base_policy_digest="f" * 64,
+            )
+            body = canonical_json_bytes(forged.to_dict()).decode("utf-8")
+            body_digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            connection = sqlite3.connect(database)
+            connection.execute(
+                """INSERT INTO model_token_overrides(
+                    provider_id, model_id, revision, body_json,
+                    body_sha256, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    forged.provider_id,
+                    forged.model_id,
+                    forged.revision,
+                    body,
+                    body_digest,
+                    "2026-08-30T00:00:00+00:00",
+                ),
+            )
+            connection.commit()
+            connection.close()
+
+            before = store.status_snapshot()
+            with self.assertRaisesRegex(DirectStoreConflict, "base policy digest"):
+                store.activate("grok", "grok-4.6", 3)
+            connection = sqlite3.connect(database)
+            active_rows = connection.execute(
+                "SELECT COUNT(*) FROM model_token_active"
+            ).fetchone()[0]
+            connection.execute(
+                """INSERT INTO model_token_active(
+                    provider_id, model_id, revision, updated_at
+                ) VALUES (?, ?, ?, ?)""",
+                ("grok", "grok-4.6", 3, "2026-08-30T00:00:01+00:00"),
+            )
+            connection.commit()
+            connection.close()
+            after = store.status_snapshot()
+            with self.assertRaisesRegex(DirectStoreConflict, "base policy digest"):
+                store.effective_policy("grok", "grok-4.6")
+
+        self.assertEqual(before["legacy_pre_quality_floor_count"], 0)
+        self.assertEqual(before["invalid_count"], 1)
+        self.assertEqual(before["active_invalid_count"], 0)
+        self.assertEqual(active_rows, 0)
+        self.assertEqual(after["legacy_pre_quality_floor_count"], 0)
+        self.assertEqual(after["invalid_count"], 1)
+        self.assertEqual(after["active_invalid_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

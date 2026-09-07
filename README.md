@@ -242,7 +242,8 @@ creating or migrating state:
 `capability-status` also reports content-free current, legacy, invalid and
 active counts for model-token overrides. An old override remains immutable
 `legacy_pre_quality_floor` evidence, but cannot be activated or used until it
-is reissued against the policy-v2 base.
+is reissued against the policy-v2 base. Only the exact reconstructed v1 base
+digest receives that label; arbitrary mismatches are counted as invalid.
 
 ## T1 staging and worker commands
 

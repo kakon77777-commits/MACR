@@ -77,7 +77,9 @@ were not treated as dispatchable tasks.
 - Policy-v1-base override rows remain immutable and are exposed through
   content-free current/legacy/invalid/active counts. Legacy activation or
   effective use raises `LegacyOutputPolicyIncompatibleError`; a new revision
-  must bind the v2 base. The shared store was observed to contain no overrides.
+  must bind the v2 base. Only the exact reconstructed v1 digest is historical;
+  arbitrary mismatches are invalid, including a separate active-invalid count.
+  The shared store was observed to contain no overrides.
 - A verified legacy Qwythos policy-v1 Direct snapshot retains its original
   loopback-only settings in memory; this exception cannot authorize cloud use.
 
@@ -95,6 +97,12 @@ The governing Twin then challenged successor `fa3ce97` / tree `f1c1912a` for
 an untyped active-v1-override failure and a residual v2 member digest domain.
 Those findings caused another scoped reopening; neither earlier green gate is
 the final closure subject.
+
+The governing Twin then challenged `e96cdf0` / tree `33b4f351` because an
+arbitrary known-provider base digest was incorrectly labelled as genuine v1
+history. The final successor distinguishes exact reconstructed v1 history from
+invalid mismatches and proves that a failed activation leaves the active table
+unchanged.
 
 ## Authority and live-state boundary
 

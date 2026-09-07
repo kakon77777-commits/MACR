@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .canonical import canonical_json_bytes
+from .canonical import canonical_json_bytes, sha256_id
 from .direct_database import DirectDatabase
 from .errors import (
     DirectStoreConflict,
@@ -32,8 +32,26 @@ def _empty_status() -> dict[str, int]:
         "invalid_count": 0,
         "active_current_count": 0,
         "active_legacy_pre_quality_floor_count": 0,
+        "active_invalid_count": 0,
         "total_count": 0,
     }
+
+
+def _legacy_v1_base_digest(policy: ModelTokenPolicy) -> str:
+    document = policy.to_dict()
+    document.pop("minimum_task_output_tokens")
+    return sha256_id("model_token_policy_v1", document)
+
+
+def _base_binding_kind(
+    override: ModelTokenOverride,
+    base: ModelTokenPolicy,
+) -> str:
+    if override.base_policy_digest == base.policy_digest:
+        return "current"
+    if override.base_policy_digest == _legacy_v1_base_digest(base):
+        return "legacy_pre_quality_floor"
+    return "invalid"
 
 
 class ModelTokenPolicyStore:
@@ -162,14 +180,19 @@ class ModelTokenPolicyStore:
             except (DirectStoreConflict, ProviderPolicyError, ValueError):
                 counts["invalid_count"] += 1
                 continue
-            if override.base_policy_digest == base.policy_digest:
+            binding_kind = _base_binding_kind(override, base)
+            if binding_kind == "current":
                 counts["current_count"] += 1
                 if row["active"]:
                     counts["active_current_count"] += 1
-            else:
+            elif binding_kind == "legacy_pre_quality_floor":
                 counts["legacy_pre_quality_floor_count"] += 1
                 if row["active"]:
                     counts["active_legacy_pre_quality_floor_count"] += 1
+            else:
+                counts["invalid_count"] += 1
+                if row["active"]:
+                    counts["active_invalid_count"] += 1
         return counts
 
     def status_snapshot(self) -> dict[str, int]:
@@ -259,10 +282,15 @@ class ModelTokenPolicyStore:
                 row["body_sha256"],
             )
             base = self.resolver.resolve(override.provider_id, override.model_id)
-            if override.base_policy_digest != base.policy_digest:
+            binding_kind = _base_binding_kind(override, base)
+            if binding_kind == "legacy_pre_quality_floor":
                 raise LegacyOutputPolicyIncompatibleError(
                     "legacy_pre_quality_floor: model token override must be "
                     "reissued against policy contract v2"
+                )
+            if binding_kind == "invalid":
+                raise DirectStoreConflict(
+                    "model token override base policy digest is invalid"
                 )
             connection.execute(
                 """INSERT INTO model_token_active(
@@ -312,10 +340,15 @@ class ModelTokenPolicyStore:
         override = self._read_active_override(provider_id, model_id)
         if override is None:
             return base
-        if override.base_policy_digest != base.policy_digest:
+        binding_kind = _base_binding_kind(override, base)
+        if binding_kind == "legacy_pre_quality_floor":
             raise LegacyOutputPolicyIncompatibleError(
                 "legacy_pre_quality_floor: active model token override must be "
                 "reissued against policy contract v2"
+            )
+        if binding_kind == "invalid":
+            raise DirectStoreConflict(
+                "model token override base policy digest is invalid"
             )
         try:
             return override.apply(base)
