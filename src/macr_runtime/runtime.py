@@ -260,6 +260,31 @@ class MacrRuntime:
             return _token_policy_failure(provider_id, task, exc)
         provider_binding = getattr(provider, "capability_binding", None)
         if (
+            isinstance(provider_binding, ProviderTierBinding)
+            and self.services.capability_policies is not None
+        ):
+            try:
+                active_binding = self.services.capability_policies.effective_binding(
+                    provider_id,
+                    provider_binding.model_id,
+                )
+            except (MacrError, ValueError):
+                return _capability_policy_failure(
+                    provider_id,
+                    task,
+                    ProviderPolicyError(
+                        "active provider capability binding is unavailable"
+                    ),
+                )
+            if active_binding != provider_binding:
+                return _capability_policy_failure(
+                    provider_id,
+                    task,
+                    ProviderPolicyError(
+                        "provider registry capability binding is stale"
+                    ),
+                )
+        if (
             provider_binding is not None
             or context.provider_tier_binding_digest is not None
         ):

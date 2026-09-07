@@ -192,6 +192,22 @@ class T1Dispatcher:
             capability_binding = self.registry.capability_binding(
                 member.route.provider_id
             )
+            if self.services.capability_policies is not None:
+                try:
+                    active_binding = (
+                        self.services.capability_policies.effective_binding(
+                            member.route.provider_id,
+                            member.route.provider_model_id,
+                        )
+                    )
+                except (MacrError, ValueError) as exc:
+                    raise T1DispatchError(
+                        "T1 active provider capability binding is unavailable"
+                    ) from exc
+                if active_binding != capability_binding:
+                    raise T1DispatchError(
+                        "T1 active provider capability binding changed"
+                    )
             if (
                 capability_binding.binding_digest
                 != member.provider_tier_binding_digest

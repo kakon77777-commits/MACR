@@ -58,7 +58,9 @@ _MODULE_EXPORTS = {
     ),
     "plan_runtime": ("PlanExecutionResult", "PlanRuntime", "VerificationReport"),
     "model_token_store": ("ModelTokenPolicyStore",),
-    "provider_capability_store": ("ProviderCapabilityPolicyStore",),
+    "provider_capability_store": (
+        "ProviderCapabilityGovernance", "ProviderCapabilityPolicyStore",
+    ),
     "provider_capability": (
         "ProviderCapabilityPolicy", "ProviderCapabilityResolver",
         "ProviderTierBinding", "builtin_provider_capability_policies",
@@ -112,7 +114,8 @@ __all__ = [
     "HostKind",
     "MacrHostAdapter", "MacrRuntime", "ModelSubject", "ModelTokenOverride", "ModelTokenPolicy",
     "ModelTokenPolicyResolver", "ModelTokenPolicyStore", "ModelBinding",
-    "ProviderCapabilityPolicy", "ProviderCapabilityPolicyStore",
+    "ProviderCapabilityGovernance", "ProviderCapabilityPolicy",
+    "ProviderCapabilityPolicyStore",
     "ProviderCapabilityResolver", "ProviderTierBinding",
     "ModelObservatory", "ModelPassport", "ModelPassportProjector",
     "OperatorPolicyProfile", "PlanExecutionMode", "PlanExecutionResult",

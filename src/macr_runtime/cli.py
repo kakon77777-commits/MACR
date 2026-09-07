@@ -284,6 +284,18 @@ def _t1_stage(
         config,
         environ=os.environ,
         token_policy=t1_glm_live_policy(),
+        capability_policy=(
+            services.capability_policies.effective_policy(
+                config.id,
+                config.model or "",
+            )
+            if services.capability_policies is not None
+            else read_effective_policy(
+                layout.provider_capability_policy_db_path,
+                config.id,
+                config.model or "",
+            )
+        ),
     )
     manifest = load_t1_manifest(manifest_path)
     now = datetime.now(timezone.utc)
@@ -349,6 +361,18 @@ def _t1_worker(
             config,
             environ=os.environ,
             token_policy=t1_glm_live_policy(),
+            capability_policy=(
+                services.capability_policies.effective_policy(
+                    config.id,
+                    config.model or "",
+                )
+                if services.capability_policies is not None
+                else read_effective_policy(
+                    layout.provider_capability_policy_db_path,
+                    config.id,
+                    config.model or "",
+                )
+            ),
         )
         registry = ProviderRegistry((provider,))
     else:

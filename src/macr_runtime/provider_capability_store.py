@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
 
 from .canonical import canonical_json_bytes
 from .authority import DispatchAuthorityStore
 from .direct_database import DirectDatabase
-from .errors import DirectStoreConflict
+from .errors import DirectStoreConflict, ProviderPolicyError
 from .execution import AuthorizationReference
 from .provider_capability import (
     ProviderCapabilityPolicy,
@@ -24,41 +23,22 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class OperatorTierActivationVerifier(Protocol):
-    def verify(self, *, witness: str, binding_digest: str) -> None: ...
+@dataclass(frozen=True, init=False)
+class _TierActivationPermit:
+    binding_digest: str
+    authority_digest: str
 
-
-class DispatchAuthorityTierActivationVerifier:
-    def __init__(
-        self,
-        authorities: DispatchAuthorityStore,
-        reference: AuthorizationReference,
+    @classmethod
+    def _issue(
+        cls,
         *,
-        provider_id: str,
-    ) -> None:
-        if not isinstance(authorities, DispatchAuthorityStore):
-            raise ValueError("authorities must be a DispatchAuthorityStore")
-        if not isinstance(reference, AuthorizationReference):
-            raise ValueError("reference must be an AuthorizationReference")
-        if not isinstance(provider_id, str) or not provider_id.strip():
-            raise ValueError("provider_id must be non-empty")
-        self.authorities = authorities
-        self.reference = reference
-        self.provider_id = provider_id.strip()
-
-    def verify(self, *, witness: str, binding_digest: str) -> None:
-        if not isinstance(witness, str) or not hmac.compare_digest(
-            witness,
-            self.reference.digest,
-        ):
-            raise DirectStoreConflict("operator activation witness is invalid")
-        self.authorities.verify(
-            self.reference,
-            provider_id=self.provider_id,
-            plane="policy_activation",
-            task_type="provider_tier_activation",
-            provider_tier_binding_digest=binding_digest,
-        )
+        binding_digest: str,
+        authority_digest: str,
+    ) -> "_TierActivationPermit":
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "binding_digest", binding_digest)
+        object.__setattr__(instance, "authority_digest", authority_digest)
+        return instance
 
 
 def _encode_policy(policy: ProviderCapabilityPolicy) -> tuple[str, str]:
@@ -93,6 +73,28 @@ def _binding_from_row(row: sqlite3.Row) -> ProviderTierBinding:
     return _policy_from_row(row).binding()
 
 
+def _require_supported_policy(
+    resolver: ProviderCapabilityResolver,
+    policy: ProviderCapabilityPolicy,
+) -> ProviderCapabilityPolicy:
+    try:
+        supported = resolver.resolve(
+            policy.provider_id,
+            policy.model_id,
+            policy.tier_id,
+            policy.revision,
+        )
+    except ProviderPolicyError as exc:
+        raise DirectStoreConflict(
+            "provider capability policy is not adapter-supported"
+        ) from exc
+    if supported != policy:
+        raise DirectStoreConflict(
+            "provider capability policy is not adapter-supported"
+        )
+    return policy
+
+
 def _read_effective_from_connection(
     connection: sqlite3.Connection,
     resolver: ProviderCapabilityResolver,
@@ -116,7 +118,7 @@ def _read_effective_from_connection(
     ).fetchone()
     if row is None or row["binding_digest"] != active["binding_digest"]:
         raise DirectStoreConflict("provider capability activation is invalid")
-    return _binding_from_row(row)
+    return _require_supported_policy(resolver, _policy_from_row(row)).binding()
 
 
 def _read_effective_policy_from_connection(
@@ -142,7 +144,7 @@ def _read_effective_policy_from_connection(
     ).fetchone()
     if row is None or row["binding_digest"] != active["binding_digest"]:
         raise DirectStoreConflict("provider capability activation is invalid")
-    return _policy_from_row(row)
+    return _require_supported_policy(resolver, _policy_from_row(row))
 
 
 class ProviderCapabilityPolicyStore:
@@ -192,6 +194,7 @@ class ProviderCapabilityPolicyStore:
                     tier_id TEXT NOT NULL,
                     revision INTEGER NOT NULL,
                     binding_digest TEXT NOT NULL,
+                    authority_digest TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(provider_id, model_id),
                     FOREIGN KEY(provider_id, model_id, tier_id, revision)
@@ -224,6 +227,21 @@ class ProviderCapabilityPolicyStore:
     def save_policy(self, policy: ProviderCapabilityPolicy) -> bool:
         if not isinstance(policy, ProviderCapabilityPolicy):
             raise ValueError("policy must be a ProviderCapabilityPolicy")
+        try:
+            supported = self.resolver.resolve(
+                policy.provider_id,
+                policy.model_id,
+                policy.tier_id,
+                policy.revision,
+            )
+        except ProviderPolicyError as exc:
+            raise DirectStoreConflict(
+                "provider capability policy is not adapter-supported"
+            ) from exc
+        if supported != policy:
+            raise DirectStoreConflict(
+                "provider capability policy is not adapter-supported"
+            )
         body, body_sha256 = _encode_policy(policy)
         binding_digest = policy.binding().binding_digest
         connection = self.database.connect()
@@ -275,13 +293,7 @@ class ProviderCapabilityPolicyStore:
         finally:
             connection.close()
 
-    def activate(
-        self,
-        binding_digest: str,
-        *,
-        witness: str,
-        verifier: OperatorTierActivationVerifier,
-    ) -> None:
+    def _binding_for_digest(self, binding_digest: str) -> ProviderTierBinding:
         if not isinstance(binding_digest, str):
             raise DirectStoreConflict("provider capability binding digest is invalid")
         connection = self.database.connect()
@@ -297,8 +309,20 @@ class ProviderCapabilityPolicyStore:
             connection.close()
         if row is None:
             raise DirectStoreConflict("provider capability policy does not exist")
-        binding = _binding_from_row(row)
-        verifier.verify(witness=witness, binding_digest=binding.binding_digest)
+        return _binding_from_row(row)
+
+    def _activate_authorized(
+        self,
+        binding_digest: str,
+        *,
+        permit: _TierActivationPermit,
+    ) -> None:
+        if (
+            not isinstance(permit, _TierActivationPermit)
+            or permit.binding_digest != binding_digest
+        ):
+            raise DirectStoreConflict("operator activation permit is invalid")
+        binding = self._binding_for_digest(binding_digest)
 
         connection = self.database.connect()
         try:
@@ -320,12 +344,13 @@ class ProviderCapabilityPolicyStore:
             connection.execute(
                 """INSERT INTO provider_capability_active(
                     provider_id, model_id, tier_id, revision,
-                    binding_digest, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    binding_digest, authority_digest, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(provider_id, model_id) DO UPDATE SET
                     tier_id = excluded.tier_id,
                     revision = excluded.revision,
                     binding_digest = excluded.binding_digest,
+                    authority_digest = excluded.authority_digest,
                     updated_at = excluded.updated_at""",
                 (
                     binding.provider_id,
@@ -333,6 +358,7 @@ class ProviderCapabilityPolicyStore:
                     binding.tier_id,
                     binding.revision,
                     binding.binding_digest,
+                    permit.authority_digest,
                     _utc_now(),
                 ),
             )
@@ -375,6 +401,44 @@ class ProviderCapabilityPolicyStore:
         finally:
             connection.close()
 
+
+class ProviderCapabilityGovernance:
+    def __init__(
+        self,
+        store: ProviderCapabilityPolicyStore,
+        authorities: DispatchAuthorityStore,
+    ) -> None:
+        if not isinstance(store, ProviderCapabilityPolicyStore):
+            raise ValueError("store must be a ProviderCapabilityPolicyStore")
+        if not isinstance(authorities, DispatchAuthorityStore):
+            raise ValueError("authorities must be a DispatchAuthorityStore")
+        self.store = store
+        self.authorities = authorities
+
+    def activate(
+        self,
+        binding_digest: str,
+        reference: AuthorizationReference,
+    ) -> ProviderTierBinding:
+        if not isinstance(reference, AuthorizationReference):
+            raise DirectStoreConflict("operator activation authority is invalid")
+        binding = self.store._binding_for_digest(binding_digest)
+        self.authorities.verify(
+            reference,
+            provider_id=binding.provider_id,
+            plane="policy_activation",
+            task_type="provider_tier_activation",
+            provider_tier_binding_digest=binding.binding_digest,
+        )
+        permit = _TierActivationPermit._issue(
+            binding_digest=binding.binding_digest,
+            authority_digest=reference.digest,
+        )
+        self.store._activate_authorized(
+            binding.binding_digest,
+            permit=permit,
+        )
+        return binding
 
 def read_effective_binding(
     path: str | Path,
@@ -451,9 +515,8 @@ def read_effective_policy(
 
 
 __all__ = [
-    "OperatorTierActivationVerifier",
-    "DispatchAuthorityTierActivationVerifier",
     "ProviderCapabilityPolicyStore",
+    "ProviderCapabilityGovernance",
     "read_effective_binding",
     "read_effective_policy",
 ]

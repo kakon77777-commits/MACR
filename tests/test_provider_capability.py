@@ -11,6 +11,7 @@ from macr_runtime.provider_capability import (
     glm_extended_text_policy,
     glm_standard_policy,
 )
+from macr_runtime.provider_capability_store import ProviderCapabilityGovernance
 
 
 class ProviderCapabilityPolicyTests(unittest.TestCase):
@@ -24,6 +25,10 @@ class ProviderCapabilityPolicyTests(unittest.TestCase):
         self.assertIs(
             macr_runtime.ProviderCapabilityPolicy,
             ProviderCapabilityPolicy,
+        )
+        self.assertIs(
+            macr_runtime.ProviderCapabilityGovernance,
+            ProviderCapabilityGovernance,
         )
 
     def test_glm_standard_and_extended_text_boundaries_are_exact(self) -> None:

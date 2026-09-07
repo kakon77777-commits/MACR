@@ -275,6 +275,26 @@ def success_document() -> dict[str, Any]:
 
 
 class GlmFlashWorkerProviderTests(unittest.TestCase):
+    def test_constructor_rejects_rogue_unpublished_capability_policy(self):
+        rogue = replace(
+            glm_extended_text_policy(),
+            tier_id="rogue_unbounded",
+            max_latency_s=3_600,
+            patch_allowed=True,
+            write_scope_allowed=True,
+            verification_required=False,
+        )
+
+        with self.assertRaisesRegex(ConfigurationError, "supported"):
+            _GlmFlashWorkerProvider(
+                glm_config(),
+                transport=FakeTransport(success_document()),
+                environ={},
+                key_source=StaticKeySource(),
+                approval_store=AllowingApprovalStore(),
+                capability_policy=rogue,
+            )
+
     def test_legacy_pre_tier_approval_is_distinctly_incompatible(self):
         with d_drive_tempdir() as state_root:
             provider = _GlmFlashWorkerProvider(

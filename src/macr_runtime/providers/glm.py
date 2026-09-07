@@ -392,6 +392,21 @@ class GlmFlashWorkerProvider(BaseProvider):
                     capability_binding.revision,
                 )
         selected_binding = selected_policy.binding()
+        try:
+            supported_policy = ProviderCapabilityResolver.builtins_only().resolve(
+                selected_policy.provider_id,
+                selected_policy.model_id,
+                selected_policy.tier_id,
+                selected_policy.revision,
+            )
+        except ProviderPolicyError as exc:
+            raise ConfigurationError(
+                "GLM capability policy is not adapter-supported"
+            ) from exc
+        if supported_policy != selected_policy:
+            raise ConfigurationError(
+                "GLM capability policy is not adapter-supported"
+            )
         if capability_binding is not None and capability_binding != selected_binding:
             raise ConfigurationError(
                 "GLM capability binding does not match the exact policy"

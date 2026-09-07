@@ -4,6 +4,7 @@ import hashlib
 import json
 import uuid
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from macr_runtime.authority import AuthorityScope
@@ -30,6 +31,8 @@ from macr_runtime.execution import (
 from macr_runtime.errors import LegacyPreTierIncompatibleError
 from macr_runtime.providers.base import BaseProvider, ProviderHealth
 from macr_runtime.provider_capability import ProviderTierBinding, glm_standard_policy
+from macr_runtime.provider_capability import glm_extended_text_policy
+from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime, dispatch_resource_key
 
@@ -181,6 +184,43 @@ def issue_context(
 
 
 class RuntimeV05Tests(unittest.TestCase):
+    def test_cached_extended_binding_is_rejected_after_active_head_is_standard(self) -> None:
+        cached = glm_extended_text_policy().binding()
+        provider = ObservedProvider(
+            "glm_flash_worker",
+            answer="candidate",
+            model="glm-5.3-flash",
+            capability_binding=cached,
+        )
+        task = delegated_task(task_id="stale-cached-tier")
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            capability_store = ProviderCapabilityPolicyStore(
+                state_root / "settings" / "provider-capability-policies.sqlite3"
+            )
+            services = replace(
+                services,
+                capability_policies=capability_store,
+            )
+            context = issue_context(
+                services,
+                provider.provider_id,
+                task,
+                provider_tier_binding_digest=cached.binding_digest,
+            )
+
+            result = MacrRuntime(ProviderRegistry((provider,)), services).invoke(
+                provider.provider_id,
+                task,
+                context,
+            )
+            events = services.events.read_events(run_id=context.run_id)
+
+        self.assertEqual(result.failure_code, "ProviderPolicyError")
+        self.assertEqual(result.failure_stage, "provider_capability")
+        self.assertEqual(provider.calls, 0)
+        self.assertEqual(events, ())
+
     def test_legacy_provider_approval_refuses_before_lease_or_event(self) -> None:
         binding = ProviderTierBinding(
             provider_id="approval_provider",

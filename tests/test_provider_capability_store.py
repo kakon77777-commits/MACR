@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+import hashlib
+import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
-from macr_runtime.errors import DirectStoreConflict
+from macr_runtime.errors import DirectStoreConflict, DispatchAuthorizationError
+from macr_runtime.execution import AuthorizationReference
 from macr_runtime.provider_capability import (
     glm_extended_text_policy,
     glm_standard_policy,
 )
 from macr_runtime.provider_capability_store import (
-    DispatchAuthorityTierActivationVerifier,
+    ProviderCapabilityGovernance,
     ProviderCapabilityPolicyStore,
     read_effective_binding,
     read_effective_policy,
@@ -22,18 +25,109 @@ from macr_runtime.storage import StorageLayout
 from tests.support import d_drive_tempdir
 
 
-class ExactWitnessVerifier:
-    def __init__(self, accepted_witness: str) -> None:
-        self.accepted_witness = accepted_witness
-        self.calls: list[tuple[str, str]] = []
-
+class AllowAllVerifier:
     def verify(self, *, witness: str, binding_digest: str) -> None:
-        self.calls.append((witness, binding_digest))
-        if witness != self.accepted_witness:
-            raise DirectStoreConflict("operator activation witness is invalid")
+        del witness, binding_digest
 
 
 class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
+    def test_allow_all_verifier_cannot_activate_without_authority_store(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "policies.sqlite3"
+            store = ProviderCapabilityPolicyStore(path)
+            extended = glm_extended_text_policy()
+            store.save_policy(extended)
+
+            with self.assertRaises((AttributeError, DirectStoreConflict)):
+                store.activate(
+                    extended.binding().binding_digest,
+                    witness="fabricated",
+                    verifier=AllowAllVerifier(),
+                )
+
+            self.assertEqual(
+                store.effective_binding("glm_flash_worker", "glm-5.3-flash"),
+                glm_standard_policy().binding(),
+            )
+
+    def test_store_rejects_policy_not_published_by_provider_adapter(self) -> None:
+        rogue = replace(
+            glm_extended_text_policy(),
+            tier_id="rogue_unbounded",
+            max_latency_s=3_600,
+            patch_allowed=True,
+            write_scope_allowed=True,
+            verification_required=False,
+        )
+        with d_drive_tempdir() as temp:
+            store = ProviderCapabilityPolicyStore(temp / "policies.sqlite3")
+
+            with self.assertRaisesRegex(DirectStoreConflict, "supported"):
+                store.save_policy(rogue)
+
+            self.assertEqual(
+                store.effective_binding("glm_flash_worker", "glm-5.3-flash"),
+                glm_standard_policy().binding(),
+            )
+
+    def test_canonical_rogue_row_is_rejected_during_effective_read(self) -> None:
+        rogue = replace(
+            glm_extended_text_policy(),
+            tier_id="rogue_unbounded",
+            max_latency_s=3_600,
+            patch_allowed=True,
+        )
+        body = json.dumps(
+            rogue.to_dict(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        body_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        binding = rogue.binding()
+        with d_drive_tempdir() as temp:
+            path = temp / "policies.sqlite3"
+            store = ProviderCapabilityPolicyStore(path)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    """INSERT INTO provider_capability_policies(
+                        provider_id, model_id, tier_id, revision, body_json,
+                        body_sha256, binding_digest, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        rogue.provider_id,
+                        rogue.model_id,
+                        rogue.tier_id,
+                        rogue.revision,
+                        body,
+                        body_sha256,
+                        binding.binding_digest,
+                        "2026-09-07T00:00:00+00:00",
+                    ),
+                )
+                connection.execute(
+                    """INSERT INTO provider_capability_active(
+                        provider_id, model_id, tier_id, revision,
+                        binding_digest, authority_digest, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        rogue.provider_id,
+                        rogue.model_id,
+                        rogue.tier_id,
+                        rogue.revision,
+                        binding.binding_digest,
+                        "f" * 64,
+                        "2026-09-07T00:00:00+00:00",
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaisesRegex(DirectStoreConflict, "supported"):
+                store.effective_policy(rogue.provider_id, rogue.model_id)
+
     def test_activation_can_consume_but_not_issue_exact_dispatch_authority(self) -> None:
         with d_drive_tempdir() as temp:
             binding = glm_extended_text_policy().binding()
@@ -53,16 +147,9 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
             )
             store = ProviderCapabilityPolicyStore(temp / "policies.sqlite3")
             store.save_policy(glm_extended_text_policy())
-            verifier = DispatchAuthorityTierActivationVerifier(
-                authorities,
-                reference,
-                provider_id=binding.provider_id,
-            )
-
-            store.activate(
+            ProviderCapabilityGovernance(store, authorities).activate(
                 binding.binding_digest,
-                witness=reference.digest,
-                verifier=verifier,
+                reference,
             )
 
             self.assertEqual(
@@ -117,7 +204,7 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
                 store.effective_binding("glm_flash_worker", "glm-5.3-flash"),
                 glm_standard_policy().binding(),
             )
-            with self.assertRaisesRegex(DirectStoreConflict, "conflicts"):
+            with self.assertRaisesRegex(DirectStoreConflict, "supported"):
                 store.save_policy(replace(extended, max_latency_s=901))
 
     def test_activation_requires_exact_preexisting_witness(self) -> None:
@@ -126,23 +213,44 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
             store = ProviderCapabilityPolicyStore(path)
             extended = glm_extended_text_policy()
             store.save_policy(extended)
-            verifier = ExactWitnessVerifier("owner-witness")
+            authorities = DispatchAuthorityStore(temp / "runtime.sqlite3")
+            missing = AuthorizationReference(
+                source_kind="missing",
+                source_id="missing",
+                digest="a" * 64,
+                revision=1,
+                epoch=0,
+                scope="missing",
+            )
 
-            with self.assertRaisesRegex(DirectStoreConflict, "witness"):
-                store.activate(
+            with self.assertRaises(DispatchAuthorizationError):
+                ProviderCapabilityGovernance(store, authorities).activate(
                     extended.binding().binding_digest,
-                    witness="fabricated",
-                    verifier=verifier,
+                    missing,
                 )
             self.assertEqual(
                 store.effective_binding("glm_flash_worker", "glm-5.3-flash"),
                 glm_standard_policy().binding(),
             )
 
-            store.activate(
+            reference = authorities.issue(
+                source_kind="operator_policy_authority",
+                source_id="extended-v1",
+                scope=AuthorityScope(
+                    providers=(extended.provider_id,),
+                    planes=("policy_activation",),
+                    task_types=("provider_tier_activation",),
+                    provider_tier_binding_digests=(
+                        extended.binding().binding_digest,
+                    ),
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            ProviderCapabilityGovernance(store, authorities).activate(
                 extended.binding().binding_digest,
-                witness="owner-witness",
-                verifier=verifier,
+                reference,
             )
             self.assertEqual(
                 store.effective_binding("glm_flash_worker", "glm-5.3-flash"),
@@ -159,10 +267,25 @@ class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
             store = ProviderCapabilityPolicyStore(path)
             extended = glm_extended_text_policy()
             store.save_policy(extended)
-            store.activate(
+            authorities = DispatchAuthorityStore(temp / "runtime.sqlite3")
+            reference = authorities.issue(
+                source_kind="operator_policy_authority",
+                source_id="extended-v1",
+                scope=AuthorityScope(
+                    providers=(extended.provider_id,),
+                    planes=("policy_activation",),
+                    task_types=("provider_tier_activation",),
+                    provider_tier_binding_digests=(
+                        extended.binding().binding_digest,
+                    ),
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            ProviderCapabilityGovernance(store, authorities).activate(
                 extended.binding().binding_digest,
-                witness="owner-witness",
-                verifier=ExactWitnessVerifier("owner-witness"),
+                reference,
             )
             connection = sqlite3.connect(path)
             try:

@@ -3,11 +3,21 @@ from __future__ import annotations
 import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
+from datetime import timedelta
 
+from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.event_store import SqliteEventStore
 from macr_runtime.errors import DispatchAuthorizationError
 from macr_runtime.execution import DispatchOrigin, InteractionPlane
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.provider_capability import (
+    glm_extended_text_policy,
+    glm_standard_policy,
+)
+from macr_runtime.provider_capability_store import (
+    ProviderCapabilityGovernance,
+    ProviderCapabilityPolicyStore,
+)
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.scheduler import PlanQueue, QueueMemberState
 from macr_runtime.t1_dispatcher import T1DispatchError, T1Dispatcher
@@ -40,7 +50,7 @@ def approved_manifest(provider: GlmFlashWorkerProvider) -> T1ExecutionManifest:
                 route=original.route,
                 token_policy_digest=original.token_policy_digest,
                 provider_tier_binding_digest=(
-                    original.provider_tier_binding_digest
+                    provider.capability_binding.binding_digest
                 ),
                 role_digest=original.role_digest,
                 privacy=original.privacy,
@@ -103,6 +113,72 @@ class FailingFinishEventStore(SqliteEventStore):
 
 
 class T1DispatcherTests(unittest.TestCase):
+    def test_stage_rechecks_active_head_after_registry_construction(self) -> None:
+        now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            store = ProviderCapabilityPolicyStore(
+                state_root / "settings" / "provider-capability-policies.sqlite3"
+            )
+            services = replace(services, capability_policies=store)
+            authorities = DispatchAuthorityStore(services.events.path, now=clock)
+            governance = ProviderCapabilityGovernance(store, authorities)
+            for ordinal, policy in enumerate(
+                (glm_extended_text_policy(), glm_standard_policy()),
+                start=1,
+            ):
+                store.save_policy(policy)
+                binding = policy.binding()
+                reference = authorities.issue(
+                    source_kind="operator_policy_authority",
+                    source_id=f"tier-switch-{ordinal}",
+                    scope=AuthorityScope(
+                        providers=(binding.provider_id,),
+                        planes=("policy_activation",),
+                        task_types=("provider_tier_activation",),
+                        provider_tier_binding_digests=(binding.binding_digest,),
+                    ),
+                    expires_at=(now + timedelta(minutes=5)).isoformat(),
+                )
+                governance.activate(binding.binding_digest, reference)
+                if policy.tier_id == "extended_text_candidate":
+                    provider = GlmFlashWorkerProvider(
+                        glm_config(),
+                        transport=FakeTransport(success_document()),
+                        environ={"MACR_STATE_ROOT": str(state_root)},
+                        key_source=StaticKeySource(),
+                        approval_store=AllowingApprovalStore(),
+                        token_policy=t1_glm_live_policy(),
+                        capability_policy=policy,
+                    )
+                    subject = approved_manifest(provider)
+            dispatcher = T1Dispatcher(
+                ProviderRegistry((provider,)),
+                services,
+                now=clock,
+            )
+
+            with self.assertRaisesRegex(T1DispatchError, "active.*capability"):
+                dispatcher.stage(
+                    subject,
+                    subject.authorized_dispatchers,
+                    subject.expires_at,
+                )
+            connection = services.events.database.connect()
+            try:
+                counts = tuple(
+                    connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                    for table in (
+                        "batch_authorities",
+                        "plan_queue_batches",
+                    )
+                )
+            finally:
+                connection.close()
+
+        self.assertEqual(counts, (0, 0))
+
     def test_mismatched_provider_tier_fails_before_authority_or_queue_write(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)

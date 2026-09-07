@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.cli import (
     _accounting_status,
     _capability_status,
@@ -46,7 +47,10 @@ from macr_runtime.contracts import (
 from macr_runtime.config import load_provider_configs
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.provider_capability import glm_extended_text_policy
-from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
+from macr_runtime.provider_capability_store import (
+    ProviderCapabilityGovernance,
+    ProviderCapabilityPolicyStore,
+)
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.registry import ProviderRegistry
@@ -94,12 +98,6 @@ class StaticKeySource:
 
     def check_metadata(self):
         return None
-
-
-class ExactWitnessVerifier:
-    def verify(self, *, witness, binding_digest):
-        if witness != "owner-witness":
-            raise AssertionError("unexpected witness")
 
 
 class ExplodingKeySource:
@@ -263,6 +261,91 @@ class DoctorTests(unittest.TestCase):
         self.assertNotIn(str(state_root), output.getvalue())
         self.assertEqual(posts_after_stage, 0)
         self.assertEqual(len(transport.posts), 1)
+
+    def test_t1_stage_resolves_current_extended_capability_head(self) -> None:
+        with d_drive_tempdir() as state_root:
+            extended = glm_extended_text_policy()
+            capability_store = ProviderCapabilityPolicyStore(
+                state_root / "settings" / "provider-capability-policies.sqlite3"
+            )
+            capability_store.save_policy(extended)
+            authorities = DispatchAuthorityStore(
+                state_root / "runtime" / "dispatch.sqlite3"
+            )
+            activation = authorities.issue(
+                source_kind="operator_policy_authority",
+                source_id="extended-t1-v1",
+                scope=AuthorityScope(
+                    providers=(extended.provider_id,),
+                    planes=("policy_activation",),
+                    task_types=("provider_tier_activation",),
+                    provider_tier_binding_digests=(
+                        extended.binding().binding_digest,
+                    ),
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            ProviderCapabilityGovernance(
+                capability_store,
+                authorities,
+            ).activate(extended.binding().binding_digest, activation)
+            config = next(
+                item
+                for item in load_provider_configs(
+                    ROOT / "config" / "providers.json"
+                )
+                if item.id == "glm_flash_worker"
+            )
+            provider = GlmFlashWorkerProvider(
+                config,
+                transport=FakeTransport(success_document()),
+                environ={"MACR_STATE_ROOT": str(state_root)},
+                key_source=StaticKeySource(),
+                token_policy=t1_glm_live_policy(),
+                capability_policy=extended,
+            )
+            source = approved_manifest(provider)
+            subject = T1ExecutionManifest.create(
+                plan_digest=source.plan_digest,
+                members=source.members,
+                aggregate_cost_ceiling_usd=source.aggregate_cost_ceiling_usd,
+                campaign_cost_ceiling_usd=source.campaign_cost_ceiling_usd,
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=10)
+                ).isoformat(),
+                authorized_dispatchers=source.authorized_dispatchers,
+            )
+            approval_store = GlmApprovalStore(state_root)
+            for item in subject.members:
+                approval_store.create(
+                    item.task.delegation_approval_sha256,
+                    signing_key="test-id.test-secret",
+                    expires_in_days=1,
+                    approval_contract_schema=3,
+                    provider_tier_binding_digest=(
+                        item.provider_tier_binding_digest
+                    ),
+                )
+            manifest_path = state_root / "t1-extended-manifest.json"
+            manifest_path.write_text(
+                json.dumps(subject.to_dict()),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(state_root)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _t1_stage(
+                        str(manifest_path),
+                        str(ROOT / "config" / "providers.json"),
+                        dispatcher_ids=subject.authorized_dispatchers,
+                        expires_in_minutes=30,
+                    )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(output.getvalue())["status"], "t1_staged")
 
     def test_queue_status_lists_global_reconciliation_content_free(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
@@ -837,10 +920,28 @@ class DoctorTests(unittest.TestCase):
             )
             extended = glm_extended_text_policy()
             capability_store.save_policy(extended)
-            capability_store.activate(
+            authorities = DispatchAuthorityStore(temp / "runtime.sqlite3")
+            reference = authorities.issue(
+                source_kind="operator_policy_authority",
+                source_id="extended-v1",
+                scope=AuthorityScope(
+                    providers=(extended.provider_id,),
+                    planes=("policy_activation",),
+                    task_types=("provider_tier_activation",),
+                    provider_tier_binding_digests=(
+                        extended.binding().binding_digest,
+                    ),
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            ProviderCapabilityGovernance(
+                capability_store,
+                authorities,
+            ).activate(
                 extended.binding().binding_digest,
-                witness="owner-witness",
-                verifier=ExactWitnessVerifier(),
+                reference,
             )
             task = TaskContract(
                 task_id="glm-preflight-extended",

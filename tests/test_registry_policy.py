@@ -1,13 +1,18 @@
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.config import load_provider_configs
 from macr_runtime.contracts import TaskContract
 from macr_runtime.errors import ProviderPolicyError
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.provider_capability import glm_extended_text_policy
-from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
+from macr_runtime.provider_capability_store import (
+    ProviderCapabilityGovernance,
+    ProviderCapabilityPolicyStore,
+)
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.token_policy import ModelTokenOverride, t1_glm_live_policy
 from tests.support import d_drive_tempdir, write_fake_google_credential
@@ -22,12 +27,6 @@ class StaticKeySource:
 
     def check_metadata(self):
         return None
-
-
-class ExactWitnessVerifier:
-    def verify(self, *, witness, binding_digest):
-        if witness != "owner-witness":
-            raise AssertionError("unexpected witness")
 
 
 class RegistryPolicyTests(unittest.TestCase):
@@ -118,10 +117,25 @@ class RegistryPolicyTests(unittest.TestCase):
             )
             extended = glm_extended_text_policy()
             store.save_policy(extended)
-            store.activate(
+            authorities = DispatchAuthorityStore(root / "runtime.sqlite3")
+            reference = authorities.issue(
+                source_kind="operator_policy_authority",
+                source_id="extended-v1",
+                scope=AuthorityScope(
+                    providers=(extended.provider_id,),
+                    planes=("policy_activation",),
+                    task_types=("provider_tier_activation",),
+                    provider_tier_binding_digests=(
+                        extended.binding().binding_digest,
+                    ),
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            ProviderCapabilityGovernance(store, authorities).activate(
                 extended.binding().binding_digest,
-                witness="owner-witness",
-                verifier=ExactWitnessVerifier(),
+                reference,
             )
             registry = ProviderRegistry.from_configs(
                 configs,
