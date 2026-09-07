@@ -2,9 +2,9 @@
 
 MACR is a migration-aware runtime for heterogeneous AI workers. The v0.7.0a0 Phase-C Alpha preserves the v0.6 Direct and delegated planes, adds the Agent contract/state kernels, and introduces a governed semantic working state: immutable graph revisions, per-Agent pinned bindings, authority-free proposals, atomic host-authorized commits, reconstructible receipts, and deterministic Goal-to-Plan context projection. Provider completion, private capture, semantic commit, projection, verification, acceptance, merge, release, and live-route activation remain separate states.
 
-This alpha line is the completed offline A-C foundation, not the full bounded single-Agent MVP. Phase D verified observation, governed action, temporal continuation, the closed Agent loop, and live provider use remain absent. Direct Chat remains a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model and model-token policy per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. No Codex/Claude Code host adapter or live T1 provider route is activated by this release.
+This alpha line is the completed offline A-C foundation, not the full bounded single-Agent MVP. Phase D verified observation, governed action, temporal continuation, the closed Agent loop, and live provider use remain absent. Direct Chat remains a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model and model-token policy per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. A provider-neutral Codex/Claude host-adapter core now exists offline, but live host-owned bindings and a live T1 provider route are not activated by this release.
 
-`0.7.0a1` remains reserved for the later A-H bounded single-Agent MVP. Claude Code direct provider access through MACR is recorded as deferred work; it is not implemented by `0.7.0a0` and does not authorize Anthropic API use.
+`0.7.0a1` remains reserved for the later A-H bounded single-Agent MVP. Claude Code can use the existing MACR CLI today under honest `cli` attribution; the trusted host-observed adapter embedding remains deferred/NotMeasured. Neither route authorizes Anthropic API use.
 
 ## Canonical D: placement
 
@@ -56,7 +56,7 @@ There is no automatic provider routing or fallback. A failed provider never invo
 
 ## Model-local token policies
 
-Token limits are no longer one global setting. Built-ins and append-only operator overrides are keyed by exact provider/model and stored at `settings\model-token-policies.sqlite3`. A new Direct conversation pins the exact canonical policy JSON and digest; changing an active override affects only later conversations. Delegated dispatch records the same digest and refuses an over-limit task before authority admission or transport; GLM approval schema 2 also binds it.
+Token limits are no longer one global setting. Built-ins and append-only operator overrides are keyed by exact provider/model and stored at `settings\model-token-policies.sqlite3`. A new Direct conversation pins the exact canonical policy JSON and digest; changing an active override affects only later conversations. Delegated dispatch records the same digest and refuses an over-limit task before authority admission or transport; GLM approval schema 3 binds it together with task ID, exact latency and provider-tier binding.
 
 | Exact provider/model | Warning context | Hard context | Default output | MACR max output |
 |---|---:|---:|---:|---:|
@@ -86,7 +86,7 @@ deterministic task preflight
   -> one terminal event and accounting outbox record
 ```
 
-Origin identity, authorization provenance, and lease ownership are three independent claims. Timing, a task name, or possession of a lease cannot substitute for current authority. The CLI creates a ten-minute one-shot authority only after the matching `--allow-network` or `--allow-local` opt-in and task preflight; GLM's exact-envelope host approval remains an additional provider-specific gate.
+Origin identity, authorization provenance, and lease ownership are three independent claims. Timing, a task name, or possession of a lease cannot substitute for current authority. The ordinary CLI creates a ten-minute one-shot authority only after the matching `--allow-network` or `--allow-local` opt-in and task preflight; the host-adapter core cannot issue authority and consumes a pre-issued operator authority/connectivity grant. GLM's exact-envelope host approval remains an additional provider-specific gate.
 
 Operational events now live in `runtime\dispatch.sqlite3`. The former `ledger\events.jsonl` is immutable source evidence and receives no new runtime writes.
 
@@ -100,7 +100,7 @@ cd 'D:\Ai\work together\MACR'
 
 Both suites are offline. `verify.ps1` runs the complete repository baseline. `verify-v06.ps1` holds the named `MACR_V06_QUIET_CENSUS` mutex, requires five zero-invoker samples before and after the suite, and adds exact schema fingerprints, the 1/2/3/4/8 queue matrix, a real three-process T1 complete-path mock, synchronized 32-process bootstrap, planner replay, identity, qualification, target-collision, accounting-privacy, cross-file and differential gates. It emits one deterministic `V06_SUMMARY` line and contacts no real provider or local model.
 
-Current schema versions are `runtime operational SQLite 6`, `observatory SQLite 2`, `accounting SQLite 2`, Direct conversation schema 2, and model-token policy schema 1.
+Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token policy schema 1, provider-capability-policy schema 1, and T1 manifest schema 2.
 
 For the dedicated multiprocess replay from a source checkout:
 
@@ -174,7 +174,23 @@ Restricted GLM Flash worker, loading its key from D: for this process only:
 .\scripts\invoke-glm.ps1 -TaskPath .\examples\glm-worker-task.example.json
 ```
 
-`glm_flash_worker` requires `delegable=true`, `delegation_class=non_sensitive_routine`, an exact `delegation_approval_sha256`, and a separate unexpired host-approval record under D: runtime state. That record binds the digest to `host_operator`, a UUID nonce, creation time, and expiration time, and is authenticated with HMAC-SHA256 using the separately controlled fixed GLM credential; editing the JSON or extending its expiry invalidates the MAC. A task cannot authorize itself merely by carrying its own checksum. The approval manifest covers the complete credential-free request payload, fixed provider/endpoint/model, task type, privacy, maximum output, pricing basis, and USD ceiling. Changing any covered byte invalidates approval before network use. Public or explicitly approved internal privacy, an empty `write_scope`, independent verification, no patch authority, and a positive conservative-list-price budget are also mandatory. It accepts only bounded text inputs with non-path labels, rejects obvious local-path/credential markers, and omits local task/workspace identity and currency budget from the outbound request. HTTPS schemes are not drive paths; observed `X:\\<LaTeX-command>` ambiguities are exempted only through a closed command set and cease to be exempt when path-like continuation follows. Semantic classification still belongs to the trusted operator.
+`glm_flash_worker` requires `delegable=true`, `delegation_class=non_sensitive_routine`, an exact `delegation_approval_sha256`, and a separate unexpired host-approval record under D: runtime state. New typed approval records bind approval-contract schema 3 and the exact provider-tier binding; pre-existing records remain immutable `legacy_pre_tier` evidence and cannot satisfy new dispatch. The approval is authenticated with HMAC-SHA256 using the separately controlled fixed GLM credential; editing the JSON or extending its expiry invalidates the MAC. A task cannot authorize itself merely by carrying its own checksum. The approval manifest covers task ID, exact latency, complete credential-free request payload, fixed provider/endpoint/model, provider-tier binding, task type, privacy, maximum output, pricing basis, and USD ceiling. Changing any covered byte invalidates approval before network use. Public or explicitly approved internal privacy, an empty `write_scope`, independent verification, no patch authority, and a positive conservative-list-price budget are also mandatory. It accepts only bounded text inputs with non-path labels, rejects obvious local-path/credential markers, and omits local task/workspace identity and currency budget from the outbound request. HTTPS schemes are not drive paths; observed `X:\\<LaTeX-command>` ambiguities are exempted only through a closed command set and cease to be exempt when path-like continuation follows. Semantic classification still belongs to the trusted operator.
+
+The immutable built-in `standard` GLM tier permits the two existing routine task
+types and a maximum 300-second transport timeout. The optional
+`extended_text_candidate` tier permits non-sensitive routine, analysis, review
+and code-text candidates up to 900 seconds. It still grants no patch, write
+scope or tools. Activation consumes a separately pre-issued authority bound to
+the exact provider/model/tier/revision/policy/limit digest; no task field or CLI
+flag can activate it.
+
+Read the current tier, legacy approval/queue counts and accounting state without
+creating or migrating state:
+
+```powershell
+.\scripts\macr.ps1 capability-status --provider glm_flash_worker
+.\scripts\macr.ps1 accounting-status
+```
 
 ## T1 staging and worker commands
 
@@ -218,7 +234,7 @@ Only validated JPEG/PNG bytes become artifacts. Paths, prompts, answers, source 
 
 - Direct Chat is an alpha candidate. Offline and local service gates pass, but one real multi-turn Grok conversation and one real multi-turn Qwythos conversation remain operator acceptance gates.
 - Transport-level cancellation and explicit late-result recovery are not exposed in Direct UI 0.1. There is no fake cancel control; these are required before a beta label.
-- No host adapter, autonomous router, autonomous acceptance, or activated live route. The explicit T1 worker is implemented and synthetically verified, but remains operator-controlled and offline-only.
+- The host-adapter core is implemented and synthetically verified, but no live host-owned Codex/Claude binding, autonomous router, autonomous acceptance, or activated live tier follows. The explicit T1 worker remains operator-controlled and offline-only.
 - Direct `operator_managed` calls are warn-only and require accounting. Privacy, credential, legacy-migration, current authority, route, and lease failures remain hard pre-network gates.
 - No provider-side hard USD cap; actual Grok cost is checked after completion and an overrun becomes `candidate_failure`.
 - No Grok search, code execution, files, images, or server-side tools.

@@ -191,6 +191,7 @@ dispatch.
 | Provider config | Remains schema 2 | Byte/semantic behavior unchanged | Contains no tier authority |
 | `AuthorityScope` | Contract 2 adds exact binding-digest set | Empty field reads as `legacy_pre_tier` | GLM requires exact binding digest |
 | `DispatchContext` / event | Contract 2 adds exact binding digest and payload schema marker | Old events stay byte-preserved/readable | GLM context must carry exact digest |
+| Runtime T1 queue | Runtime schema 7 adds nullable binding digest | Schema-6 rows migrate as null/`legacy_pre_tier` | New T1 enqueue requires exact digest |
 | GLM approval | Approval schema 3 | Schema-2 records stay immutable/incompatible | Exact task, latency and binding digest required |
 | Accounting DB | Schema 3 adds nullable binding digest and typed failure code/stage | Existing rows remain null and report `legacy_pre_tier` | New GLM rows require exact digest |
 | Accounting outbox | New payload schema 2 | Schema-1 payload bytes remain unchanged | New GLM emission uses schema 2 |

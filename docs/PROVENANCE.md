@@ -265,3 +265,58 @@ bounded single-Agent MVP. Claude Code direct provider access is a deferred
 subscription-client host-adapter requirement. No `ANTHROPIC_API_KEY`, provider
 generation, credential read, shared runtime migration, or live route is involved
 in this version transition.
+
+## v0.7.0a0 host-adapter and GLM capability-policy candidate
+
+Neo authorized repairing the measured locale/timeout/failure/accounting issues,
+letting Claude Code use MACR's other providers, and preparing an initial bounded
+GLM capability increase. Work was isolated at
+`D:\Ai\work together\MACR\.worktrees\v070a0-host-adapters-glm-policy` on
+`feature/v070a0-host-adapters-glm-policy`, based on release commit
+`20a2d5e02e34c0faf74fcaa5c40721df9aa37763` / tree
+`a16a181a96e7ede415648872b68263db43a02d13`.
+
+The implementation train is append-only:
+
+| Boundary | Commit |
+|---|---|
+| reviewed design | `0af3c1bb30fac4b039497198d93ffda01cd837a5` |
+| locale-safe raw-byte and JSON test harness | `d92ec10ada88642abcf04980082a0eb85b049e7d` |
+| operator-owned provider capability policies | `31660b6` |
+| tier-bound authority, typed failure and accounting schema 3 | `cc4fd99` |
+| GLM approval schema 3 and T1 manifest schema 2 | `be95675` |
+| governed shared host adapter and read-only status surfaces | `0a0ba159` |
+| pre-issued-authority tier activation verifier | `f838bf87eb4b002a08dd2fc6dcf6c124027f857f` |
+
+The code subject is `f838bf87eb4b002a08dd2fc6dcf6c124027f857f` /
+tree `12f39b35c54cabdc07b4c385e27c11ba8ce6cc02`. Package version remains
+`0.7.0a0`.
+
+The former GLM transport `min(max_latency_s, 300)` was replaced by exact tier
+validation: standard permits at most 300 seconds and the inactive
+`extended_text_candidate` policy permits at most 900 seconds. Both remain
+non-sensitive, candidate-only, no-patch, no-write and no-tools. Tasks/models
+cannot select or activate a tier. Activation consumes a pre-issued authority
+whose scope binds the full provider/model/tier/revision/policy/limit digest.
+
+Approval schema 3 binds task ID, exact latency and tier digest. New typed
+approval records and T1 schema-2 members carry that evidence; prior records and
+schema-1 manifests remain immutable `legacy_pre_tier` evidence and cannot
+satisfy new dispatch. Runtime schema 7 and accounting schema 3 add nullable
+tier/failure fields without rewriting historical payloads. Read-only status
+commands enumerate legacy/current state and cost/outbox totals without prompts,
+answers, keys, paths or provider calls.
+
+Claude Code and Codex can use the existing MACR CLI under honest CLI origin.
+The offline `MacrHostAdapter` consumes an injected host-owned verifier and
+pre-issued operator authority/connectivity grant; it cannot mint either.
+Environment variables and hook JSON alone remain insufficient for
+`task_local_host_observed`, so live host binding is `NotMeasured`. Claude
+subscription still grants no `ANTHROPIC_API_KEY` authority.
+
+A clean Phase C run on code commit `0a0ba159` executed 777 inherited tests plus
+the Phase A/B/C focused gates with two existing platform capability skips, zero
+failures, network false, provider generation false, Phase D false and clean Git
+state. The subsequent activation-verifier commit passed all six focused store
+tests. No key read, real provider call, shared-state migration/activation,
+merge, tag, push, release, deployment or adoption occurred in this candidate.

@@ -1,6 +1,6 @@
 # Provider status
 
-Updated: 2026-09-01 for MACR v0.7.0a0 Phase-C Alpha
+Updated: 2026-09-07 for MACR v0.7.0a0 Phase-C Alpha feature candidate
 
 | Provider ID | Required model/route | Credential | Billing | Runtime state |
 |---|---|---|---:|---|
@@ -20,7 +20,7 @@ Updated: 2026-09-01 for MACR v0.7.0a0 Phase-C Alpha
 
 Delegated callable profiles enter the v0.7.0a0 CLI through current-epoch authority, fenced lease, SQLite dispatch/accounting records, private candidate capture, and return-contract validation. Direct Grok/Qwythos turns keep the separate `DirectRuntime` contract. Phase C adds semantic proposals and host-governed commits but does not invoke providers. T1 has explicit `t1-stage` and one-member `t1-worker` product paths, but the live T1 route remains stopped and offline-only.
 
-Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. The three-process T1 gate uses an injected fake transport; no real provider generation occurred. Direct Chat is locally executable; Codex/Claude Code host adapters and autonomous routing remain unavailable.
+Provider reachability, billing entitlement, and account configuration are not implied by the offline checkpoint. The three-process T1 gate uses an injected fake transport; no real provider generation occurred. Direct Chat is locally executable. A shared Codex/Claude host-adapter core is implemented offline; live host-owned binding and autonomous routing remain unavailable/NotMeasured.
 
 Accounting's `soft_warning` state remains distinct from each delegated provider adapter's hard task-budget gate. The Direct local `operator_managed` profile is now active for newly created Direct conversations and is warn-only; exact settings are pinned per conversation.
 
@@ -70,6 +70,13 @@ Veo, TTS, and Lyria remain disabled until separate artifact, duration, long-runn
 
 `glm_flash_worker` is a low-cost external contractor for explicitly non-sensitive routine text work. It uses only the direct Z.ai general API endpoint and exact `glm-5.3-flash`; the Coding Plan endpoint, OpenRouter, substitute models, tools, retries, and provider fallback are not enabled.
 
+Provider capabilities are operator-owned and provider/model scoped. `standard`
+permits routine/conformance work up to 300 seconds.
+`extended_text_candidate` permits non-sensitive routine, analysis, review and
+code-text candidates up to 900 seconds. Both deny patches, write scope and
+tools. A task cannot select a tier; activation consumes a pre-issued authority
+witness bound to the full provider/model/tier/revision/policy/limit digest.
+
 Dispatch requires all of:
 
 - `delegable=true` on the task contract;
@@ -88,8 +95,8 @@ For T1, `queue-status` exposes only bounded content-free state. A strict private
 
 Do not read or use `ANTHROPIC_API_KEY`. A future Claude integration must be an explicitly approved subscription-client route and must not fall back to API billing.
 
-### Deferred Claude Code host adapter
+### Claude Code CLI and deferred host-owned binding
 
-**Claude Code direct provider access** is deferred and NotMeasured in v0.7.0a0. The intended later design lets an authorized Claude Code host call the same provider registry used by MACR—such as Grok, GLM, Google, MiniMax, or local Ollama/Qwythos—without converting Claude subscription access into Anthropic API billing. It must use the same provider registry, model-local token policy, authority/lease gates, candidate separation, and shared accounting records as the Codex-facing route.
+Claude Code can invoke the existing MACR CLI today under `cli` attribution and therefore call the same configured provider registry—such as Grok, GLM, Google, MiniMax, or local Ollama/Qwythos—without converting Claude subscription access into Anthropic API billing. The offline `MacrHostAdapter` core uses the same model-local token policy, provider capability, authority/lease gates, candidate separation, and shared accounting as the Codex-facing route.
 
-This is a host-adapter requirement, not an activated provider profile. No Claude Code adapter, cross-provider context transfer, Direct-conversation read permission, fallback, credential bridge, or live authority exists in this release. The current `claude_subscription` configuration remains disabled with `api_usage_allowed=false`.
+Trusted `task_local_host_observed` attribution still requires a host-owned verifier unavailable to generic/model shells and a pre-issued operator authority/connectivity grant. Environment variables and hook JSON alone remain forgeable discovery evidence. No cross-provider context transfer, Direct-conversation read permission, fallback, credential bridge, self-issued authority, or live host binding exists in this candidate. The current `claude_subscription` configuration remains disabled with `api_usage_allowed=false`.

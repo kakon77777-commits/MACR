@@ -165,7 +165,7 @@ class V06ReleaseGateTests(unittest.TestCase):
                 ROOT / "docs" / "STORAGE_AND_MIGRATION.md",
             )
         )
-        self.assertIn("runtime operational SQLite 6", active_docs)
+        self.assertIn("runtime operational SQLite 7", active_docs)
         self.assertIn("verify-v06.ps1", active_docs)
         checkpoint = (ROOT / "docs" / "V06_OFFLINE_CHECKPOINT.md").read_text(
             encoding="utf-8"

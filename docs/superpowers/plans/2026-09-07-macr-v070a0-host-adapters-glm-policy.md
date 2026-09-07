@@ -355,6 +355,7 @@ git commit -m "fix: enforce exact GLM capability timeout and approval"
 - Modify: `src/macr_runtime/t1_manifest.py`
 - Modify: `src/macr_runtime/t1_dispatcher.py`
 - Modify: `src/macr_runtime/scheduler.py`
+- Modify: `src/macr_runtime/runtime_db.py`
 - Modify: `tests/test_t1_manifest.py`
 - Modify: `tests/test_t1_dispatcher.py`
 - Modify: `tests/test_scheduler.py`
@@ -362,6 +363,7 @@ git commit -m "fix: enforce exact GLM capability timeout and approval"
 **Interfaces:**
 - New `T1ExecutionMember.provider_tier_binding_digest` participates in `t1_execution_member_v2`.
 - New manifests use `schema_version=2` and `t1_execution_manifest_v2`.
+- Runtime schema 7 adds nullable `provider_tier_binding_digest` to queue rows; schema-6 rows remain null and globally countable as legacy.
 - `inspect_t1_manifest()` returns content-free audit status for schema 1; `load_t1_manifest()` raises `LegacyPreTierIncompatibleError` before authority, lease, event or provider access.
 
 - [ ] **Step 1: Write schema-2 digest and legacy RED tests**
@@ -396,7 +398,7 @@ Expected: all offline complete-path and contention tests pass with no provider c
 - [ ] **Step 6: Commit T1 schema 2**
 
 ```powershell
-git add src/macr_runtime/t1_manifest.py src/macr_runtime/t1_dispatcher.py src/macr_runtime/scheduler.py tests/test_t1_manifest.py tests/test_t1_dispatcher.py tests/test_scheduler.py
+git add src/macr_runtime/t1_manifest.py src/macr_runtime/t1_dispatcher.py src/macr_runtime/scheduler.py src/macr_runtime/runtime_db.py tests/test_t1_manifest.py tests/test_t1_dispatcher.py tests/test_scheduler.py
 git commit -m "feat: bind T1 manifests to provider capability policy"
 ```
 
