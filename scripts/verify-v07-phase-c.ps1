@@ -76,19 +76,27 @@ try {
         throw 'Timed out acquiring the MACR v0.7 Phase C verification mutex.'
     }
 
-    $focusedOutput = @(python -m unittest @focusedModules -q 2>&1)
+    $testRunner = Join-Path $repoRoot 'tests\helpers\unittest_json.py'
+    $focusedOutput = @(python $testRunner @focusedModules)
     $focusedExit = $LASTEXITCODE
     if ($focusedExit) {
         $focusedOutput
         exit $focusedExit
     }
-    $focusedText = $focusedOutput -join "`n"
-    $focusedMatch = [regex]::Matches($focusedText, 'Ran\s+(\d+)\s+tests') |
+    $focusedLine = $focusedOutput |
+        Where-Object { $_.ToString().StartsWith('UNITTEST_SUMMARY=') } |
         Select-Object -Last 1
-    if (-not $focusedMatch) {
+    if (-not $focusedLine) {
         throw 'Could not parse the focused Phase C test count.'
     }
-    $focusedCount = [int]$focusedMatch.Groups[1].Value
+    $focusedSummary = $focusedLine.ToString().Substring(
+        'UNITTEST_SUMMARY='.Length
+    ) | ConvertFrom-Json
+    if ($focusedSummary.successful -ne $true) {
+        $focusedOutput
+        throw 'Focused Phase C tests did not report success.'
+    }
+    $focusedCount = [int]$focusedSummary.tests_run
 
     python -m compileall -q (Join-Path $repoRoot 'src') (Join-Path $repoRoot 'tests')
     if ($LASTEXITCODE) { exit $LASTEXITCODE }

@@ -18,8 +18,23 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 & (Join-Path $PSScriptRoot 'init-state.ps1') -StateRoot $env:MACR_STATE_ROOT | Out-Null
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-python -m unittest discover -s (Join-Path $repoRoot 'tests') -t $repoRoot -v
-if ($LASTEXITCODE) { exit $LASTEXITCODE }
+$testRunner = Join-Path $repoRoot 'tests\helpers\unittest_json.py'
+$testOutput = @(python $testRunner `
+    --discover-start (Join-Path $repoRoot 'tests') `
+    --top-level $repoRoot)
+$testExit = $LASTEXITCODE
+$testOutput
+$testLine = $testOutput |
+    Where-Object { $_.ToString().StartsWith('UNITTEST_SUMMARY=') } |
+    Select-Object -Last 1
+if (-not $testLine) {
+    throw 'Inherited verification did not emit a machine-readable test summary.'
+}
+$testSummary = $testLine.ToString().Substring('UNITTEST_SUMMARY='.Length) |
+    ConvertFrom-Json
+if ($testExit -or $testSummary.successful -ne $true) {
+    exit $(if ($testExit) { $testExit } else { 1 })
+}
 
 python -m compileall -q (Join-Path $repoRoot 'src') (Join-Path $repoRoot 'tests')
 if ($LASTEXITCODE) { exit $LASTEXITCODE }

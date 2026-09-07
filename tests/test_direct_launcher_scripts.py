@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import time
 import unittest
 import uuid
 from pathlib import Path
 
+from tests.helpers.process_capture import (
+    CapturedProcess,
+    assert_canaries_absent,
+    run_bytes,
+)
 from tests.support import DEFAULT_TEST_ROOT
 
 
@@ -16,14 +20,10 @@ INSTALL = ROOT / "scripts" / "install-direct-chat-shortcut.ps1"
 READ_KEY = ROOT / "scripts" / "read-grok-key.ps1"
 
 
-def run_powershell(*arguments: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+def run_powershell(*arguments: str) -> CapturedProcess:
+    return run_bytes(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", *arguments],
         cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8-sig",
     )
 
 
@@ -55,7 +55,7 @@ class DirectLauncherScriptTests(unittest.TestCase):
                 str(uuid_path),
             )
             self.assertNotEqual(identifier.returncode, 0)
-            self.assertNotIn(uuid_token, identifier.stderr)
+            assert_canaries_absent(identifier, (uuid_token.encode("ascii"),))
 
             escaped_script = str(READ_KEY).replace("'", "''")
             escaped_path = str(legacy_path).replace("'", "''")
@@ -78,7 +78,7 @@ class DirectLauncherScriptTests(unittest.TestCase):
                 str(invalid_path),
             )
             self.assertNotEqual(invalid.returncode, 0)
-            self.assertNotIn("not a valid token", invalid.stderr)
+            assert_canaries_absent(invalid, (b"not a valid token",))
         finally:
             for path in (legacy_path, uuid_path, invalid_path):
                 path.unlink(missing_ok=True)
@@ -96,6 +96,7 @@ class DirectLauncherScriptTests(unittest.TestCase):
         serialized = json.dumps(report)
         self.assertNotIn("xai-", serialized)
         self.assertNotIn("bootstrap", serialized.lower())
+        assert_canaries_absent(result, (b"xai-", b"bootstrap"))
 
     def test_start_script_keeps_qwythos_available_when_grok_key_is_invalid(self) -> None:
         DEFAULT_TEST_ROOT.mkdir(parents=True, exist_ok=True)
@@ -119,6 +120,10 @@ class DirectLauncherScriptTests(unittest.TestCase):
             self.assertNotIn(
                 "00000000-0000-4000-8000-000000000999",
                 result.stdout,
+            )
+            assert_canaries_absent(
+                result,
+                (b"00000000-0000-4000-8000-000000000999",),
             )
         finally:
             identifier_path.unlink(missing_ok=True)

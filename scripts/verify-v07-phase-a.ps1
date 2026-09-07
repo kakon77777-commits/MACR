@@ -49,36 +49,50 @@ try {
         throw 'Timed out acquiring the MACR v0.7 Phase A verification mutex.'
     }
 
-    $focusedOutput = python -m unittest @focusedModules -q 2>&1
+    $testRunner = Join-Path $repoRoot 'tests\helpers\unittest_json.py'
+    $focusedOutput = @(python $testRunner @focusedModules)
     $focusedExit = $LASTEXITCODE
     if ($focusedExit) {
         $focusedOutput
         exit $focusedExit
     }
-    $focusedText = $focusedOutput -join "`n"
-    $focusedMatch = [regex]::Matches($focusedText, 'Ran\s+(\d+)\s+tests') |
+    $focusedLine = $focusedOutput |
+        Where-Object { $_.ToString().StartsWith('UNITTEST_SUMMARY=') } |
         Select-Object -Last 1
-    if (-not $focusedMatch) {
+    if (-not $focusedLine) {
         throw 'Could not parse the focused Phase A test count.'
     }
-    $focusedCount = [int]$focusedMatch.Groups[1].Value
+    $focusedSummary = $focusedLine.ToString().Substring(
+        'UNITTEST_SUMMARY='.Length
+    ) | ConvertFrom-Json
+    if ($focusedSummary.successful -ne $true) {
+        $focusedOutput
+        throw 'Focused Phase A tests did not report success.'
+    }
+    $focusedCount = [int]$focusedSummary.tests_run
 
     python -m compileall -q (Join-Path $repoRoot 'src') (Join-Path $repoRoot 'tests')
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-    $inheritedOutput = & (Join-Path $PSScriptRoot 'verify.ps1') 2>&1
+    $inheritedOutput = @(& (Join-Path $PSScriptRoot 'verify.ps1'))
     $inheritedExit = $LASTEXITCODE
     if ($inheritedExit) {
         $inheritedOutput
         exit $inheritedExit
     }
-    $inheritedText = $inheritedOutput -join "`n"
-    $inheritedMatch = [regex]::Matches($inheritedText, 'Ran\s+(\d+)\s+tests') |
+    $inheritedLine = $inheritedOutput |
+        Where-Object { $_.ToString().StartsWith('UNITTEST_SUMMARY=') } |
         Select-Object -Last 1
-    if (-not $inheritedMatch) {
+    if (-not $inheritedLine) {
         throw 'Could not parse the inherited test count.'
     }
-    $inheritedCount = [int]$inheritedMatch.Groups[1].Value
+    $inheritedSummary = $inheritedLine.ToString().Substring(
+        'UNITTEST_SUMMARY='.Length
+    ) | ConvertFrom-Json
+    if ($inheritedSummary.successful -ne $true) {
+        throw 'Inherited tests did not report success.'
+    }
+    $inheritedCount = [int]$inheritedSummary.tests_run
 
     $doctorText = python -m macr_runtime doctor --config (Join-Path $repoRoot 'config\providers.json')
     if ($LASTEXITCODE) { exit $LASTEXITCODE }
