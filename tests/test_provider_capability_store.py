@@ -3,13 +3,16 @@ from __future__ import annotations
 import sqlite3
 import unittest
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
+from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.errors import DirectStoreConflict
 from macr_runtime.provider_capability import (
     glm_extended_text_policy,
     glm_standard_policy,
 )
 from macr_runtime.provider_capability_store import (
+    DispatchAuthorityTierActivationVerifier,
     ProviderCapabilityPolicyStore,
     read_effective_binding,
     read_effective_policy,
@@ -31,6 +34,42 @@ class ExactWitnessVerifier:
 
 
 class ProviderCapabilityPolicyStoreTests(unittest.TestCase):
+    def test_activation_can_consume_but_not_issue_exact_dispatch_authority(self) -> None:
+        with d_drive_tempdir() as temp:
+            binding = glm_extended_text_policy().binding()
+            authorities = DispatchAuthorityStore(temp / "runtime.sqlite3")
+            reference = authorities.issue(
+                source_kind="operator_policy_authority",
+                source_id="glm-extended-text-v1",
+                scope=AuthorityScope(
+                    providers=(binding.provider_id,),
+                    planes=("policy_activation",),
+                    task_types=("provider_tier_activation",),
+                    provider_tier_binding_digests=(binding.binding_digest,),
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            store = ProviderCapabilityPolicyStore(temp / "policies.sqlite3")
+            store.save_policy(glm_extended_text_policy())
+            verifier = DispatchAuthorityTierActivationVerifier(
+                authorities,
+                reference,
+                provider_id=binding.provider_id,
+            )
+
+            store.activate(
+                binding.binding_digest,
+                witness=reference.digest,
+                verifier=verifier,
+            )
+
+            self.assertEqual(
+                store.effective_binding(binding.provider_id, binding.model_id),
+                binding,
+            )
+
     def test_runtime_services_uses_the_d_drive_capability_store(self) -> None:
         with d_drive_tempdir() as temp:
             layout = StorageLayout(

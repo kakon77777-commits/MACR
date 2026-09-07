@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -8,8 +9,10 @@ from pathlib import Path
 from typing import Protocol
 
 from .canonical import canonical_json_bytes
+from .authority import DispatchAuthorityStore
 from .direct_database import DirectDatabase
 from .errors import DirectStoreConflict
+from .execution import AuthorizationReference
 from .provider_capability import (
     ProviderCapabilityPolicy,
     ProviderCapabilityResolver,
@@ -23,6 +26,39 @@ def _utc_now() -> str:
 
 class OperatorTierActivationVerifier(Protocol):
     def verify(self, *, witness: str, binding_digest: str) -> None: ...
+
+
+class DispatchAuthorityTierActivationVerifier:
+    def __init__(
+        self,
+        authorities: DispatchAuthorityStore,
+        reference: AuthorizationReference,
+        *,
+        provider_id: str,
+    ) -> None:
+        if not isinstance(authorities, DispatchAuthorityStore):
+            raise ValueError("authorities must be a DispatchAuthorityStore")
+        if not isinstance(reference, AuthorizationReference):
+            raise ValueError("reference must be an AuthorizationReference")
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            raise ValueError("provider_id must be non-empty")
+        self.authorities = authorities
+        self.reference = reference
+        self.provider_id = provider_id.strip()
+
+    def verify(self, *, witness: str, binding_digest: str) -> None:
+        if not isinstance(witness, str) or not hmac.compare_digest(
+            witness,
+            self.reference.digest,
+        ):
+            raise DirectStoreConflict("operator activation witness is invalid")
+        self.authorities.verify(
+            self.reference,
+            provider_id=self.provider_id,
+            plane="policy_activation",
+            task_type="provider_tier_activation",
+            provider_tier_binding_digest=binding_digest,
+        )
 
 
 def _encode_policy(policy: ProviderCapabilityPolicy) -> tuple[str, str]:
@@ -416,6 +452,7 @@ def read_effective_policy(
 
 __all__ = [
     "OperatorTierActivationVerifier",
+    "DispatchAuthorityTierActivationVerifier",
     "ProviderCapabilityPolicyStore",
     "read_effective_binding",
     "read_effective_policy",
