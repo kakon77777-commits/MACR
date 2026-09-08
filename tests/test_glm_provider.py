@@ -418,6 +418,43 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             "quality_first_work",
         )
 
+    def test_operator_override_cannot_lower_quality_first_requirement(self):
+        canonical = ModelTokenPolicyResolver.builtins_only().resolve(
+            "glm_flash_worker",
+            "glm-5.3-flash",
+        )
+        lowered = replace(
+            canonical,
+            default_output_tokens=32_768,
+            max_output_tokens=32_768,
+            policy_source="operator_override:1",
+        )
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+            token_policy=lowered,
+        )
+        base = delegated_task(max_cost_usd=0.10)
+        task = replace(
+            base,
+            constraints=replace(
+                base.constraints,
+                max_output_tokens=32_768,
+            ),
+            delegation_approval_sha256=None,
+        )
+
+        with self.assertRaises(ProviderOutputBudgetTooSmallError) as raised:
+            provider.approval_metadata(task)
+
+        self.assertEqual(
+            raised.exception.safe_diagnostic()["minimum_max_output_tokens"],
+            65_536,
+        )
+
     def test_quality_first_work_binds_exact_65536_request(self):
         provider = _GlmFlashWorkerProvider(
             glm_config(),

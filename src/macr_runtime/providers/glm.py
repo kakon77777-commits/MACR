@@ -61,6 +61,7 @@ _FIXED_BASE_URL = "https://api.z.ai/api/paas/v4"
 _FIXED_ENDPOINT_PATH = "/chat/completions"
 _FIXED_MODEL_PROVIDER = "glm_flash_worker"
 _FIXED_MODEL = "glm-5.3-flash"
+_QUALITY_FIRST_OUTPUT_TOKENS = 65_536
 _ZAI_KEY_SHAPE = re.compile(r"^[^.\s]+\.[^.\s]+$")
 _OBVIOUS_CREDENTIAL_MARKER = re.compile(
     r"(?i)(?:-----BEGIN (?:[a-z0-9]+ )*PRIVATE KEY-----|"
@@ -116,7 +117,7 @@ def glm_output_budget_decision(
     value = (
         token_policy.minimum_task_output_tokens
         if short_exact
-        else token_policy.default_output_tokens
+        else _QUALITY_FIRST_OUTPUT_TOKENS
     )
     return GlmOutputBudgetDecision(
         profile=(
