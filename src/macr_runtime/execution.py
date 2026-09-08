@@ -12,6 +12,9 @@ from .contracts import ProviderResult
 
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_SAFE_TELEMETRY_IDENTIFIER = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+)
 
 
 def _non_empty(name: str, value: str) -> str:
@@ -50,6 +53,28 @@ def _optional_non_negative_float(name: str, value: float | None) -> float | None
     if not isfinite(normalized) or normalized < 0:
         raise ValueError(f"{name} must be a finite non-negative number or None")
     return normalized
+
+
+def _optional_boolean(name: str, value: bool | None) -> bool | None:
+    if value is not None and not isinstance(value, bool):
+        raise ValueError(f"{name} must be a boolean or None")
+    return value
+
+
+def _optional_http_status(name: str, value: int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 100 <= value <= 599:
+        raise ValueError(f"{name} must be an HTTP status or None")
+    return value
+
+
+def _optional_telemetry_identifier(name: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _SAFE_TELEMETRY_IDENTIFIER.fullmatch(value):
+        raise ValueError(f"{name} must be a bounded identifier or None")
+    return value
 
 
 def _uuid4(name: str, value: str) -> str:
@@ -287,6 +312,11 @@ class RawProviderObservation:
     duration_ms: int | None
     answer_bytes: bytes | None
     provider_state: ProviderState
+    network_attempted: bool | None = None
+    response_received: bool | None = None
+    provider_http_status: int | None = None
+    provider_error_code: str | None = None
+    transport_stage: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -325,9 +355,62 @@ class RawProviderObservation:
             raise ValueError("answer_bytes must be bytes or None")
         if not isinstance(self.provider_state, ProviderState):
             raise ValueError("provider_state must be a ProviderState")
+        object.__setattr__(
+            self,
+            "network_attempted",
+            _optional_boolean("network_attempted", self.network_attempted),
+        )
+        object.__setattr__(
+            self,
+            "response_received",
+            _optional_boolean("response_received", self.response_received),
+        )
+        object.__setattr__(
+            self,
+            "provider_http_status",
+            _optional_http_status(
+                "provider_http_status",
+                self.provider_http_status,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "provider_error_code",
+            _optional_telemetry_identifier(
+                "provider_error_code",
+                self.provider_error_code,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "transport_stage",
+            _optional_telemetry_identifier(
+                "transport_stage",
+                self.transport_stage,
+            ),
+        )
+        if self.response_received is True and self.network_attempted is not True:
+            raise ValueError("response_received requires network_attempted")
+        if (
+            self.provider_http_status is not None
+            or self.provider_error_code is not None
+        ) and self.response_received is not True:
+            raise ValueError(
+                "provider response telemetry requires response_received"
+            )
 
     @classmethod
-    def empty(cls, provider_id: str) -> "RawProviderObservation":
+    def empty(
+        cls,
+        provider_id: str,
+        *,
+        duration_ms: int | None = None,
+        network_attempted: bool | None = None,
+        response_received: bool | None = None,
+        provider_http_status: int | None = None,
+        provider_error_code: str | None = None,
+        transport_stage: str | None = None,
+    ) -> "RawProviderObservation":
         return cls(
             provider_id=provider_id,
             model=None,
@@ -337,9 +420,14 @@ class RawProviderObservation:
             currency_cost_usd=None,
             cost_kind=None,
             pricing_basis_version=None,
-            duration_ms=None,
+            duration_ms=duration_ms,
             answer_bytes=None,
             provider_state=ProviderState.MALFORMED,
+            network_attempted=network_attempted,
+            response_received=response_received,
+            provider_http_status=provider_http_status,
+            provider_error_code=provider_error_code,
+            transport_stage=transport_stage,
         )
 
     def to_public_dict(self) -> dict[str, object]:
@@ -357,6 +445,11 @@ class RawProviderObservation:
             "cost_kind": self.cost_kind,
             "pricing_basis_version": self.pricing_basis_version,
             "duration_ms": self.duration_ms,
+            "network_attempted": self.network_attempted,
+            "response_received": self.response_received,
+            "provider_http_status": self.provider_http_status,
+            "provider_error_code": self.provider_error_code,
+            "transport_stage": self.transport_stage,
             "answer_bytes": len(data) if data is not None else 0,
             "answer_sha256": (
                 hashlib.sha256(data).hexdigest() if data is not None else None
@@ -434,6 +527,50 @@ class ProviderExecution:
             duration_ms=metrics.get("duration_ms"),
             answer_bytes=answer_bytes,
             provider_state=ProviderState.COMPLETED,
+            network_attempted=(
+                result.provider_meta.get("network_attempted")
+                if isinstance(
+                    result.provider_meta.get("network_attempted"),
+                    bool,
+                )
+                else None
+            ),
+            response_received=(
+                result.provider_meta.get("response_received")
+                if isinstance(
+                    result.provider_meta.get("response_received"),
+                    bool,
+                )
+                else None
+            ),
+            provider_http_status=(
+                result.provider_meta.get("provider_http_status")
+                if isinstance(
+                    result.provider_meta.get("provider_http_status"),
+                    int,
+                )
+                and not isinstance(
+                    result.provider_meta.get("provider_http_status"),
+                    bool,
+                )
+                else None
+            ),
+            provider_error_code=(
+                result.provider_meta.get("provider_error_code")
+                if isinstance(
+                    result.provider_meta.get("provider_error_code"),
+                    str,
+                )
+                else None
+            ),
+            transport_stage=(
+                result.provider_meta.get("transport_stage")
+                if isinstance(
+                    result.provider_meta.get("transport_stage"),
+                    str,
+                )
+                else None
+            ),
         )
         return cls.from_observation(observation, result)
 

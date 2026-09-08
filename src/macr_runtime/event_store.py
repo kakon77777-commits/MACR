@@ -90,6 +90,11 @@ _OPERATIONAL_PAYLOAD_KEYS = {
             "cost_kind",
             "pricing_basis_version",
             "duration_ms",
+            "network_attempted",
+            "response_received",
+            "provider_http_status",
+            "provider_error_code",
+            "transport_stage",
             "input_media_count",
             "input_media_bytes",
             "output_artifact_count",
@@ -174,6 +179,11 @@ _OPERATIONAL_FIELD_KINDS = {
         "cost_kind": "optional_text",
         "pricing_basis_version": "optional_text",
         "duration_ms": "optional_integer",
+        "network_attempted": "optional_boolean",
+        "response_received": "optional_boolean",
+        "provider_http_status": "optional_integer",
+        "provider_error_code": "optional_text",
+        "transport_stage": "optional_text",
         "input_media_count": "optional_integer",
         "input_media_bytes": "optional_integer",
         "output_artifact_count": "optional_integer",
@@ -251,6 +261,8 @@ def _matches_field_kind(value: Any, kind: str) -> bool:
         )
     if kind == "boolean":
         return isinstance(value, bool)
+    if kind == "optional_boolean":
+        return value is None or isinstance(value, bool)
     if kind == "optional_capture":
         return value is None or isinstance(value, Mapping)
     raise AssertionError(f"unknown operational field kind: {kind}")
@@ -264,6 +276,7 @@ def _field_kind_description(kind: str) -> str:
         "optional_integer": "a non-negative integer or null",
         "optional_number": "a finite non-negative number or null",
         "boolean": "a boolean",
+        "optional_boolean": "a boolean or null",
         "optional_capture": "an object or null",
     }[kind]
 

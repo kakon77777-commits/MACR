@@ -815,6 +815,11 @@ class GlmFlashWorkerProvider(BaseProvider):
             duration_ms=elapsed_ms,
             answer_bytes=answer_bytes,
             provider_state=provider_state,
+            network_attempted=True,
+            response_received=True,
+            provider_http_status=200,
+            provider_error_code=None,
+            transport_stage="response_received",
         )
 
     @staticmethod
@@ -882,6 +887,11 @@ class GlmFlashWorkerProvider(BaseProvider):
                 "cost_kind": observation.cost_kind,
                 "pricing_basis_version": observation.pricing_basis_version,
             },
+            "network_attempted": observation.network_attempted,
+            "response_received": observation.response_received,
+            "provider_http_status": observation.provider_http_status,
+            "provider_error_code": observation.provider_error_code,
+            "transport_stage": observation.transport_stage,
         }
         if failure_type is not None:
             meta["failure_type"] = failure_type

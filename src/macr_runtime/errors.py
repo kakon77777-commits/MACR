@@ -10,6 +10,66 @@ class MacrError(Exception):
     """Base exception for expected MACR failures."""
 
 
+class _ProviderTransportDiagnostic:
+    def __init__(
+        self,
+        message: str,
+        *,
+        network_attempted: bool | None = None,
+        response_received: bool | None = None,
+        provider_http_status: int | None = None,
+        provider_error_code: str | int | None = None,
+        transport_stage: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        for name, value in (
+            ("network_attempted", network_attempted),
+            ("response_received", response_received),
+        ):
+            if value is not None and not isinstance(value, bool):
+                raise ValueError(f"{name} must be a boolean or None")
+        if response_received is True and network_attempted is not True:
+            raise ValueError("response_received requires network_attempted")
+        if (
+            provider_http_status is not None
+            and (
+                isinstance(provider_http_status, bool)
+                or not isinstance(provider_http_status, int)
+                or not 100 <= provider_http_status <= 599
+            )
+        ):
+            raise ValueError("provider_http_status must be an HTTP status or None")
+        if provider_http_status is not None and response_received is not True:
+            raise ValueError("provider_http_status requires response_received")
+        if isinstance(provider_error_code, bool):
+            raise ValueError("provider_error_code must be bounded or None")
+        normalized_error_code = (
+            str(provider_error_code) if provider_error_code is not None else None
+        )
+        if (
+            normalized_error_code is not None
+            and not _SAFE_DIAGNOSTIC_IDENTIFIER.fullmatch(normalized_error_code)
+        ):
+            raise ValueError("provider_error_code must be bounded or None")
+        if normalized_error_code is not None and response_received is not True:
+            raise ValueError("provider_error_code requires response_received")
+        if (
+            transport_stage is not None
+            and not _SAFE_DIAGNOSTIC_IDENTIFIER.fullmatch(transport_stage)
+        ):
+            raise ValueError("transport_stage must be bounded or None")
+        self._transport_diagnostic = {
+            "network_attempted": network_attempted,
+            "response_received": response_received,
+            "provider_http_status": provider_http_status,
+            "provider_error_code": normalized_error_code,
+            "transport_stage": transport_stage,
+        }
+
+    def safe_diagnostic(self) -> dict[str, object]:
+        return dict(self._transport_diagnostic)
+
+
 class ConfigurationError(MacrError):
     """Configuration is invalid or incomplete."""
 
@@ -18,7 +78,7 @@ class StoragePolicyError(MacrError):
     """A persistent path violates the configured storage policy."""
 
 
-class ProviderUnavailableError(MacrError):
+class ProviderUnavailableError(_ProviderTransportDiagnostic, MacrError):
     """The selected provider cannot currently be invoked."""
 
 
@@ -91,7 +151,7 @@ class ProviderOutputBudgetTooSmallError(ProviderPolicyError):
         return dict(self._diagnostic)
 
 
-class ProviderProtocolError(MacrError):
+class ProviderProtocolError(_ProviderTransportDiagnostic, MacrError):
     """A provider response does not satisfy the adapter contract."""
 
 

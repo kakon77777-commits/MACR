@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -137,7 +138,15 @@ def _post_dispatch_failure(
     provider_id: str,
     task: TaskContract,
     exc: BaseException,
+    observation: RawProviderObservation,
 ) -> ProviderResult:
+    transport = {
+        "network_attempted": observation.network_attempted,
+        "response_received": observation.response_received,
+        "provider_http_status": observation.provider_http_status,
+        "provider_error_code": observation.provider_error_code,
+        "transport_stage": observation.transport_stage,
+    }
     return ProviderResult(
         task_id=task.task_id,
         status=ResultStatus.CANDIDATE_FAILURE,
@@ -151,8 +160,35 @@ def _post_dispatch_failure(
             "provider": provider_id,
             "failure_type": type(exc).__name__,
             "failure_stage": "provider_execution",
+            "metrics": {"duration_ms": observation.duration_ms},
+            **transport,
         },
     )
+
+
+def _failed_provider_observation(
+    provider_id: str,
+    exc: BaseException,
+    duration_ms: int,
+) -> RawProviderObservation:
+    diagnostic_method = getattr(exc, "safe_diagnostic", None)
+    raw = diagnostic_method() if callable(diagnostic_method) else {}
+    diagnostic = raw if isinstance(raw, Mapping) else {}
+    try:
+        return RawProviderObservation.empty(
+            provider_id,
+            duration_ms=duration_ms,
+            network_attempted=diagnostic.get("network_attempted"),
+            response_received=diagnostic.get("response_received"),
+            provider_http_status=diagnostic.get("provider_http_status"),
+            provider_error_code=diagnostic.get("provider_error_code"),
+            transport_stage=diagnostic.get("transport_stage"),
+        )
+    except ValueError:
+        return RawProviderObservation.empty(
+            provider_id,
+            duration_ms=duration_ms,
+        )
 
 
 def _token_policy_failure(
@@ -358,6 +394,7 @@ class MacrRuntime:
                 soft_warning=False,
             )
 
+            provider_started = time.perf_counter()
             try:
                 execution = provider.invoke_observed(task)
                 if not isinstance(execution, ProviderExecution):
@@ -365,10 +402,23 @@ class MacrRuntime:
                         "provider invoke_observed returned an invalid execution"
                     )
             except Exception as exc:
-                observation = RawProviderObservation.empty(provider_id)
+                duration_ms = max(
+                    0,
+                    round((time.perf_counter() - provider_started) * 1000),
+                )
+                observation = _failed_provider_observation(
+                    provider_id,
+                    exc,
+                    duration_ms,
+                )
                 execution = ProviderExecution.from_observation(
                     observation,
-                    _post_dispatch_failure(provider_id, task, exc),
+                    _post_dispatch_failure(
+                        provider_id,
+                        task,
+                        exc,
+                        observation,
+                    ),
                 )
 
             capture = self._capture_candidate(
@@ -527,7 +577,7 @@ class MacrRuntime:
             return value
 
         return {
-            "terminal_contract_version": 2,
+            "terminal_contract_version": 3,
             "provider_id": provider_id,
             "task_id": task.task_id,
             "dispatch_event_id": dispatch_event_id,
@@ -544,6 +594,11 @@ class MacrRuntime:
             "cost_kind": observation.cost_kind,
             "pricing_basis_version": observation.pricing_basis_version,
             "duration_ms": observation.duration_ms,
+            "network_attempted": observation.network_attempted,
+            "response_received": observation.response_received,
+            "provider_http_status": observation.provider_http_status,
+            "provider_error_code": observation.provider_error_code,
+            "transport_stage": observation.transport_stage,
             "input_media_count": safe_count("input_media_count"),
             "input_media_bytes": safe_count("input_media_bytes"),
             "output_artifact_count": safe_count("output_artifact_count"),

@@ -109,6 +109,23 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_accounting_status_parser_accepts_provider_and_since_filters(self) -> None:
+        try:
+            args = build_parser().parse_args(
+                [
+                    "accounting-status",
+                    "--provider",
+                    "glm_flash_worker",
+                    "--since",
+                    "2026-09-08T00:00:00+00:00",
+                ]
+            )
+        except SystemExit as exc:
+            self.fail(f"accounting status filters were rejected: {exc}")
+
+        self.assertEqual(args.provider, "glm_flash_worker")
+        self.assertEqual(args.since, "2026-09-08T00:00:00+00:00")
+
     def test_readonly_capability_and_accounting_status_create_no_state(self) -> None:
         with d_drive_tempdir() as temp:
             environment = {

@@ -29,7 +29,7 @@ from macr_runtime.execution import (
     ProviderUsage,
     RawProviderObservation,
 )
-from macr_runtime.errors import LegacyPreTierIncompatibleError
+from macr_runtime.errors import LegacyPreTierIncompatibleError, ProviderProtocolError
 from macr_runtime.providers.base import BaseProvider, ProviderHealth
 from macr_runtime.provider_capability import ProviderTierBinding, glm_standard_policy
 from macr_runtime.provider_capability import glm_extended_text_policy
@@ -127,6 +127,22 @@ class ExplodingProvider(BaseProvider):
         del task
         self.calls += 1
         raise RuntimeError("PRIVATE simulated provider crash")
+
+
+class HttpFailingProvider(ExplodingProvider):
+    provider_id = "http_failure_provider"
+
+    def invoke_observed(self, task: TaskContract) -> ProviderExecution:
+        del task
+        self.calls += 1
+        raise ProviderProtocolError(
+            "provider HTTP response rejected; PRIVATE body omitted",
+            network_attempted=True,
+            response_received=True,
+            provider_http_status=429,
+            provider_error_code="1303",
+            transport_stage="http_response",
+        )
 
 
 class ApprovalRejectingProvider(ObservedProvider):
@@ -343,7 +359,7 @@ class RuntimeV05Tests(unittest.TestCase):
             terminal["payload"]["provider_tier_binding_digest"],
             binding_digest,
         )
-        self.assertEqual(terminal["payload"]["terminal_contract_version"], 2)
+        self.assertEqual(terminal["payload"]["terminal_contract_version"], 3)
 
     def test_model_token_policy_refuses_before_authority_or_provider(self) -> None:
         provider = ObservedProvider(
@@ -697,6 +713,45 @@ class RuntimeV05Tests(unittest.TestCase):
         self.assertEqual(accounting["candidate_status"], "candidate_failure")
         self.assertEqual(len(events), 2)
         self.assertNotIn("PRIVATE", str(result.to_dict()))
+
+    def test_transport_failure_preserves_safe_boundary_evidence(self) -> None:
+        provider = HttpFailingProvider()
+        task = delegated_task(task_id="provider-http-failure")
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            context = issue_context(services, provider.provider_id, task)
+            result = MacrRuntime(ProviderRegistry((provider,)), services).invoke(
+                provider.provider_id,
+                task,
+                context,
+            )
+            accounting = services.accounting.read_invocation(context.run_id)
+            events = services.events.read_events(run_id=context.run_id)
+
+        expected = {
+            "network_attempted": True,
+            "response_received": True,
+            "provider_http_status": 429,
+            "provider_error_code": "1303",
+            "transport_stage": "http_response",
+        }
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
+        self.assertEqual(result.failure_code, "ProviderProtocolError")
+        self.assertTrue(expected.items() <= result.provider_meta.items())
+        self.assertIsInstance(result.provider_meta["metrics"]["duration_ms"], int)
+        self.assertNotIn("PRIVATE", str(result.to_dict()))
+        self.assertTrue(expected.keys() <= accounting.keys())
+        self.assertEqual(
+            {key: accounting[key] for key in expected},
+            expected,
+        )
+        terminal = events[-1]["payload"]
+        self.assertEqual(
+            {key: terminal[key] for key in expected},
+            expected,
+        )
+        self.assertIsInstance(terminal["duration_ms"], int)
+        self.assertEqual(accounting["billing_state"], "unknown_after_dispatch")
 
     def test_return_contract_invalidity_preserves_raw_candidate(self) -> None:
         provider = ObservedProvider("test_provider", answer="WRONG")

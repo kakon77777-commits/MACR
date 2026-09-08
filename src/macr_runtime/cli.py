@@ -176,10 +176,17 @@ def _capability_status(
     return 0
 
 
-def _accounting_status() -> int:
+def _accounting_status(
+    provider_id: str | None = None,
+    since: str | None = None,
+) -> int:
     layout = StorageLayout.from_environment()
     try:
-        snapshot = read_accounting_status(layout.accounting_db_path)
+        snapshot = read_accounting_status(
+            layout.accounting_db_path,
+            provider_id=provider_id,
+            since=since,
+        )
     except (OSError, ValueError, MacrError) as exc:
         print(
             json.dumps(
@@ -1267,9 +1274,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="provider configuration JSON path",
     )
 
-    sub.add_parser(
+    accounting_status = sub.add_parser(
         "accounting-status",
         help="read bounded aggregate accounting state without writes",
+    )
+    accounting_status.add_argument(
+        "--provider",
+        help="restrict invocation accounting to one exact provider ID",
+    )
+    accounting_status.add_argument(
+        "--since",
+        help="restrict invocation accounting to an aware ISO timestamp",
     )
 
     migrate = sub.add_parser(
@@ -1472,7 +1487,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "capability-status":
         return _capability_status(args.provider, args.config)
     if args.command == "accounting-status":
-        return _accounting_status()
+        return _accounting_status(args.provider, args.since)
     if args.command == "migrate-ledger":
         return _migrate_ledger(
             dry_run=args.dry_run,

@@ -72,6 +72,16 @@ class AccountingStatusSnapshot:
     pending_plan_cost_outbox_count: int
     pending_bill_observation_outbox_count: int
     by_provider_billing_state: tuple[dict[str, Any], ...]
+    by_failure: tuple[dict[str, Any], ...]
+    provider_filter: str | None
+    since: str | None
+
+    @property
+    def filters(self) -> dict[str, str | None]:
+        return {
+            "provider_id": self.provider_filter,
+            "since": self.since,
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +101,8 @@ class AccountingStatusSnapshot:
             "by_provider_billing_state": [
                 dict(item) for item in self.by_provider_billing_state
             ],
+            "by_failure": [dict(item) for item in self.by_failure],
+            "filters": self.filters,
         }
 
 
@@ -98,14 +110,87 @@ def _status_snapshot_from_connection(
     connection: sqlite3.Connection,
     *,
     has_tier_column: bool,
+    has_failure_columns: bool,
+    has_transport_columns: bool,
+    provider_id: str | None = None,
+    since: str | None = None,
 ) -> AccountingStatusSnapshot:
-    provider_rows = connection.execute(
-        """SELECT provider_id, billing_state, COUNT(*) AS run_count,
-                  COALESCE(SUM(currency_cost_usd), 0.0) AS known_cost_usd
-        FROM invocations
-        GROUP BY provider_id, billing_state
-        ORDER BY provider_id, billing_state"""
+    conditions: list[str] = []
+    parameters: list[str] = []
+    if provider_id is not None:
+        conditions.append("provider_id = ?")
+        parameters.append(provider_id)
+    if since is not None:
+        conditions.append("dispatched_at >= ?")
+        parameters.append(since)
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    failure_code = "failure_code" if has_failure_columns else "NULL"
+    failure_stage = "failure_stage" if has_failure_columns else "NULL"
+    transport_fields = (
+        "network_attempted, response_received, provider_http_status, "
+        "provider_error_code, transport_stage"
+        if has_transport_columns
+        else (
+            "NULL AS network_attempted, NULL AS response_received, "
+            "NULL AS provider_http_status, NULL AS provider_error_code, "
+            "NULL AS transport_stage"
+        )
+    )
+    grouped_rows = connection.execute(
+        f"""SELECT provider_id, billing_state, candidate_status,
+                   {failure_code} AS failure_code,
+                   {failure_stage} AS failure_stage,
+                   {transport_fields},
+                   COUNT(*) AS run_count,
+                   COALESCE(SUM(currency_cost_usd), 0.0) AS known_cost_usd
+        FROM invocations{where}
+        GROUP BY provider_id, billing_state, candidate_status,
+                 failure_code, failure_stage, network_attempted,
+                 response_received, provider_http_status,
+                 provider_error_code, transport_stage
+        ORDER BY provider_id, billing_state, failure_code, failure_stage,
+                 provider_http_status, provider_error_code""",
+        tuple(parameters),
     ).fetchall()
+    provider_groups: dict[tuple[str, str], dict[str, Any]] = {}
+    failure_groups: list[dict[str, Any]] = []
+    for row in grouped_rows:
+        key = (row["provider_id"], row["billing_state"])
+        group = provider_groups.setdefault(
+            key,
+            {
+                "provider_id": row["provider_id"],
+                "billing_state": row["billing_state"],
+                "run_count": 0,
+                "known_cost_usd": 0.0,
+            },
+        )
+        group["run_count"] += int(row["run_count"])
+        group["known_cost_usd"] += float(row["known_cost_usd"])
+        if row["candidate_status"] == "candidate_failure":
+            failure_groups.append(
+                {
+                    "provider_id": row["provider_id"],
+                    "billing_state": row["billing_state"],
+                    "failure_code": row["failure_code"],
+                    "failure_stage": row["failure_stage"],
+                    "network_attempted": (
+                        bool(row["network_attempted"])
+                        if row["network_attempted"] is not None
+                        else None
+                    ),
+                    "response_received": (
+                        bool(row["response_received"])
+                        if row["response_received"] is not None
+                        else None
+                    ),
+                    "provider_http_status": row["provider_http_status"],
+                    "provider_error_code": row["provider_error_code"],
+                    "transport_stage": row["transport_stage"],
+                    "run_count": int(row["run_count"]),
+                    "known_cost_usd": float(row["known_cost_usd"]),
+                }
+            )
     legacy_expression = (
         "COALESCE(SUM(CASE WHEN provider_tier_binding_digest IS NULL "
         "THEN 1 ELSE 0 END), 0)"
@@ -121,16 +206,29 @@ def _status_snapshot_from_connection(
             COALESCE(SUM(CASE WHEN terminal_at IS NULL THEN 1 ELSE 0 END), 0)
                 AS unsettled_count,
             {legacy_expression} AS legacy_pre_tier_count
-        FROM invocations"""
+        FROM invocations{where}""",
+        tuple(parameters),
     ).fetchone()
+    outbox_conditions = [
+        condition.replace("provider_id", "i.provider_id").replace(
+            "dispatched_at",
+            "i.dispatched_at",
+        )
+        for condition in conditions
+    ]
+    outbox_where = (
+        f" AND {' AND '.join(outbox_conditions)}" if outbox_conditions else ""
+    )
     outboxes = connection.execute(
-        """SELECT
-            (SELECT COUNT(*) FROM accounting_outbox
-             WHERE state = 'pending') AS invocation_count,
+        f"""SELECT
+            (SELECT COUNT(*) FROM accounting_outbox o
+             JOIN invocations i ON i.run_id = o.run_id
+             WHERE o.state = 'pending'{outbox_where}) AS invocation_count,
             (SELECT COUNT(*) FROM plan_cost_outbox
              WHERE state = 'pending') AS plan_cost_count,
             (SELECT COUNT(*) FROM bill_observation_outbox
-             WHERE state = 'pending') AS bill_count"""
+             WHERE state = 'pending') AS bill_count""",
+        tuple(parameters),
     ).fetchone()
     return AccountingStatusSnapshot(
         known_cost_usd=float(totals["known_cost_usd"]),
@@ -142,19 +240,18 @@ def _status_snapshot_from_connection(
         pending_invocation_outbox_count=int(outboxes["invocation_count"]),
         pending_plan_cost_outbox_count=int(outboxes["plan_cost_count"]),
         pending_bill_observation_outbox_count=int(outboxes["bill_count"]),
-        by_provider_billing_state=tuple(
-            {
-                "provider_id": row["provider_id"],
-                "billing_state": row["billing_state"],
-                "run_count": int(row["run_count"]),
-                "known_cost_usd": float(row["known_cost_usd"]),
-            }
-            for row in provider_rows
-        ),
+        by_provider_billing_state=tuple(provider_groups.values()),
+        by_failure=tuple(failure_groups),
+        provider_filter=provider_id,
+        since=since,
     )
 
 
-def _empty_status_snapshot() -> AccountingStatusSnapshot:
+def _empty_status_snapshot(
+    *,
+    provider_id: str | None = None,
+    since: str | None = None,
+) -> AccountingStatusSnapshot:
     return AccountingStatusSnapshot(
         known_cost_usd=0.0,
         unknown_after_dispatch_count=0,
@@ -164,6 +261,9 @@ def _empty_status_snapshot() -> AccountingStatusSnapshot:
         pending_plan_cost_outbox_count=0,
         pending_bill_observation_outbox_count=0,
         by_provider_billing_state=(),
+        by_failure=(),
+        provider_filter=provider_id,
+        since=since,
     )
 
 
@@ -258,7 +358,7 @@ def _canonical_json(value: dict[str, Any]) -> str:
 
 
 class AccountingStore:
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     def __init__(
         self,
@@ -331,7 +431,12 @@ class AccountingStore:
                     policy_snapshot_sha256 TEXT NOT NULL,
                     provider_tier_binding_digest TEXT,
                     failure_code TEXT,
-                    failure_stage TEXT
+                    failure_stage TEXT,
+                    network_attempted INTEGER,
+                    response_received INTEGER,
+                    provider_http_status INTEGER,
+                    provider_error_code TEXT,
+                    transport_stage TEXT
                 )""",
                 """CREATE TABLE IF NOT EXISTS provider_accounts (
                     account_id TEXT PRIMARY KEY,
@@ -472,9 +577,35 @@ class AccountingStore:
                 connection.execute(
                     """UPDATE accounting_schema_meta SET version = ?
                     WHERE component = 'accounting'""",
+                    (3,),
+                )
+                row = {"version": 3}
+            if row["version"] == 3:
+                columns = {
+                    item["name"]
+                    for item in connection.execute(
+                        "PRAGMA table_info(invocations)"
+                    ).fetchall()
+                }
+                additions = (
+                    ("network_attempted", "INTEGER"),
+                    ("response_received", "INTEGER"),
+                    ("provider_http_status", "INTEGER"),
+                    ("provider_error_code", "TEXT"),
+                    ("transport_stage", "TEXT"),
+                )
+                for name, declaration in additions:
+                    if name not in columns:
+                        connection.execute(
+                            f"ALTER TABLE invocations ADD COLUMN {name} {declaration}"
+                        )
+                connection.execute(
+                    """UPDATE accounting_schema_meta SET version = ?
+                    WHERE component = 'accounting'""",
                     (self.SCHEMA_VERSION,),
                 )
-            elif row["version"] != self.SCHEMA_VERSION:
+                row = {"version": self.SCHEMA_VERSION}
+            if row["version"] != self.SCHEMA_VERSION:
                 raise AccountingConflict(
                     "accounting database schema version is unsupported"
                 )
@@ -951,6 +1082,11 @@ class AccountingStore:
                 observation.pricing_basis_version,
                 _safe_finish_reason(observation.finish_reason),
                 billing_state,
+                observation.network_attempted,
+                observation.response_received,
+                observation.provider_http_status,
+                observation.provider_error_code,
+                observation.transport_stage,
             )
             if row["billing_state"] != "dispatched":
                 existing_values = (
@@ -965,6 +1101,11 @@ class AccountingStore:
                     row["pricing_basis_version"],
                     row["finish_reason"],
                     row["billing_state"],
+                    row["network_attempted"],
+                    row["response_received"],
+                    row["provider_http_status"],
+                    row["provider_error_code"],
+                    row["transport_stage"],
                 )
                 if existing_values == observed_values:
                     connection.commit()
@@ -979,7 +1120,9 @@ class AccountingStore:
                     reasoning_tokens = ?, cached_tokens = ?, duration_ms = ?,
                     currency_cost_usd = ?, cost_kind = ?,
                     pricing_basis_version = ?, finish_reason = ?,
-                    billing_state = ?
+                    billing_state = ?, network_attempted = ?,
+                    response_received = ?, provider_http_status = ?,
+                    provider_error_code = ?, transport_stage = ?
                 WHERE run_id = ?
                 """,
                 (*observed_values, run),
@@ -1073,7 +1216,7 @@ class AccountingStore:
                 INSERT INTO accounting_outbox(
                     outbox_id, run_id, schema_version, payload_json,
                     payload_sha256, state, created_at, synced_at
-                ) VALUES (?, ?, 2, ?, ?, 'pending', ?, NULL)
+                ) VALUES (?, ?, 3, ?, ?, 'pending', ?, NULL)
                 """,
                 (
                     str(uuid.uuid4()),
@@ -1105,7 +1248,14 @@ class AccountingStore:
             ).fetchone()
         finally:
             connection.close()
-        return dict(row) if row is not None else None
+        if row is None:
+            return None
+        result = dict(row)
+        for key in ("network_attempted", "response_received"):
+            result[key] = (
+                bool(result[key]) if result.get(key) is not None else None
+            )
+        return result
 
     def mark_soft_warning(self, run_id: str) -> None:
         run = _uuid4("run_id", run_id)
@@ -1164,12 +1314,27 @@ class AccountingStore:
             connection.close()
         return int(row["count"])
 
-    def status_snapshot(self) -> AccountingStatusSnapshot:
+    def status_snapshot(
+        self,
+        *,
+        provider_id: str | None = None,
+        since: str | None = None,
+    ) -> AccountingStatusSnapshot:
+        provider = (
+            _safe_id("provider_id", provider_id, maximum=128)
+            if provider_id is not None
+            else None
+        )
+        start = _aware_time("since", since) if since is not None else None
         connection = self._connect()
         try:
             return _status_snapshot_from_connection(
                 connection,
                 has_tier_column=True,
+                has_failure_columns=True,
+                has_transport_columns=True,
+                provider_id=provider,
+                since=start,
             )
         finally:
             connection.close()
@@ -1451,18 +1616,39 @@ class AccountingStore:
             "provider_tier_binding_digest",
             "failure_code",
             "failure_stage",
+            "network_attempted",
+            "response_received",
+            "provider_http_status",
+            "provider_error_code",
+            "transport_stage",
         )
-        return {key: row[key] for key in keys}
+        payload = {key: row[key] for key in keys}
+        for key in ("network_attempted", "response_received"):
+            payload[key] = (
+                bool(payload[key]) if payload[key] is not None else None
+            )
+        return payload
 
 
-def read_accounting_status(path: str | Path) -> AccountingStatusSnapshot:
+def read_accounting_status(
+    path: str | Path,
+    *,
+    provider_id: str | None = None,
+    since: str | None = None,
+) -> AccountingStatusSnapshot:
+    provider = (
+        _safe_id("provider_id", provider_id, maximum=128)
+        if provider_id is not None
+        else None
+    )
+    start = _aware_time("since", since) if since is not None else None
     candidate = Path(path)
     if not candidate.is_absolute() or candidate.drive.upper() != "D:":
         raise StoragePolicyError(
             "accounting database path must be absolute on D:"
         )
     if not candidate.exists():
-        return _empty_status_snapshot()
+        return _empty_status_snapshot(provider_id=provider, since=start)
     uri = candidate.absolute().as_uri() + "?mode=ro"
     connection = sqlite3.connect(uri, uri=True)
     connection.row_factory = sqlite3.Row
@@ -1471,7 +1657,7 @@ def read_accounting_status(path: str | Path) -> AccountingStatusSnapshot:
             """SELECT version FROM accounting_schema_meta
             WHERE component = 'accounting'"""
         ).fetchone()
-        if row is None or row["version"] not in {2, 3}:
+        if row is None or row["version"] not in {2, 3, 4}:
             raise AccountingConflict(
                 "accounting database schema version is unsupported"
             )
@@ -1484,6 +1670,17 @@ def read_accounting_status(path: str | Path) -> AccountingStatusSnapshot:
         return _status_snapshot_from_connection(
             connection,
             has_tier_column="provider_tier_binding_digest" in columns,
+            has_failure_columns={"failure_code", "failure_stage"} <= columns,
+            has_transport_columns={
+                "network_attempted",
+                "response_received",
+                "provider_http_status",
+                "provider_error_code",
+                "transport_stage",
+            }
+            <= columns,
+            provider_id=provider,
+            since=start,
         )
     except sqlite3.Error as exc:
         raise AccountingConflict("accounting database is invalid") from exc
