@@ -441,6 +441,11 @@ connection reason are omitted. Accounting schema 4, accounting-outbox schema
 Provider/date filters and failure grouping were added to the read-only
 `accounting-status` surface.
 
+Before integration, the repository root gained `CURRENT_VERSION_USAGE.md` as
+the short operational index for Direct Chat, Claude/Codex GLM use, filtered
+accounting, dynamic T1, and the Phase-C/future boundary. It contains no
+credential value or standing provider authority.
+
 The implementation suite ran 822 tests with zero failures and two existing
 platform capability skips while treating `ResourceWarning` as an error. A
 copy-only replay of the live 137-row accounting database migrated schema 3 to

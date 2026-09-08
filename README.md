@@ -2,6 +2,10 @@
 
 MACR is a migration-aware runtime for heterogeneous AI workers. The v0.7.0a0 Phase-C Alpha preserves the v0.6 Direct and delegated planes, adds the Agent contract/state kernels, and introduces a governed semantic working state: immutable graph revisions, per-Agent pinned bindings, authority-free proposals, atomic host-authorized commits, reconstructible receipts, and deterministic Goal-to-Plan context projection. Provider completion, private capture, semantic commit, projection, verification, acceptance, merge, release, and live-route activation remain separate states.
 
+For the shortest operational entry point, read
+[`CURRENT_VERSION_USAGE.md`](CURRENT_VERSION_USAGE.md). It separates what is
+callable now from offline-only, unaccepted, and future Agent work.
+
 This alpha line is the completed offline A-C foundation, not the full bounded single-Agent MVP. Phase D verified observation, governed action, temporal continuation, the closed Agent loop, and live provider use remain absent. Direct Chat remains a separate public contract from delegated `TaskContract` work: it sends provider-native message history without a MACR worker instruction or hidden prompt, pins one provider/model and model-token policy per conversation, projects only complete non-streaming responses, and persists exact plaintext history under D:. A provider-neutral Codex/Claude host-adapter core now exists offline, but live host-owned bindings and a live T1 provider route are not activated by this release.
 
 `0.7.0a1` remains reserved for the later A-H bounded single-Agent MVP. Claude Code can use the existing MACR CLI today under honest `cli` attribution; the trusted host-observed adapter embedding remains deferred/NotMeasured. Neither route authorizes Anthropic API use.
