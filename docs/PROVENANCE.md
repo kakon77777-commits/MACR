@@ -521,3 +521,23 @@ with 832 inherited tests, 98/76/91 Phase C/B/A focused tests, 50 required IDs,
 installed-import isolation, wheel SHA
 `4b4d7254426a5c91dd2b546b09d0b8a4809aa56b8cfeddff21c9506e7cf49956`,
 network/provider false, Phase D false, and clean Git state.
+
+On 2026-09-09 Neo explicitly authorized merge, update, and activation. The
+canonical `main` checkout fast-forwarded from
+`b5b2120033af09bff330022e116fc411a7b87131` to the exact final reviewed
+candidate `bcf3f2ec7fa70d815f74cf5169713c2beeeaff54` / tree
+`fee634c7c20758ca787095c1d221757528f0ac3a`; the merged checkout independently
+replayed all 832 tests with zero failures and two existing platform capability
+skips. The pre-existing untracked `REQUEST_FOR_CODEX_T1_LIVE_ROUTE.md` was not
+modified or adopted.
+
+The refreshed public conformance task first failed closed with exit 4 under
+the new ordinary-policy digest. Exactly one 30-day host approval was then
+created for digest
+`5a81004ca5f795b58534a27599db6f923dcb1a9820327643a2b56db731f15a77`
+at `2026-09-08T16:46:53.604586+00:00`, expiring
+`2026-10-08T16:46:53.604586+00:00`; the following ordinary preflight returned
+exit 0. This local activation performed no provider request, generation,
+retry, fallback, bulk task approval, or currency expenditure. All real GLM
+work remains subject to the 65,536 quality-first floor and its own exact host
+approval.

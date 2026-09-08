@@ -129,3 +129,33 @@ git_clean                   = true
 This remains offline evidence. It does not authorize a provider probe, bulk
 approval, merge, release, or deployment. Any governing-Twin result belongs to
 a separately identified review subject.
+
+## Local activation and publication receipt
+
+On 2026-09-09 Neo explicitly authorized merge, update, and activation. The
+canonical `main` checkout fast-forwarded from
+`b5b2120033af09bff330022e116fc411a7b87131` to the exact reviewed candidate
+`bcf3f2ec7fa70d815f74cf5169713c2beeeaff54` / tree
+`fee634c7c20758ca787095c1d221757528f0ac3a`. The pre-existing untracked
+`REQUEST_FOR_CODEX_T1_LIVE_ROUTE.md` remained outside the merge and was not
+modified. A fresh replay on the merged `main` checkout ran 832 tests with zero
+failures and two existing platform capability skips while treating
+`ResourceWarning` as an error.
+
+The refreshed public conformance envelope then demonstrated the intended
+fail-closed transition: ordinary preflight first returned `approval_invalid`
+with exit 4 and required digest
+`5a81004ca5f795b58534a27599db6f923dcb1a9820327643a2b56db731f15a77`.
+Neo's standing activation authority was used to create exactly one 30-day
+`host_operator` approval for that digest at
+`2026-09-08T16:46:53.604586+00:00`, expiring
+`2026-10-08T16:46:53.604586+00:00`; ordinary preflight then returned
+`preflight_structurally_valid` with exit 0. The short conformance profile kept
+the task's explicit 32,768-token output budget.
+
+This activation made no provider request, generation, retry, fallback, or
+currency expenditure and created no bulk or Korean-work approval. Existing
+translation/classification/analysis tasks must be regenerated with the 65,536
+quality-first budget and receive their own exact approval before dispatch. A
+later bounded live conformance or real-work task is operational evidence, not
+part of this activation receipt.
