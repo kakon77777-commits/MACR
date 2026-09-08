@@ -35,8 +35,12 @@ class ModelTokenPolicyTests(unittest.TestCase):
             (32_768, 65_536),
         )
         self.assertEqual(
-            (glm.hard_context_tokens, glm.default_output_tokens),
-            (512_000, 16_384),
+            (
+                glm.minimum_task_output_tokens,
+                glm.default_output_tokens,
+                glm.max_output_tokens,
+            ),
+            (32_768, 65_536, 65_536),
         )
         self.assertEqual(
             (gemini.hard_context_tokens, gemini.max_output_tokens),
@@ -51,11 +55,11 @@ class ModelTokenPolicyTests(unittest.TestCase):
             (8_192, 4_096),
         )
         self.assertEqual(grok.minimum_task_output_tokens, 32_768)
-        self.assertEqual(glm.minimum_task_output_tokens, 16_384)
+        self.assertEqual(glm.minimum_task_output_tokens, 32_768)
         self.assertEqual(gemini.minimum_task_output_tokens, 16_384)
         self.assertEqual(minimax.minimum_task_output_tokens, 2_048)
         self.assertEqual(local.minimum_task_output_tokens, 1)
-        self.assertEqual(glm.to_dict()["minimum_task_output_tokens"], 16_384)
+        self.assertEqual(glm.to_dict()["minimum_task_output_tokens"], 32_768)
         self.assertEqual(
             glm.policy_digest,
             sha256_id("model_token_policy_v2", glm.to_dict()),
@@ -120,10 +124,14 @@ class ModelTokenPolicyTests(unittest.TestCase):
         live = t1_glm_live_policy()
 
         self.assertEqual(
-            (live.hard_context_tokens, live.max_output_tokens),
-            (128_000, 16_384),
+            (
+                live.minimum_task_output_tokens,
+                live.default_output_tokens,
+                live.max_output_tokens,
+            ),
+            (32_768, 65_536, 65_536),
         )
-        self.assertEqual(live.minimum_task_output_tokens, 16_384)
+        self.assertEqual(live.hard_context_tokens, 128_000)
         self.assertNotEqual(live.policy_digest, general.policy_digest)
         self.assertEqual(live.policy_source, "t1_live_preset")
 
