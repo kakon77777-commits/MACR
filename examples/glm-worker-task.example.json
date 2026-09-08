@@ -4,16 +4,16 @@
   "task_type": "provider_conformance",
   "delegable": true,
   "delegation_class": "non_sensitive_routine",
-  "delegation_approval_sha256": "98a788f1ca05d70cd3648e196e7ad5f025b4cdffe3282f5137284855ae47d26b",
+  "delegation_approval_sha256": "5a81004ca5f795b58534a27599db6f923dcb1a9820327643a2b56db731f15a77",
   "workspace": {
     "repo": "current",
     "write_scope": []
   },
   "inputs": [],
   "constraints": {
-    "max_cost_usd": 0.01,
+    "max_cost_usd": 0.05,
     "max_latency_s": 180,
-    "max_output_tokens": 16384,
+    "max_output_tokens": 32768,
     "max_context_tokens": 512000,
     "internet": true,
     "privacy": "public"
