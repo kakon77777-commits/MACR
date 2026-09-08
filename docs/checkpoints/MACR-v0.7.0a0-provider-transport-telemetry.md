@@ -99,3 +99,32 @@ The governing Twin did not return within two bounded waits and was interrupted,
 so no independent `CONCUR` is claimed. Primary behavioral, structural, and
 discriminative evidence is recorded above; independent replay remains a later
 acceptance input.
+
+## Post-merge local activation
+
+Neo subsequently authorized update, merge, local activation, and GitHub
+publication. Before migration, the operator confirmed zero matching GLM
+invokers, zero unsettled accounting rows, a zero-byte WAL, accounting schema 3,
+137 invocation rows, and historical-field digest
+`517ca73136bbccc17239e3be9995bf019e74bb2746b9460851ac4dd041c13bc1`.
+
+An immutable pre-migration copy was created at:
+
+```text
+D:\AI_RESIDENCE\AI_Runtime\macr-state\backups\accounting.pre-schema4.517ca73136bb.sqlite3
+```
+
+Its 360,448 bytes and SHA-256
+`E0DFEE2D1B561096BEE31BB3C9462B4DAB395513810EAB5E01BAD7FEBFA67595`
+matched the pre-migration source exactly. The additive transaction then moved
+the live database from schema 3 to 4. Readback showed 137/137 rows, the same
+historical-field digest, exactly the five declared columns, zero non-null
+historical transport values, and a zero-byte WAL. The filtered live view
+reported 17 GLM estimated successes and four historical unknown failures for
+2026-09-08; those four correctly remain null.
+
+The resulting live database remained 360,448 bytes and had post-migration
+SHA-256 `2F8945BA10F34D5768ABCBC841EFF92177923CDBB61C1B839DA344716E3D1565`.
+Database hashes are snapshot evidence, not stable identifiers after later
+accounting writes. No provider call, retry, fallback, generation, billing
+reconciliation, or expenditure occurred during activation.

@@ -454,3 +454,14 @@ columns, and zero fabricated historical telemetry. The source database hash
 remained unchanged and the replay copy was removed. No provider call, retry,
 fallback, source-accounting migration, billing reconciliation, or expenditure
 occurred during repair verification.
+
+Neo then authorized merge, local activation, and GitHub publication. The live
+database was sealed at zero invokers, zero unsettled rows and zero WAL bytes; a
+byte-identical 360,448-byte pre-schema4 backup was retained under the D-drive
+MACR state backup directory. The additive live migration preserved all 137
+historical rows and their predeclared field digest, created exactly five nullable
+transport columns, and left all historical transport values null. Filtered
+readback preserved the 17-success/four-unknown 2026-09-08 GLM view. Activation
+performed no provider call or billing reconciliation; future accounting writes
+will naturally supersede the post-migration database hash without invalidating
+the backup or migration receipt.
