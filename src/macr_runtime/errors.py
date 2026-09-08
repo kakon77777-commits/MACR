@@ -135,6 +135,8 @@ class ProviderOutputBudgetTooSmallError(ProviderPolicyError):
         model_id: str,
         model_token_policy_digest: str,
         policy_source: str,
+        recommended_max_output_tokens: int | None = None,
+        output_budget_profile: str | None = None,
     ) -> None:
         super().__init__("cloud task output is below the model quality floor")
         self._diagnostic = {
@@ -146,6 +148,22 @@ class ProviderOutputBudgetTooSmallError(ProviderPolicyError):
             "model_token_policy_digest": model_token_policy_digest,
             "policy_source": policy_source,
         }
+        if recommended_max_output_tokens is not None:
+            if (
+                isinstance(recommended_max_output_tokens, bool)
+                or not isinstance(recommended_max_output_tokens, int)
+                or recommended_max_output_tokens < minimum_max_output_tokens
+            ):
+                raise ValueError(
+                    "recommended_max_output_tokens must cover the minimum"
+                )
+            self._diagnostic["recommended_max_output_tokens"] = (
+                recommended_max_output_tokens
+            )
+        if output_budget_profile is not None:
+            if not _SAFE_DIAGNOSTIC_IDENTIFIER.fullmatch(output_budget_profile):
+                raise ValueError("output_budget_profile must be a safe identifier")
+            self._diagnostic["output_budget_profile"] = output_budget_profile
 
     def safe_diagnostic(self) -> dict[str, object]:
         return dict(self._diagnostic)

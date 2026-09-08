@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -15,12 +16,14 @@ from ..contracts import (
     PrivacyLevel,
     ProviderResult,
     ResultStatus,
+    ReturnFormat,
     TaskContract,
 )
 from ..errors import (
     ConfigurationError,
     LegacyPreTierIncompatibleError,
     MacrError,
+    ProviderOutputBudgetTooSmallError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderReasoningBudgetExhaustedError,
@@ -56,6 +59,7 @@ _PRICING_BASIS_VERSION = "zai-2026-08-27"
 _MAX_TEXT_INPUT_BYTES = 1_000_000
 _FIXED_BASE_URL = "https://api.z.ai/api/paas/v4"
 _FIXED_ENDPOINT_PATH = "/chat/completions"
+_FIXED_MODEL_PROVIDER = "glm_flash_worker"
 _FIXED_MODEL = "glm-5.3-flash"
 _ZAI_KEY_SHAPE = re.compile(r"^[^.\s]+\.[^.\s]+$")
 _OBVIOUS_CREDENTIAL_MARKER = re.compile(
@@ -63,6 +67,68 @@ _OBVIOUS_CREDENTIAL_MARKER = re.compile(
     r"(?:api(?:[\s_-]+)?key|access(?:[\s_-]+)?token|"
     r"private(?:[\s_-]+)?key)\s*[:=])"
 )
+
+
+@dataclass(frozen=True)
+class GlmOutputBudgetDecision:
+    profile: str
+    minimum_max_output_tokens: int
+    recommended_max_output_tokens: int
+
+    def __post_init__(self) -> None:
+        if self.profile not in {
+            "short_exact_conformance",
+            "quality_first_work",
+        }:
+            raise ValueError("GLM output budget profile is invalid")
+        if (
+            isinstance(self.minimum_max_output_tokens, bool)
+            or not isinstance(self.minimum_max_output_tokens, int)
+            or self.minimum_max_output_tokens <= 0
+            or isinstance(self.recommended_max_output_tokens, bool)
+            or not isinstance(self.recommended_max_output_tokens, int)
+            or self.recommended_max_output_tokens
+            < self.minimum_max_output_tokens
+        ):
+            raise ValueError("GLM output budget decision is invalid")
+
+
+def glm_output_budget_decision(
+    task: TaskContract,
+    token_policy: ModelTokenPolicy,
+) -> GlmOutputBudgetDecision:
+    if not isinstance(task, TaskContract):
+        raise ValueError("task must be a TaskContract")
+    if not isinstance(token_policy, ModelTokenPolicy):
+        raise ValueError("token_policy must be a ModelTokenPolicy")
+    if (
+        token_policy.provider_id != _FIXED_MODEL_PROVIDER
+        or token_policy.model_id != _FIXED_MODEL
+    ):
+        raise ValueError("token_policy must match the fixed GLM route")
+    exact = task.return_contract.exact_text
+    short_exact = (
+        task.task_type == "provider_conformance"
+        and task.return_contract.format is ReturnFormat.EXACT_TEXT
+        and isinstance(exact, str)
+        and len(exact.encode("utf-8")) <= 256
+    )
+    value = (
+        token_policy.minimum_task_output_tokens
+        if short_exact
+        else token_policy.default_output_tokens
+    )
+    return GlmOutputBudgetDecision(
+        profile=(
+            "short_exact_conformance"
+            if short_exact
+            else "quality_first_work"
+        ),
+        minimum_max_output_tokens=value,
+        recommended_max_output_tokens=value,
+    )
+
+
 _WINDOWS_UNC_PATH_CANDIDATE = re.compile(
     r"(?i)\\{2,}(?P<server>[^\s\\/:*?\"<>|{}\[\]]+)"
     r"\\+(?P<share>[^\s\\/:*?\"<>|{}\[\]]+)"
@@ -526,6 +592,27 @@ class GlmFlashWorkerProvider(BaseProvider):
             raise ProviderPolicyError(
                 "GLM worker requires exactly text_generation capability"
             )
+        output_budget = glm_output_budget_decision(task, self.token_policy)
+        if (
+            task.constraints.max_output_tokens
+            < output_budget.minimum_max_output_tokens
+        ):
+            raise ProviderOutputBudgetTooSmallError(
+                requested_max_output_tokens=(
+                    task.constraints.max_output_tokens
+                ),
+                minimum_max_output_tokens=(
+                    output_budget.minimum_max_output_tokens
+                ),
+                provider_id=self.provider_id,
+                model_id=_FIXED_MODEL,
+                model_token_policy_digest=self.token_policy.policy_digest,
+                policy_source=self.token_policy.policy_source,
+                recommended_max_output_tokens=(
+                    output_budget.recommended_max_output_tokens
+                ),
+                output_budget_profile=output_budget.profile,
+            )
         self.token_policy.validate_task_output_tokens(
             task.constraints.max_output_tokens
         )
@@ -646,6 +733,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         task: TaskContract,
         prepared: Mapping[str, Any],
     ) -> dict[str, Any]:
+        output_budget = glm_output_budget_decision(task, self.token_policy)
         return {
             "provider_id": self.provider_id,
             "model": _FIXED_MODEL,
@@ -657,6 +745,13 @@ class GlmFlashWorkerProvider(BaseProvider):
             "requested_max_output_tokens": task.constraints.max_output_tokens,
             "minimum_task_output_tokens": (
                 self.token_policy.minimum_task_output_tokens
+            ),
+            "output_budget_profile": output_budget.profile,
+            "required_minimum_output_tokens": (
+                output_budget.minimum_max_output_tokens
+            ),
+            "recommended_max_output_tokens": (
+                output_budget.recommended_max_output_tokens
             ),
             "reasoning_effort": self.config.reasoning_effort,
             "required_approval_sha256": prepared["approval_sha256"],

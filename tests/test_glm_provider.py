@@ -12,6 +12,7 @@ from macr_runtime.contracts import (
     DelegationClass,
     PrivacyLevel,
     ReturnContract,
+    ReturnFormat,
     ResultStatus,
     TaskConstraints,
     TaskContract,
@@ -225,7 +226,7 @@ def _approval_digest(
     return hashlib.sha256(encoded).hexdigest()
 
 
-def delegated_task(*, max_cost_usd: float = 0.01) -> TaskContract:
+def delegated_task(*, max_cost_usd: float = 0.10) -> TaskContract:
     task = TaskContract(
         task_id="glm-worker-test",
         goal="Classify the supplied public labels.",
@@ -242,7 +243,7 @@ def delegated_task(*, max_cost_usd: float = 0.01) -> TaskContract:
         constraints=TaskConstraints(
             max_cost_usd=max_cost_usd,
             max_latency_s=30,
-            max_output_tokens=16_384,
+            max_output_tokens=65_536,
             internet=True,
             privacy=PrivacyLevel.PUBLIC,
         ),
@@ -276,6 +277,179 @@ def success_document() -> dict[str, Any]:
 
 
 class GlmFlashWorkerProviderTests(unittest.TestCase):
+    def test_short_exact_conformance_uses_32768_profile(self):
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(max_cost_usd=0.10)
+        exact = "x" * 256
+        task = replace(
+            base,
+            goal=f"Return exactly: {exact}",
+            task_type="provider_conformance",
+            constraints=replace(
+                base.constraints,
+                max_output_tokens=32_768,
+            ),
+            return_contract=ReturnContract(
+                summary=False,
+                evidence=False,
+                format=ReturnFormat.EXACT_TEXT,
+                exact_text=exact,
+            ),
+        )
+
+        metadata = provider.approval_metadata(task)
+
+        self.assertEqual(
+            metadata.get("output_budget_profile"),
+            "short_exact_conformance",
+        )
+        self.assertEqual(
+            metadata.get("required_minimum_output_tokens"),
+            32_768,
+        )
+        self.assertEqual(
+            metadata.get("recommended_max_output_tokens"),
+            32_768,
+        )
+
+    def test_quality_first_work_rejects_32768_and_recommends_65536(self):
+        key_source = CountingKeySource()
+        transport = FakeTransport(success_document())
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=transport,
+            environ={},
+            key_source=key_source,
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(max_cost_usd=0.10)
+        task = replace(
+            base,
+            constraints=replace(
+                base.constraints,
+                max_output_tokens=32_768,
+            ),
+        )
+
+        with self.assertRaises(ProviderOutputBudgetTooSmallError) as raised:
+            provider.approval_metadata(task)
+
+        diagnostic = raised.exception.safe_diagnostic()
+        self.assertEqual(
+            diagnostic.get("output_budget_profile"),
+            "quality_first_work",
+        )
+        self.assertEqual(
+            diagnostic.get("recommended_max_output_tokens"),
+            65_536,
+        )
+        self.assertEqual(key_source.calls, 0)
+        self.assertEqual(transport.posts, [])
+        serialized = str(diagnostic)
+        self.assertNotIn(base.goal, serialized)
+        self.assertNotIn("alpha", serialized)
+
+    def test_257_byte_exact_conformance_uses_quality_first_profile(self):
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(max_cost_usd=0.10)
+        task = replace(
+            base,
+            task_type="provider_conformance",
+            constraints=replace(
+                base.constraints,
+                max_output_tokens=65_536,
+            ),
+            return_contract=ReturnContract(
+                summary=False,
+                evidence=False,
+                format=ReturnFormat.EXACT_TEXT,
+                exact_text="x" * 257,
+            ),
+        )
+
+        metadata = provider.approval_metadata(task)
+
+        self.assertEqual(
+            metadata["output_budget_profile"],
+            "quality_first_work",
+        )
+        self.assertEqual(metadata["required_minimum_output_tokens"], 65_536)
+
+    def test_delegated_short_exact_return_still_requires_quality_first_output(self):
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(max_cost_usd=0.10)
+        task = replace(
+            base,
+            constraints=replace(
+                base.constraints,
+                max_output_tokens=32_768,
+            ),
+            return_contract=ReturnContract(
+                summary=False,
+                evidence=False,
+                format=ReturnFormat.EXACT_TEXT,
+                exact_text="OK",
+            ),
+        )
+
+        with self.assertRaises(ProviderOutputBudgetTooSmallError) as raised:
+            provider.approval_metadata(task)
+
+        self.assertEqual(
+            raised.exception.safe_diagnostic()["output_budget_profile"],
+            "quality_first_work",
+        )
+
+    def test_quality_first_work_binds_exact_65536_request(self):
+        provider = _GlmFlashWorkerProvider(
+            glm_config(),
+            transport=FakeTransport(success_document()),
+            environ={},
+            key_source=StaticKeySource(),
+            approval_store=AllowingApprovalStore(),
+        )
+        base = delegated_task(max_cost_usd=0.10)
+        task = replace(
+            base,
+            constraints=replace(
+                base.constraints,
+                max_output_tokens=65_536,
+            ),
+        )
+
+        metadata = provider.approval_metadata(task)
+
+        self.assertEqual(
+            metadata.get("output_budget_profile"),
+            "quality_first_work",
+        )
+        self.assertEqual(
+            metadata.get("required_minimum_output_tokens"),
+            65_536,
+        )
+        self.assertEqual(
+            metadata.get("recommended_max_output_tokens"),
+            65_536,
+        )
+
     def test_constructor_rejects_rogue_unpublished_capability_policy(self):
         rogue = replace(
             glm_extended_text_policy(),
@@ -529,7 +703,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             payload["thinking"],
             {"type": "enabled", "clear_thinking": False},
         )
-        self.assertEqual(payload["max_tokens"], 16_384)
+        self.assertEqual(payload["max_tokens"], 65_536)
         self.assertFalse(payload["stream"])
         self.assertNotIn("tools", payload)
         self.assertNotIn("tool_choice", payload)
@@ -756,9 +930,9 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         document = success_document()
         document["choices"][0]["finish_reason"] = "length"
         document["choices"][0]["message"]["content"] = ""
-        document["usage"]["completion_tokens"] = 16_384
-        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 16_384
-        document["usage"]["total_tokens"] = 16_404
+        document["usage"]["completion_tokens"] = 65_536
+        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 65_536
+        document["usage"]["total_tokens"] = 65_556
         transport = FakeTransport(document)
         provider = _GlmFlashWorkerProvider(
             glm_config(),
@@ -767,7 +941,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             key_source=StaticKeySource(),
             approval_store=AllowingApprovalStore(),
         )
-        base = delegated_task(max_cost_usd=0.01)
+        base = delegated_task(max_cost_usd=0.10)
         task = replace(base, delegation_approval_sha256=None)
         task = self._approve_with_provider(provider, task)
 
@@ -776,8 +950,8 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         self.assertEqual(execution.result.status, ResultStatus.CANDIDATE_FAILURE)
         self.assertEqual(execution.result.answer, "")
         self.assertEqual(execution.observation.answer_bytes, b"")
-        self.assertEqual(execution.observation.usage.output_tokens, 16_384)
-        self.assertEqual(execution.observation.usage.reasoning_tokens, 16_384)
+        self.assertEqual(execution.observation.usage.output_tokens, 65_536)
+        self.assertEqual(execution.observation.usage.reasoning_tokens, 65_536)
         self.assertEqual(
             execution.result.provider_meta["failure_type"],
             "ProviderReasoningBudgetExhaustedError",
@@ -809,15 +983,15 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             key_source=StaticKeySource(),
             approval_store=AllowingApprovalStore(),
         )
-        base = delegated_task(max_cost_usd=0.02)
+        base = delegated_task(max_cost_usd=0.10)
         low_output = replace(
             base,
-            constraints=replace(base.constraints, max_output_tokens=4_096),
+            constraints=replace(base.constraints, max_output_tokens=32_768),
             delegation_approval_sha256=None,
         )
         recommended_output = replace(
             base,
-            constraints=replace(base.constraints, max_output_tokens=16_384),
+            constraints=replace(base.constraints, max_output_tokens=65_536),
             delegation_approval_sha256=None,
         )
 
@@ -828,13 +1002,17 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
         self.assertEqual(
             caught.exception.safe_diagnostic()["minimum_max_output_tokens"],
-            16_384,
+            65_536,
         )
-        self.assertEqual(recommended_metadata["requested_max_output_tokens"], 16_384)
-        self.assertEqual(recommended_metadata["minimum_task_output_tokens"], 16_384)
+        self.assertEqual(recommended_metadata["requested_max_output_tokens"], 65_536)
+        self.assertEqual(recommended_metadata["minimum_task_output_tokens"], 32_768)
+        self.assertEqual(
+            recommended_metadata["required_minimum_output_tokens"],
+            65_536,
+        )
         self.assertEqual(recommended_metadata["reasoning_effort"], "max")
 
-    def test_t1_policy_accepts_the_cloud_quality_floor(self):
+    def test_t1_policy_accepts_quality_first_output(self):
         provider = _GlmFlashWorkerProvider(
             glm_config(),
             transport=FakeTransport(success_document()),
@@ -843,17 +1021,18 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             approval_store=AllowingApprovalStore(),
             token_policy=t1_glm_live_policy(),
         )
-        base = delegated_task(max_cost_usd=0.02)
+        base = delegated_task(max_cost_usd=0.10)
         task = replace(
             base,
-            constraints=replace(base.constraints, max_output_tokens=16_384),
+            constraints=replace(base.constraints, max_output_tokens=65_536),
             delegation_approval_sha256=None,
         )
 
         metadata = provider.approval_metadata(task)
 
-        self.assertEqual(metadata["minimum_task_output_tokens"], 16_384)
-        self.assertEqual(metadata["max_output_tokens"], 16_384)
+        self.assertEqual(metadata["minimum_task_output_tokens"], 32_768)
+        self.assertEqual(metadata["required_minimum_output_tokens"], 65_536)
+        self.assertEqual(metadata["max_output_tokens"], 65_536)
 
     def test_forged_glm_provider_ceiling_cannot_create_a_floor_exception(self):
         canonical = ModelTokenPolicyResolver.builtins_only().resolve(
@@ -882,9 +1061,9 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         document = success_document()
         document["choices"][0]["finish_reason"] = "length"
         document["choices"][0]["message"]["content"] = ""
-        document["usage"]["completion_tokens"] = 16_384
-        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 16_385
-        document["usage"]["total_tokens"] = 16_404
+        document["usage"]["completion_tokens"] = 65_536
+        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 65_537
+        document["usage"]["total_tokens"] = 65_556
         provider = _GlmFlashWorkerProvider(
             glm_config(),
             transport=FakeTransport(document),
@@ -892,7 +1071,7 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
             key_source=StaticKeySource(),
             approval_store=AllowingApprovalStore(),
         )
-        base = delegated_task(max_cost_usd=0.01)
+        base = delegated_task(max_cost_usd=0.10)
         task = replace(base, delegation_approval_sha256=None)
         task = self._approve_with_provider(provider, task)
 
@@ -964,8 +1143,8 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
     def test_reported_completion_tokens_cannot_exceed_requested_bound(self):
         document = success_document()
-        document["usage"]["completion_tokens"] = 16_385
-        document["usage"]["total_tokens"] = 16_405
+        document["usage"]["completion_tokens"] = 65_537
+        document["usage"]["total_tokens"] = 65_557
         provider = GlmFlashWorkerProvider(
             glm_config(),
             transport=FakeTransport(document),
@@ -1227,18 +1406,18 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
 
     def test_postflight_over_budget_is_retained_as_failed_candidate(self):
         document = success_document()
-        document["usage"]["prompt_tokens"] = 100_000
-        document["usage"]["total_tokens"] = 100_010
+        document["usage"]["prompt_tokens"] = 1_000_000
+        document["usage"]["total_tokens"] = 1_000_010
         provider = GlmFlashWorkerProvider(
             glm_config(),
             transport=FakeTransport(document),
             environ={"ZAI_API_KEY": "test-id.test-secret"},
         )
 
-        result = provider.invoke(delegated_task(max_cost_usd=0.01))
+        result = provider.invoke(delegated_task(max_cost_usd=0.10))
 
         self.assertEqual(result.status, ResultStatus.CANDIDATE_FAILURE)
-        self.assertGreater(result.cost["currency_cost_usd"], 0.01)
+        self.assertGreater(result.cost["currency_cost_usd"], 0.10)
         self.assertTrue(any("exceeded" in warning for warning in result.warnings))
 
     def test_exact_approval_digest_is_required_before_credential_resolution(self):
@@ -1307,36 +1486,20 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ProviderPolicyError, "approval digest"):
             provider.invoke(task)
 
-    def test_t1_policy_refuses_large_output_before_credential_access(self):
-        key_source = ExplodingKeySource()
-        task = replace(
-            delegated_task(max_cost_usd=0.02),
-            constraints=replace(
-                delegated_task(max_cost_usd=0.02).constraints,
-                max_output_tokens=16_385,
-                max_context_tokens=128_000,
-            ),
-            delegation_approval_sha256=None,
-        )
-        provider = _GlmFlashWorkerProvider(
-            glm_config(),
-            transport=FakeTransport(success_document()),
-            environ={},
-            key_source=key_source,
-            approval_store=AllowingApprovalStore(),
-            token_policy=t1_glm_live_policy(),
-        )
-        with self.assertRaisesRegex(ProviderPolicyError, "output.*token policy"):
-            provider.approval_metadata(task)
-        self.assertEqual(key_source.calls, 0)
+    def test_task_contract_refuses_output_above_t1_max(self):
+        with self.assertRaisesRegex(ValueError, "between 1 and 65536"):
+            replace(
+                delegated_task().constraints,
+                max_output_tokens=65_537,
+            )
 
     def test_ordinary_glm_policy_accepts_expanded_external_envelope_offline(self):
-        base_task = delegated_task(max_cost_usd=0.02)
+        base_task = delegated_task(max_cost_usd=0.10)
         task = replace(
             base_task,
             constraints=replace(
                 base_task.constraints,
-                max_output_tokens=16_384,
+                max_output_tokens=65_536,
                 max_context_tokens=512_000,
             ),
             delegation_approval_sha256=None,
