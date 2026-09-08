@@ -166,9 +166,9 @@ def delegated_task(
         delegable=True,
         delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
         constraints=TaskConstraints(
-            max_cost_usd=0.01,
+            max_cost_usd=0.10,
             max_latency_s=30,
-            max_output_tokens=16_384,
+            max_output_tokens=65_536,
             internet=True,
         ),
         required_capabilities=("text_generation",),
@@ -553,9 +553,9 @@ class RuntimeV05Tests(unittest.TestCase):
         document = success_document()
         document["choices"][0]["finish_reason"] = "length"
         document["choices"][0]["message"]["content"] = ""
-        document["usage"]["completion_tokens"] = 16_384
-        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 16_384
-        document["usage"]["total_tokens"] = 16_404
+        document["usage"]["completion_tokens"] = 65_536
+        document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 65_536
+        document["usage"]["total_tokens"] = 65_556
         provider = GlmFlashWorkerProvider(
             glm_config(),
             transport=FakeTransport(document),
@@ -568,7 +568,7 @@ class RuntimeV05Tests(unittest.TestCase):
             base,
             constraints=replace(
                 base.constraints,
-                max_cost_usd=0.02,
+                max_cost_usd=0.10,
                 privacy=PrivacyLevel.PUBLIC,
             ),
             delegation_approval_sha256=None,
