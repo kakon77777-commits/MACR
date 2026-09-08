@@ -2,8 +2,8 @@
 
 Date: 2026-09-08
 
-Status: reviewed in-chat direction; written specification awaiting operator
-review before implementation.
+Status: operator-approved design. Implementation is governed by the paired
+task-by-task TDD plan.
 
 ## Evidence and problem statement
 
