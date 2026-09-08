@@ -92,7 +92,7 @@ class RegistryPolicyTests(unittest.TestCase):
                     revision=1,
                     context_warning_tokens=100_000,
                     hard_context_tokens=128_000,
-                    default_output_tokens=16_384,
+                    default_output_tokens=32_768,
                     max_output_tokens=32_768,
                     base_policy_digest=base.policy_digest,
                 ),
@@ -170,7 +170,7 @@ class RegistryPolicyTests(unittest.TestCase):
             )
 
         self.assertEqual(effective.policy_source, "t1_live_preset")
-        self.assertEqual(effective.max_output_tokens, 16_384)
+        self.assertEqual(effective.max_output_tokens, 65_536)
 
     def test_google_gemini_is_configured_offline(self) -> None:
         configs = load_provider_configs(ROOT / "config" / "providers.json")
