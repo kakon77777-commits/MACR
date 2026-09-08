@@ -104,6 +104,28 @@ credential_read           = false
 shared_state_mutation     = false
 ```
 
-The clean Phase-C gate and any governing-Twin result belong to the later exact
-documentation subject. A successful offline gate will not authorize a provider
-probe, bulk approval, merge, or deployment.
+The first exact clean code-and-documentation subject was commit
+`fc964dfa89fa9a096f3654aacc586b37b5e7e56a` / tree
+`973fa9e5e1372469f9e6fe572cf374c7479127eb`. Its Phase-C gate returned exit 0
+with:
+
+```text
+inherited_tests            = 832
+phase_c_focused_tests       = 98
+phase_b_focused_tests       = 76
+phase_a_focused_tests       = 91
+required_test_ids           = 50
+bootstrap_processes         = 32
+semantic_commit_contenders  = 8
+fresh_package_replay        = true
+installed_import_isolated   = true
+wheel_sha256                = 4b4d7254426a5c91dd2b546b09d0b8a4809aa56b8cfeddff21c9506e7cf49956
+network_activity            = false
+provider_generation         = false
+phase_d_started             = false
+git_clean                   = true
+```
+
+This remains offline evidence. It does not authorize a provider probe, bulk
+approval, merge, release, or deployment. Any governing-Twin result belongs to
+a separately identified review subject.

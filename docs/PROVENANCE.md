@@ -512,3 +512,12 @@ environment restoration. The focused cross-provider/runtime/T1/CLI replay ran
 treating `ResourceWarning` as an error. No provider call, key read, host
 approval creation, shared-state mutation, retry, fallback, merge, push, release,
 or deployment occurred in this implementation candidate.
+
+The first clean code-and-documentation subject was
+`fc964dfa89fa9a096f3654aacc586b37b5e7e56a` / tree
+`973fa9e5e1372469f9e6fe572cf374c7479127eb`. Its Phase-C gate returned exit 0
+with 832 inherited tests, 98/76/91 Phase C/B/A focused tests, 50 required IDs,
+32 bootstrap processes, eight semantic contenders, fresh package replay,
+installed-import isolation, wheel SHA
+`4b4d7254426a5c91dd2b546b09d0b8a4809aa56b8cfeddff21c9506e7cf49956`,
+network/provider false, Phase D false, and clean Git state.
