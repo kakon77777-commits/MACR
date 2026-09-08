@@ -89,12 +89,28 @@ fallback. Start with one bounded single-language task, inspect its candidate and
 accounting result, and only then stage a larger schema-4 T1 batch. T1
 `worker_count` is manifest-configurable and is not fixed at three.
 
+Inspect only the relevant provider and time window:
+
+```powershell
+.\scripts\macr.ps1 accounting-status `
+  --provider glm_flash_worker `
+  --since 2026-09-08T00:00:00+00:00
+```
+
+The `by_failure` rows can contain safe HTTP status, Z.ai business code,
+network-attempt, response-received, and transport-stage evidence for
+new invocations. Historical failures remain null. `unsettled_count=0` means the
+runtime wrote terminal records; any `unknown_after_dispatch` rows still require
+billing reconciliation and must not be read as zero-cost.
+
 ## Failure map
 
 | Observation | Meaning | Next check |
 |---|---|---|
 | GLM `configured_offline` | Fixed key-file metadata and route configuration passed; no network test was made. | Continue to task preflight. |
 | `approval_invalid` / `ProviderPolicyError` | Task digest is missing/stale or its exact host approval is absent/stale. It is not evidence that the key is missing. | Run `--show-required-digest`, update the task, then approve it. |
+| `ProviderProtocolError` with `http_response` | Z.ai returned a non-2xx HTTP response. Safe status/business code is retained; remote prose is omitted. Billing remains unknown unless separately reconciled. | Stop the batch and classify the exact code; do not blind retry. |
+| `ProviderUnavailableError` with `connection` | A network attempt produced no HTTP response. | Stop and inspect connectivity; do not blind retry. |
 | `ProviderOutputBudgetTooSmallError` | The requested output is below the model policy floor. | Use at least 16,384 output tokens for GLM max reasoning. |
 | `ProviderTaskTypeError` | The active capability tier does not allow the declared MACR execution class. | Use `delegated_routine` for eligible routine work or obtain separate tier activation. |
 | `network_opt_in_required` | No provider call was authorized. | Add `--allow-network`, or use `invoke-glm.ps1`. |

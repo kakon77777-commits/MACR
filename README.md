@@ -130,7 +130,7 @@ Phase B/C package replay pins `SOURCE_DATE_EPOCH` to the exact candidate commit
 timestamp. Repeated clean gates therefore require the generated wheel hash—not
 only the semantic replay digests—to remain byte-identical.
 
-Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 3`, Direct conversation schema 2, model-token-policy store schema 1 / policy contract v2, provider-capability-policy schema 2, and T1 manifest schema 4.
+Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 4`, Direct conversation schema 2, model-token-policy store schema 1 / policy contract v2, provider-capability-policy schema 2, and T1 manifest schema 4.
 
 For the dedicated multiprocess replay from a source checkout:
 
@@ -247,8 +247,23 @@ creating or migrating state:
 
 ```powershell
 .\scripts\macr.ps1 capability-status --provider glm_flash_worker
-.\scripts\macr.ps1 accounting-status
+.\scripts\macr.ps1 accounting-status `
+  --provider glm_flash_worker `
+  --since 2026-09-08T00:00:00+00:00
 ```
+
+`accounting-status` filters invocation totals, pending invocation outboxes and
+safe failure groups by exact provider and aware UTC-normalized timestamp. Plan
+and bill-observation outbox counts remain global. `unsettled_count=0` means all
+selected invocations have a terminal row; it does not settle an
+`unknown_after_dispatch` charge. Unknown rows contribute no amount to
+`known_cost_usd`, which means the amount is unavailable—not that it is zero.
+
+New transport failures preserve only bounded telemetry: elapsed time,
+three-state `network_attempted` and `response_received`, HTTP status, a bounded
+provider business code, and transport stage. Remote error messages and bodies
+are discarded. Historical rows remain null rather than being inferred. There
+is still no automatic retry or fallback.
 
 `capability-status` also reports content-free current, legacy, invalid and
 active counts for model-token overrides. An old override remains immutable
@@ -270,7 +285,7 @@ digest receives that label; arbitrary mismatches are counted as invalid.
   --dispatcher-id worker-1 --allow-network
 ```
 
-These commands are implemented but the current route is offline-only. The repository includes only fake-transport complete-path evidence. No exact live manifest has been authorized and no live provider call was made for v0.7.0a0.
+These commands are implemented, but the T1 route itself is not live-accepted and no exact live T1 manifest is implied by repository state. The separate sequential GLM CLI route has live observations; those do not activate T1 authority.
 
 Generated images are preserved at:
 

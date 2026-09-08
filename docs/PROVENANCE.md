@@ -409,3 +409,43 @@ absent returned exit 0. No provider transport, generation, retry, fallback, or
 currency cost occurred. The approval does not authorize translation tasks or
 other content; every different task still requires its own exact digest and
 host record.
+
+## v0.7.0a0 provider transport telemetry repair
+
+On 2026-09-08 a bounded Claude Code GLM batch stopped after four rapid
+`ProviderProtocolError` results. Read-only accounting showed that the reported
+29 unknown runs were the all-provider lifetime total: GLM owned 26 and Grok
+owned three. Of the GLM rows, nine historical rows had no typed failure, 13
+were `ProviderUnavailableError` runs lasting roughly 280–291 seconds, and only
+the four new runs were rapid protocol failures. Their dispatch-to-terminal
+times were 0.419–0.582 seconds. Same-task retries retained exact member,
+model-token-policy and provider-tier digests. No other MACR provider invocation
+overlapped any of the four failures.
+
+The upstream cause was not recoverable because the shared HTTP transport knew
+the HTTP status but the runtime reduced every exception to its Python class and
+an empty observation. Z.ai documents an outer HTTP status plus an inner
+business error code; rate/concurrency/high-traffic and server errors therefore
+could not be distinguished. The batch remained stopped. No historical status
+or cost was inferred, and successful later dispatches did not reconcile prior
+unknown runs.
+
+Neo authorized a P0 observation repair without retry, pacing, worker-count, or
+provider-policy changes. Implementation commit
+`ddcdb67048039bbaee6a23c2011e0b17443db109` / tree
+`d57ac3dd548b5875c88c036b6b29e3b3c714f17` preserves only elapsed time,
+three-state network-attempt/response-received evidence, HTTP status, bounded
+provider error code, and transport stage. Remote HTTP message/body and
+connection reason are omitted. Accounting schema 4, accounting-outbox schema
+3, and terminal-event contract 3 carry the fields; old values remain null.
+Provider/date filters and failure grouping were added to the read-only
+`accounting-status` surface.
+
+The implementation suite ran 822 tests with zero failures and two existing
+platform capability skips while treating `ResourceWarning` as an error. A
+copy-only replay of the live 137-row accounting database migrated schema 3 to
+4 with identical row count and historical-field digest, exactly five additive
+columns, and zero fabricated historical telemetry. The source database hash
+remained unchanged and the replay copy was removed. No provider call, retry,
+fallback, source-accounting migration, billing reconciliation, or expenditure
+occurred during repair verification.
