@@ -382,3 +382,30 @@ with zero failures and two existing platform capability skips. This replay was
 offline: no provider call, key read, shared-state mutation, migration, or live
 authority activation occurred. The final clean Phase-C gate is recorded in the
 separate exact checkpoint after documentation is committed.
+
+## v0.7.0a0 GLM fixed-key Claude/Codex handoff
+
+Claude Code field feedback inferred that a missing `ZAI_API_KEY` entry in
+`.env.example` meant the GLM credential had not been persisted. Read-only
+source and runtime diagnosis disproved that hypothesis: the exact provider
+profile uses `auth_mode=api_key_file`, accepts only `D:\KEY\GLM.txt`, and the
+wrapper removes any inherited environment override. The current D-drive file
+was an ordinary non-reparse-point file and passed the bounded loader without
+printing its value or digest. Offline doctor reported `glm_flash_worker` ready
+as `configured_offline`.
+
+The actual obstruction was the committed conformance example's stale approval
+digest after later policy-envelope changes. A RED integration test reproduced
+the mismatch. Commit `7377f27fb3385c903ae4db538f14fcedce3260df` /
+tree `07d0ed6ce5788363741a22ce046971bc79211a52` updates the exact example,
+adds a Claude/Codex operator quickstart and failure map, and makes the example
+digest an executable offline contract rather than untested prose.
+
+Under Neo's explicit approval, one 30-day host approval was created for the
+exact public `glm-flash-conformance-001` envelope. This was a deliberate shared
+runtime approval-state mutation: the provider read the fixed credential only
+to authenticate that local record. A second preflight with `ZAI_API_KEY`
+absent returned exit 0. No provider transport, generation, retry, fallback, or
+currency cost occurred. The approval does not authorize translation tasks or
+other content; every different task still requires its own exact digest and
+host record.
