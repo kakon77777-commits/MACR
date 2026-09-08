@@ -72,6 +72,20 @@ For every distinct task:
 .\scripts\invoke-glm.ps1 -TaskPath .\path\to\task.json
 ```
 
+Output selection is automatic but never silent:
+
+- a `provider_conformance` task with `exact_text` of at most 256 UTF-8 bytes
+  requires/recommends 32,768;
+- every translation, classification, analysis, review, or code-text task
+  requires/recommends 65,536;
+- preflight returns the profile and recommendation; the AI host writes the
+  exact integer before obtaining a new digest and approval;
+- an operator override cannot lower the 65,536 real-work requirement.
+
+The PowerShell entry point temporarily forces its Python child to UTF-8 and
+restores the outer `PYTHONUTF8` and `PYTHONIOENCODING` values. Claude/Codex do
+not need to configure console encoding before multilingual output.
+
 Only the last command contacts Z.ai. There is one attempt and no automatic
 retry or provider fallback. See `docs\GLM_CLAUDE_CODE_QUICKSTART.md` for task
 constraints and the failure map.

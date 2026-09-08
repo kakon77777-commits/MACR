@@ -70,6 +70,24 @@ belong in `task_id` and task content. The standard MACR execution class remains
 `delegated_routine` unless a separately activated tier authorizes another exact
 type.
 
+GLM max reasoning uses two pre-approval output profiles:
+
+- `short_exact_conformance`: `task_type=provider_conformance`, return format
+  `exact_text`, and expected text at most 256 UTF-8 bytes; minimum and
+  recommendation are 32,768;
+- `quality_first_work`: every other task; minimum and recommendation are
+  65,536.
+
+Preflight exposes `output_budget_profile`, `required_minimum_output_tokens`,
+and `recommended_max_output_tokens`. An AI host may update its unapproved task
+and preflight again, but MACR never rewrites the file or raises the value after
+approval. The higher envelope also needs a `max_cost_usd` large enough for the
+reported conservative ceiling.
+
+`scripts\macr.ps1` temporarily forces its Python child to UTF-8 and restores
+the caller's prior `PYTHONUTF8` and `PYTHONIOENCODING` values. Multilingual
+output therefore does not require session-specific encoding setup.
+
 ## 3. The only paid step
 
 After the final preflight succeeds:
@@ -111,7 +129,7 @@ billing reconciliation and must not be read as zero-cost.
 | `approval_invalid` / `ProviderPolicyError` | Task digest is missing/stale or its exact host approval is absent/stale. It is not evidence that the key is missing. | Run `--show-required-digest`, update the task, then approve it. |
 | `ProviderProtocolError` with `http_response` | Z.ai returned a non-2xx HTTP response. Safe status/business code is retained; remote prose is omitted. Billing remains unknown unless separately reconciled. | Stop the batch and classify the exact code; do not blind retry. |
 | `ProviderUnavailableError` with `connection` | A network attempt produced no HTTP response. | Stop and inspect connectivity; do not blind retry. |
-| `ProviderOutputBudgetTooSmallError` | The requested output is below the model policy floor. | Use at least 16,384 output tokens for GLM max reasoning. |
+| `ProviderOutputBudgetTooSmallError` | The requested output is below its GLM task profile. | Apply the safe preflight recommendation: 32,768 for short exact conformance, otherwise 65,536; then obtain a new digest and approval. |
 | `ProviderTaskTypeError` | The active capability tier does not allow the declared MACR execution class. | Use `delegated_routine` for eligible routine work or obtain separate tier activation. |
 | `network_opt_in_required` | No provider call was authorized. | Add `--allow-network`, or use `invoke-glm.ps1`. |
 | `configuration_incomplete` on the GLM row | Fixed key-file metadata or fixed provider configuration failed. | Ask the MACR operator to inspect D-drive custody; never request the raw key. |

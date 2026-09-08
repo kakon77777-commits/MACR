@@ -465,3 +465,50 @@ readback preserved the 17-success/four-unknown 2026-09-08 GLM view. Activation
 performed no provider call or billing reconciliation; future accounting writes
 will naturally supersede the post-migration database hash without invalidating
 the backup or migration receipt.
+
+## v0.7.0a0 GLM quality-first output and Windows UTF-8 candidate
+
+Claude Code's first post-P0 Korean probe succeeded at the provider/accounting
+layers but its outer CP950 Python stdout raised `UnicodeEncodeError` while
+printing the captured Korean result. A second probe completed HTTP 200 after
+220.623 seconds but returned `finish_reason=length`: all 16,384 completion
+tokens were consumed, including 15,887 reasoning tokens, and accounting
+retained an estimated USD 0.0082952. A separately approved 32,768-token task
+then completed with `finish_reason=stop`, 20,135 reasoning tokens and estimated
+USD 0.01097435. This evidence does not explain or reconcile the four earlier
+rapid `provider_execution` unknowns.
+
+Neo selected a quality-first two-band policy. The ordinary GLM policy changed
+from digest
+`334cc8f26181a2e0aea6213c572e4dba3e612986efc2b71e9914d76351c20e26`
+to `c268567d90ec2e6f821587315bd126044d30acb949b8f5049397b1ce44602067`:
+32,768 immutable minimum and 65,536 default/maximum. The T1 preset changed from
+`ecfafac42410cc8f6b21db637989eb33ac92c347cc513720bfe204678bab3490`
+to `ebde549215ec2489daa6d8dffffc86441ebab3eca725ed183716e28da7f0c55b`:
+32,768 minimum and 65,536 default/maximum. Context limits and every non-GLM
+policy remained unchanged.
+
+A pure pre-approval selector assigns 32,768 to `provider_conformance` plus
+`exact_text` of at most 256 UTF-8 bytes and 65,536 to every other GLM task. The
+profile, required minimum and recommendation are content-free preflight
+metadata. The selected integer is still explicit and digest-bound; MACR never
+mutates a task or raises its budget after approval. An operator override may
+make real work unavailable but cannot lower its 65,536 requirement.
+
+The implementation boundary before active documentation is commit
+`ac536cd4309ec044d32a4f97fc2c53f24440dbd4` / tree
+`78520df1465b18085ca913660f3c8051d5eb8387`. T1 schema remains 4 and dynamic;
+real-work members now require 65,536 and old-policy schema-4 manifests fail
+without byte mutation. `macr.ps1` owns child UTF-8 using temporary
+`PYTHONUTF8=1`, `PYTHONIOENCODING=utf-8`, and `-X utf8`, then restores both
+outer values and preserves the Python exit code.
+
+RED/GREEN evidence covered policy values, 256/257-byte selection,
+delegated-short-exact rejection, operator-override bypass, exact 65,536 request
+binding, T1 policy mismatch, real PowerShell CP950 Korean output, and outer
+environment restoration. The focused cross-provider/runtime/T1/CLI replay ran
+155 tests with one existing platform skip. The complete repository replay ran
+832 tests with zero failures and two existing platform capability skips while
+treating `ResourceWarning` as an error. No provider call, key read, host
+approval creation, shared-state mutation, retry, fallback, merge, push, release,
+or deployment occurred in this implementation candidate.

@@ -66,7 +66,7 @@ Token limits are no longer one global setting. Built-ins and append-only operato
 |---|---:|---:|---:|---:|---:|
 | `grok/grok-4.6` | 180,000 | 400,000 | 32,768 | 32,768 | 65,536 |
 | `grok_standard/grok-4.3` | 180,000 | 400,000 | 32,768 | 32,768 | 65,536 |
-| `glm_flash_worker/glm-5.3-flash` | 400,000 | 512,000 | 16,384 | 16,384 | 65,536 |
+| `glm_flash_worker/glm-5.3-flash` | 400,000 | 512,000 | 32,768 | 65,536 | 65,536 |
 | `google_gemini/gemini-3.7-flash` | 400,000 | 512,000 | 16,384 | 16,384 | 65,536 |
 | `minimax/MiniMax-M2.7` | 160,000 | 180,000 | 2,048 | 2,048 | 2,048 |
 | `minimax/MiniMax-M2.7-highspeed` | 160,000 | 180,000 | 2,048 | 2,048 | 2,048 |
@@ -74,11 +74,13 @@ Token limits are no longer one global setting. Built-ins and append-only operato
 
 `TaskConstraints.max_output_tokens` now defaults to 16,384. For external text
 models, the exact model-local default is also a hard quality floor: Grok uses
-32,768; ordinary GLM and Gemini use 16,384. MiniMax remains an explicit
+32,768; ordinary GLM uses 32,768 minimum with a 65,536 quality-first default;
+Gemini uses 16,384. MiniMax remains an explicit
 2,048-token capability exception because that is its configured provider
 ceiling. Loopback Qwythos does not inherit the cloud floor. An external
-operator override cannot lower its default below 16,384 unless the provider's
-own output ceiling is lower.
+operator override cannot lower a model below its immutable minimum. For GLM,
+an override also cannot reduce the 65,536 real-work requirement; it can only
+make that workload unavailable if its own maximum is smaller.
 
 The quality floor is an explicit field in model-token policy contract v2 and
 therefore changes the policy digest. Grok, Gemini, MiniMax and GLM adapters
@@ -90,8 +92,9 @@ new conversation rather than silently rebinding its history. A legacy local
 Qwythos v1 snapshot is verified under its original digest and retains the same
 local limits in memory; it does not acquire the cloud floor.
 
-The T1 GLM preset is separate: exact `glm-5.3-flash`, 128,000 context and
-16,384 output. T1 manifest schema 4 no longer fixes the batch at three members
+The T1 GLM preset is separate: exact `glm-5.3-flash`, 128,000 context,
+32,768 minimum output and 65,536 default/maximum output. T1 real-work members
+therefore use 65,536. T1 manifest schema 4 no longer fixes the batch at three members
 or three workers. `worker_count` is explicit and digest-bound, may range from
 one through the exact member count, and must match the authorized dispatcher
 set. Each member carries its own positive exact cost ceiling; the aggregate
@@ -236,10 +239,12 @@ be relabelled as routine. When a type is rejected, `glm-preflight` returns a
 content-free structured diagnostic containing the requested safe identifier,
 active tier/revision/digest and exact allowed types.
 
-GLM 5.3 Flash keeps max reasoning. A delegated request below the model-local
-16,384-token floor is rejected before credential access or transport, rather
-than silently enlarged. Reaching the floor reduces the observed exhaustion
-risk but does not guarantee visible content: a `length` response whose output
+GLM 5.3 Flash keeps max reasoning. A short exact provider conformance request
+requires 32,768 output tokens; every other GLM task requires 65,536. The
+credential-free selector runs before digest and host approval and returns a
+safe profile/recommendation instead of rewriting the task. A lower request is
+rejected before credential access or transport. Reaching the requirement does
+not guarantee visible content: a `length` response whose output
 is entirely reasoning becomes the distinct
 `ProviderReasoningBudgetExhaustedError`, preserves safe usage/cost evidence,
 records typed `failure_code` / `provider_response_validation` in terminal and
