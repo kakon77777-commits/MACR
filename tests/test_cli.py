@@ -791,7 +791,7 @@ class DoctorTests(unittest.TestCase):
                 constraints=TaskConstraints(
                     max_cost_usd=0.01,
                     max_latency_s=30,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -856,7 +856,11 @@ class DoctorTests(unittest.TestCase):
         )
         self.assertEqual(
             document["policy_violation"]["minimum_max_output_tokens"],
-            16_384,
+            65_536,
+        )
+        self.assertEqual(
+            document["policy_violation"]["output_budget_profile"],
+            "quality_first_work",
         )
         self.assertNotIn("PUBLIC APPROVAL FLOOR BODY", output.getvalue())
 
@@ -957,9 +961,9 @@ class DoctorTests(unittest.TestCase):
                 delegable=True,
                 delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
                 constraints=TaskConstraints(
-                    max_cost_usd=0.01,
+                    max_cost_usd=0.10,
                     max_latency_s=30,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -987,6 +991,8 @@ class DoctorTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(document["status"], "approval_required")
         self.assertEqual(len(document["required_approval_sha256"]), 64)
+        self.assertEqual(document["output_budget_profile"], "quality_first_work")
+        self.assertEqual(document["recommended_max_output_tokens"], 65_536)
         self.assertNotIn("PUBLIC PREFLIGHT BODY", output.getvalue())
 
     def test_glm_preflight_uses_exact_active_extended_capability(self) -> None:
@@ -1028,9 +1034,9 @@ class DoctorTests(unittest.TestCase):
                 delegable=True,
                 delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
                 constraints=TaskConstraints(
-                    max_cost_usd=0.01,
+                    max_cost_usd=0.10,
                     max_latency_s=900,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -1067,9 +1073,9 @@ class DoctorTests(unittest.TestCase):
                 delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
                 delegation_approval_sha256="0" * 64,
                 constraints=TaskConstraints(
-                    max_cost_usd=0.01,
+                    max_cost_usd=0.10,
                     max_latency_s=30,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -1104,9 +1110,9 @@ class DoctorTests(unittest.TestCase):
                 delegable=True,
                 delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
                 constraints=TaskConstraints(
-                    max_cost_usd=0.02,
+                    max_cost_usd=0.10,
                     max_latency_s=30,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -1183,7 +1189,15 @@ class DoctorTests(unittest.TestCase):
             "output_budget_below_quality_floor",
         )
         self.assertEqual(diagnostic["requested_max_output_tokens"], 4_096)
-        self.assertEqual(diagnostic["minimum_max_output_tokens"], 16_384)
+        self.assertEqual(diagnostic["minimum_max_output_tokens"], 65_536)
+        self.assertEqual(
+            diagnostic["recommended_max_output_tokens"],
+            65_536,
+        )
+        self.assertEqual(
+            diagnostic["output_budget_profile"],
+            "quality_first_work",
+        )
         self.assertNotIn("PUBLIC OUTPUT FLOOR BODY", output.getvalue())
 
     def test_glm_preflight_does_not_echo_an_unsafe_task_type(self) -> None:
@@ -1195,9 +1209,9 @@ class DoctorTests(unittest.TestCase):
                 delegable=True,
                 delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
                 constraints=TaskConstraints(
-                    max_cost_usd=0.02,
+                    max_cost_usd=0.10,
                     max_latency_s=30,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -1234,7 +1248,7 @@ class DoctorTests(unittest.TestCase):
                     revision=1,
                     context_warning_tokens=100_000,
                     hard_context_tokens=128_000,
-                    default_output_tokens=16_384,
+                    default_output_tokens=32_768,
                     max_output_tokens=32_768,
                     base_policy_digest=base.policy_digest,
                 ),
@@ -1247,7 +1261,7 @@ class DoctorTests(unittest.TestCase):
                 delegable=True,
                 delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
                 constraints=TaskConstraints(
-                    max_cost_usd=0.02,
+                    max_cost_usd=0.10,
                     max_latency_s=30,
                     max_output_tokens=65_536,
                     max_context_tokens=128_000,
@@ -1282,9 +1296,9 @@ class DoctorTests(unittest.TestCase):
                 delegable=True,
                 delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
                 constraints=TaskConstraints(
-                    max_cost_usd=0.01,
+                    max_cost_usd=0.10,
                     max_latency_s=30,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),
@@ -1344,9 +1358,9 @@ class DoctorTests(unittest.TestCase):
                 delegable=True,
                 delegation_class=DelegationClass.NON_SENSITIVE_ROUTINE,
                 constraints=TaskConstraints(
-                    max_cost_usd=0.01,
+                    max_cost_usd=0.10,
                     max_latency_s=30,
-                    max_output_tokens=16_384,
+                    max_output_tokens=65_536,
                     internet=True,
                     privacy=PrivacyLevel.PUBLIC,
                 ),

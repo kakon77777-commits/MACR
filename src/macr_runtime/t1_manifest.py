@@ -16,8 +16,12 @@ from .errors import (
     LegacyFixedWorkerTopologyIncompatibleError,
     LegacyOutputPolicyIncompatibleError,
     LegacyPreTierIncompatibleError,
+    ProviderPolicyError,
 )
-from .providers.glm import contains_obvious_sensitive_marker
+from .providers.glm import (
+    contains_obvious_sensitive_marker,
+    glm_output_budget_decision,
+)
 from .route_resolution import ExecutionRouteProposal
 from .runtime import task_contract_digest
 from .scheduler import TargetClaim
@@ -224,6 +228,23 @@ class T1ExecutionMember:
     def _validate_task(self) -> None:
         task = self.task
         validate_task_consistency(task)
+        token_policy = t1_glm_live_policy()
+        try:
+            token_policy.validate_task_output_tokens(
+                task.constraints.max_output_tokens
+            )
+        except ProviderPolicyError as exc:
+            raise ValueError(
+                "T1 task output budget is outside its GLM token policy"
+            ) from exc
+        output_budget = glm_output_budget_decision(task, token_policy)
+        if (
+            task.constraints.max_output_tokens
+            < output_budget.minimum_max_output_tokens
+        ):
+            raise ValueError(
+                "T1 task output budget is below its GLM output profile"
+            )
         if any(
             contains_obvious_sensitive_marker(value)
             for value in _all_strings(task.to_dict())
@@ -245,7 +266,6 @@ class T1ExecutionMember:
                 rel_tol=0,
                 abs_tol=1e-12,
             )
-            or task.constraints.max_output_tokens != 16_384
             or (
                 task.constraints.max_context_tokens is not None
                 and task.constraints.max_context_tokens > 128_000

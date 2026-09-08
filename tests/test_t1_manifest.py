@@ -65,9 +65,9 @@ def task(ordinal: int) -> TaskContract:
             {"ordinal": ordinal},
         ),
         constraints=TaskConstraints(
-            max_cost_usd=0.010,
+            max_cost_usd=0.050,
             max_latency_s=180,
-            max_output_tokens=16_384,
+            max_output_tokens=65_536,
             max_context_tokens=128_000,
             internet=True,
             privacy=PrivacyLevel.PUBLIC,
@@ -89,7 +89,7 @@ def member(ordinal: int, *, route_seed: int = 1) -> T1ExecutionMember:
         role_digest=sha256_id("test_t1_role_v1", {"ordinal": ordinal}),
         privacy="public",
         context_class="non_sensitive_routine",
-        cost_ceiling_usd=0.010,
+        cost_ceiling_usd=0.050,
         target_claims=(TargetClaim.for_path(f"src/t1-{ordinal}.txt"),),
     )
 
@@ -100,7 +100,7 @@ def manifest(
     worker_count: int = 3,
     campaign_cost_ceiling_usd: float | None = None,
 ) -> T1ExecutionManifest:
-    aggregate = 0.010 * member_count
+    aggregate = 0.050 * member_count
     return T1ExecutionManifest.create(
         plan_digest="a" * 64,
         members=tuple(member(ordinal) for ordinal in range(member_count)),
@@ -119,13 +119,68 @@ def manifest(
 
 
 class T1ManifestTests(unittest.TestCase):
+    def test_t1_real_work_requires_quality_first_output(self) -> None:
+        base = member(0)
+        quality_task = replace(
+            base.task,
+            constraints=replace(
+                base.task.constraints,
+                max_cost_usd=0.050,
+                max_output_tokens=65_536,
+            ),
+        )
+        try:
+            accepted = T1ExecutionMember.create(
+                plan_digest=base.plan_digest,
+                ordinal=base.ordinal,
+                task=quality_task,
+                route=base.route,
+                token_policy_digest=t1_glm_live_policy().policy_digest,
+                provider_tier_binding_digest=(
+                    base.provider_tier_binding_digest
+                ),
+                role_digest=base.role_digest,
+                privacy=base.privacy,
+                context_class=base.context_class,
+                cost_ceiling_usd=0.050,
+                target_claims=base.target_claims,
+            )
+        except ValueError as exc:
+            self.fail(f"T1 quality-first member was rejected: {exc}")
+
+        task_32k = replace(
+            quality_task,
+            constraints=replace(
+                quality_task.constraints,
+                max_output_tokens=32_768,
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "output budget"):
+            T1ExecutionMember.create(
+                plan_digest=accepted.plan_digest,
+                ordinal=accepted.ordinal,
+                task=task_32k,
+                route=accepted.route,
+                token_policy_digest=t1_glm_live_policy().policy_digest,
+                provider_tier_binding_digest=(
+                    accepted.provider_tier_binding_digest
+                ),
+                role_digest=accepted.role_digest,
+                privacy=accepted.privacy,
+                context_class=accepted.context_class,
+                cost_ceiling_usd=0.050,
+                target_claims=accepted.target_claims,
+            )
+
+        self.assertEqual(accepted.task.constraints.max_output_tokens, 65_536)
+
     def test_worker_count_is_explicit_and_independent_of_member_count(self) -> None:
         members = (member(0), member(1), member(2))
         two_workers = T1ExecutionManifest.create(
             plan_digest="a" * 64,
             members=members,
             worker_count=2,
-            aggregate_cost_ceiling_usd=0.030,
+            aggregate_cost_ceiling_usd=0.150,
             campaign_cost_ceiling_usd=0.200,
             expires_at="2099-01-01T00:00:00+00:00",
             authorized_dispatchers=("worker-1", "worker-2"),
@@ -134,7 +189,7 @@ class T1ManifestTests(unittest.TestCase):
             plan_digest="a" * 64,
             members=members,
             worker_count=3,
-            aggregate_cost_ceiling_usd=0.030,
+            aggregate_cost_ceiling_usd=0.150,
             campaign_cost_ceiling_usd=0.200,
             expires_at="2099-01-01T00:00:00+00:00",
             authorized_dispatchers=("worker-1", "worker-2", "worker-3"),
@@ -152,7 +207,7 @@ class T1ManifestTests(unittest.TestCase):
             plan_digest="a" * 64,
             members=members,
             worker_count=5,
-            aggregate_cost_ceiling_usd=0.050,
+            aggregate_cost_ceiling_usd=0.250,
             campaign_cost_ceiling_usd=1.000,
             expires_at="2099-01-01T00:00:00+00:00",
             authorized_dispatchers=tuple(
@@ -215,15 +270,15 @@ class T1ManifestTests(unittest.TestCase):
             {
                 "members": members,
                 "worker_count": 0,
-                "aggregate_cost_ceiling_usd": 0.030,
-                "campaign_cost_ceiling_usd": 0.030,
+                "aggregate_cost_ceiling_usd": 0.150,
+                "campaign_cost_ceiling_usd": 0.150,
                 "authorized_dispatchers": (),
             },
             {
                 "members": members,
                 "worker_count": 4,
-                "aggregate_cost_ceiling_usd": 0.030,
-                "campaign_cost_ceiling_usd": 0.030,
+                "aggregate_cost_ceiling_usd": 0.150,
+                "campaign_cost_ceiling_usd": 0.150,
                 "authorized_dispatchers": (
                     "worker-1",
                     "worker-2",
@@ -234,8 +289,8 @@ class T1ManifestTests(unittest.TestCase):
             {
                 "members": members,
                 "worker_count": 2,
-                "aggregate_cost_ceiling_usd": 0.030,
-                "campaign_cost_ceiling_usd": 0.030,
+                "aggregate_cost_ceiling_usd": 0.150,
+                "campaign_cost_ceiling_usd": 0.150,
                 "authorized_dispatchers": (
                     "worker-1",
                     "worker-2",
@@ -245,8 +300,8 @@ class T1ManifestTests(unittest.TestCase):
             {
                 "members": members,
                 "worker_count": 3,
-                "aggregate_cost_ceiling_usd": 0.040,
-                "campaign_cost_ceiling_usd": 0.040,
+                "aggregate_cost_ceiling_usd": 0.200,
+                "campaign_cost_ceiling_usd": 0.200,
                 "authorized_dispatchers": (
                     "worker-1",
                     "worker-2",
@@ -256,8 +311,8 @@ class T1ManifestTests(unittest.TestCase):
             {
                 "members": members,
                 "worker_count": 3,
-                "aggregate_cost_ceiling_usd": 0.030,
-                "campaign_cost_ceiling_usd": 0.020,
+                "aggregate_cost_ceiling_usd": 0.150,
+                "campaign_cost_ceiling_usd": 0.100,
                 "authorized_dispatchers": (
                     "worker-1",
                     "worker-2",
@@ -421,6 +476,40 @@ class T1ManifestTests(unittest.TestCase):
         self.assertEqual(inspection.status, "legacy_fixed_three_workers")
         self.assertEqual(inspection.schema_version, 3)
         self.assertEqual(inspection.member_count, 3)
+        self.assertEqual(after, raw)
+
+    def test_stale_schema_four_t1_policy_fails_without_rewriting_manifest(self) -> None:
+        old_policy_digest = (
+            "ecfafac42410cc8f6b21db637989eb33ac92c347cc513720bfe204678bab3490"
+        )
+        current = manifest()
+        document = current.to_dict()
+        member_digests = []
+        for index, current_member in enumerate(current.members):
+            member_document = document["members"][index]
+            member_document["token_policy_digest"] = old_policy_digest
+            canonical_member = current_member.canonical_member()
+            canonical_member["token_policy_digest"] = old_policy_digest
+            member_document["member_digest"] = sha256_id(
+                "t1_execution_member_v4",
+                canonical_member,
+            )
+            member_digests.append(member_document["member_digest"])
+        canonical_manifest = current.canonical_manifest()
+        canonical_manifest["ordered_member_digests"] = member_digests
+        document["manifest_digest"] = sha256_id(
+            "t1_execution_manifest_v4",
+            canonical_manifest,
+        )
+
+        with d_drive_tempdir() as temp:
+            path = temp / "stale-policy-schema-four.json"
+            raw = json.dumps(document, sort_keys=True).encode("utf-8")
+            path.write_bytes(raw)
+            with self.assertRaisesRegex(ValueError, "token policy"):
+                load_t1_manifest(path)
+            after = path.read_bytes()
+
         self.assertEqual(after, raw)
 
     def test_member_and_manifest_digest_bind_order_task_route_policy_cost_and_targets(
