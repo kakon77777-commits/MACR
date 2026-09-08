@@ -204,6 +204,14 @@ Restricted GLM Flash worker, loading its key from D: for this process only:
 .\scripts\invoke-glm.ps1 -TaskPath .\examples\glm-worker-task.example.json
 ```
 
+`ZAI_API_KEY` is intentionally not a supported MACR setting. The committed GLM
+profile and bounded provider loader use only the ordinary, non-reparse-point
+file `D:\KEY\GLM.txt`; `invoke-glm.ps1` clears any process-level variable of
+that name before entering MACR. Claude Code and Codex therefore do not need the
+credential value in their shell, prompt, `.env`, or task file. See
+[`docs/GLM_CLAUDE_CODE_QUICKSTART.md`](docs/GLM_CLAUDE_CODE_QUICKSTART.md) for
+the content-free readiness check, exact approval sequence, and failure map.
+
 `glm_flash_worker` requires `delegable=true`, `delegation_class=non_sensitive_routine`, an exact `delegation_approval_sha256`, and a separate unexpired host-approval record under D: runtime state. New typed approval records bind approval-contract schema 3 and the exact provider-tier binding; pre-existing records remain immutable `legacy_pre_tier` evidence and cannot satisfy new dispatch. The approval is authenticated with HMAC-SHA256 using the separately controlled fixed GLM credential; editing the JSON or extending its expiry invalidates the MAC. A task cannot authorize itself merely by carrying its own checksum. The approval manifest covers task ID, exact latency, complete credential-free request payload, fixed provider/endpoint/model, provider-tier binding, task type, privacy, maximum output, pricing basis, and USD ceiling. Changing any covered byte invalidates approval before network use. Public or explicitly approved internal privacy, an empty `write_scope`, independent verification, no patch authority, and a positive conservative-list-price budget are also mandatory. It accepts only bounded text inputs with non-path labels, rejects obvious local-path/credential markers, and omits local task/workspace identity and currency budget from the outbound request. HTTPS schemes are not drive paths; observed `X:\\<LaTeX-command>` ambiguities are exempted only through a closed command set and cease to be exempt when path-like continuation follows. Semantic classification still belongs to the trusted operator.
 
 The immutable built-in `standard` GLM tier permits the two existing routine task

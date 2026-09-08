@@ -8,6 +8,8 @@ from macr_runtime.contracts import (
     ReturnFormat,
     TaskContract,
 )
+from macr_runtime.config import load_provider_configs
+from macr_runtime.providers.glm import GlmFlashWorkerProvider
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,6 +106,27 @@ class ExampleContractTests(unittest.TestCase):
         self.assertFalse(task.return_contract.patch)
         self.assertEqual(task.return_contract.format, ReturnFormat.EXACT_TEXT)
         self.assertEqual(task.return_contract.exact_text, "MACR_GLM_OK")
+
+    def test_glm_example_digest_matches_current_offline_envelope(self) -> None:
+        task = load_example("glm-worker-task.example.json")
+        config = next(
+            item
+            for item in load_provider_configs(ROOT / "config" / "providers.json")
+            if item.id == "glm_flash_worker"
+        )
+        provider = GlmFlashWorkerProvider(
+            config,
+            environ={},
+            key_source=object(),
+            approval_store=object(),
+        )
+
+        metadata = provider.approval_metadata(task)
+
+        self.assertEqual(
+            task.delegation_approval_sha256,
+            metadata["required_approval_sha256"],
+        )
 
 
 if __name__ == "__main__":
