@@ -541,3 +541,27 @@ exit 0. This local activation performed no provider request, generation,
 retry, fallback, bulk task approval, or currency expenditure. All real GLM
 work remains subject to the 65,536 quality-first floor and its own exact host
 approval.
+
+## v0.7.0a0 local GLM extended-tier activation
+
+On 2026-09-09 the German translation batch stopped after the same exact task
+twice reached its 290-second client boundary without an HTTP response. Neo's
+prior explicit GLM-elevation authority was applied to the existing governed
+capability path. The empty schema-2 capability store had been resolving the
+300-second standard fallback. After five zero-invoker census samples and
+WAL-consistent SQLite backups, an exact pre-issued authority activated the
+built-in `extended_text_candidate` revision 1 with a 900-second ceiling and
+binding
+`66fa1fa1cdf233c81c2e0c8c8e1dd6586d0673e679178752783533edd3a5b242`.
+The consumed authority was then revoked; the persistent active head remains
+extended until a separately authorized forward activation changes it.
+
+Accounting, approvals, provider events, runs and leases were byte/logically
+unchanged across activation. Both standard and extended exact policies are
+saved, so normal recovery is a new standard-bound forward activation rather
+than restoration of the runtime database. The real 600-second task now passes
+the tier check and reports required approval digest
+`5679454c7c6c5d38345ac8184b5e9efb7b2128158199b0388fafecddee918af2`;
+no approval or provider call was performed. Exact backup hashes, table counts,
+authority provenance, falsifying readback and recovery boundary are recorded
+in `docs/checkpoints/MACR-v0.7.0a0-glm-extended-tier-activation-2026-09-09.md`.
