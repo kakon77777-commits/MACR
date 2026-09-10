@@ -250,6 +250,67 @@ def glm_provider_admission_policy() -> ProviderAdmissionPolicy:
 
 
 @dataclass(frozen=True)
+class ProviderAdmissionTargetBinding:
+    provider_id: str
+    policy_digest: str
+    target: int
+    policy_revision: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "provider_id",
+            _identifier("provider_id", self.provider_id),
+        )
+        object.__setattr__(
+            self,
+            "policy_digest",
+            _digest("policy_digest", self.policy_digest),
+        )
+        if self.target not in {1, 2}:
+            raise ValueError("provider admission target is not measured")
+        object.__setattr__(
+            self,
+            "policy_revision",
+            _positive_int(
+                "policy_revision",
+                self.policy_revision,
+                maximum=1_000_000,
+            ),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        policy: ProviderAdmissionPolicy,
+        *,
+        target: int,
+    ) -> "ProviderAdmissionTargetBinding":
+        if not isinstance(policy, ProviderAdmissionPolicy):
+            raise ValueError("policy must be a ProviderAdmissionPolicy")
+        if target not in {policy.effective_target, policy.candidate_target}:
+            raise ValueError("provider admission target is not measured")
+        return cls(
+            provider_id=policy.provider_id,
+            policy_digest=policy.policy_digest,
+            target=target,
+            policy_revision=policy.revision,
+        )
+
+    @property
+    def binding_digest(self) -> str:
+        return sha256_id("provider_admission_target_v1", self.to_dict())
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "provider_id": self.provider_id,
+            "policy_digest": self.policy_digest,
+            "target": self.target,
+            "policy_revision": self.policy_revision,
+        }
+
+
+@dataclass(frozen=True)
 class ProviderAdmissionRequest:
     request_id: str
     provider_id: str
@@ -390,6 +451,7 @@ class ProviderAdmissionRecord:
 
 @dataclass(frozen=True)
 class ProviderAdmissionStatus:
+    initialized: bool
     provider_id: str
     policy_digest: str
     effective_target: int
@@ -399,9 +461,13 @@ class ProviderAdmissionStatus:
     circuit_state: str
     last_signal: str | None
     counts: Mapping[str, int]
+    lane_counts: Mapping[str, int]
+    project_active_counts: tuple[Mapping[str, object], ...]
+    legacy_pre_provider_admission_count: int
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "initialized": self.initialized,
             "provider_id": self.provider_id,
             "policy_digest": self.policy_digest,
             "effective_target": self.effective_target,
@@ -411,6 +477,13 @@ class ProviderAdmissionStatus:
             "circuit_state": self.circuit_state,
             "last_signal": self.last_signal,
             "counts": dict(self.counts),
+            "lane_counts": dict(self.lane_counts),
+            "project_active_counts": [
+                dict(item) for item in self.project_active_counts
+            ],
+            "legacy_pre_provider_admission_count": (
+                self.legacy_pre_provider_admission_count
+            ),
         }
 
 
@@ -507,6 +580,76 @@ class ProviderAdmissionKernel:
             raise
         finally:
             connection.close()
+
+    def activate_target(
+        self,
+        target: ProviderAdmissionTargetBinding,
+        reference: AuthorizationReference,
+    ) -> ProviderAdmissionStatus:
+        if not isinstance(target, ProviderAdmissionTargetBinding):
+            raise ValueError(
+                "target must be a ProviderAdmissionTargetBinding"
+            )
+        if (
+            target.provider_id != self.policy.provider_id
+            or target.policy_digest != self.policy.policy_digest
+            or target.policy_revision != self.policy.revision
+            or target.target
+            not in {
+                self.policy.effective_target,
+                self.policy.candidate_target,
+            }
+        ):
+            raise ProviderAdmissionConflict(
+                "provider admission target binding is stale"
+            )
+        self.authorities.verify(
+            reference,
+            provider_id=self.policy.provider_id,
+            plane="provider_capacity_activation",
+            task_type="provider_capacity_target",
+            provider_admission_target_digest=target.binding_digest,
+        )
+        now = self._current_time().isoformat()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT * FROM provider_admission_state WHERE provider_id=?",
+                (self.policy.provider_id,),
+            ).fetchone()
+            if (
+                state is None
+                or state["policy_digest"] != self.policy.policy_digest
+                or state["circuit_state"] != "closed"
+            ):
+                raise ProviderAdmissionConflict(
+                    "provider admission target cannot change in current state"
+                )
+            active_or_waiting = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_requests
+                WHERE provider_id=? AND state IN (
+                    'waiting','granted','dispatched','reconciliation_required'
+                )""",
+                (self.policy.provider_id,),
+            ).fetchone()[0]
+            if active_or_waiting:
+                raise ProviderAdmissionConflict(
+                    "provider admission target requires an idle provider"
+                )
+            connection.execute(
+                """UPDATE provider_admission_state
+                SET effective_target=?, last_signal='target_activated',
+                    updated_at=? WHERE provider_id=?""",
+                (target.target, now, self.policy.provider_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.status(self.policy.provider_id)
 
     def _verify_authority(self, request: ProviderAdmissionRequest) -> None:
         self.authorities.verify(
@@ -1194,6 +1337,41 @@ class ProviderAdmissionKernel:
                 GROUP BY state""",
                 (provider,),
             ).fetchall()
+            lane_rows = connection.execute(
+                """SELECT admission_lane, COUNT(*) AS count
+                FROM provider_admission_requests
+                WHERE provider_id=? AND state IN ('waiting','granted','dispatched')
+                GROUP BY admission_lane""",
+                (provider,),
+            ).fetchall()
+            project_rows = connection.execute(
+                """SELECT project_binding_digest, active_units
+                FROM provider_admission_projects
+                WHERE provider_id=? AND active_units > 0
+                ORDER BY project_binding_digest""",
+                (provider,),
+            ).fetchall()
+            batch_columns = {
+                item[1]
+                for item in connection.execute(
+                    "PRAGMA table_info(plan_queue_batches)"
+                ).fetchall()
+            }
+            legacy_count = (
+                connection.execute(
+                    """SELECT COUNT(*) FROM plan_queue_batches
+                    WHERE project_binding_digest IS NULL
+                       OR admission_lane IS NULL
+                       OR provider_admission_policy_digest IS NULL"""
+                ).fetchone()[0]
+                if {
+                    "project_binding_digest",
+                    "admission_lane",
+                    "provider_admission_policy_digest",
+                }
+                <= batch_columns
+                else 0
+            )
         finally:
             connection.close()
         if (
@@ -1216,7 +1394,12 @@ class ProviderAdmissionKernel:
             )
         }
         counts.update({row["state"]: row["count"] for row in rows})
+        lane_counts = {item.value: 0 for item in AdmissionLane}
+        lane_counts.update(
+            {row["admission_lane"]: row["count"] for row in lane_rows}
+        )
         return ProviderAdmissionStatus(
+            initialized=True,
             provider_id=provider,
             policy_digest=self.policy.policy_digest,
             effective_target=state["effective_target"],
@@ -1226,7 +1409,198 @@ class ProviderAdmissionKernel:
             circuit_state=state["circuit_state"],
             last_signal=state["last_signal"],
             counts=counts,
+            lane_counts=lane_counts,
+            project_active_counts=tuple(
+                {
+                    "project_binding_digest": row[
+                        "project_binding_digest"
+                    ],
+                    "active_units": row["active_units"],
+                }
+                for row in project_rows
+            ),
+            legacy_pre_provider_admission_count=legacy_count,
         )
+
+
+def read_provider_admission_status(
+    path: str | Path,
+    provider_id: str,
+) -> ProviderAdmissionStatus:
+    candidate = Path(path)
+    provider = _identifier("provider_id", provider_id)
+    policy = glm_provider_admission_policy()
+    if provider != policy.provider_id:
+        raise ProviderAdmissionConflict(
+            "provider admission status uses another provider"
+        )
+    empty_counts = {
+        name: 0
+        for name in (
+            "waiting",
+            "granted",
+            "dispatched",
+            "completed",
+            "cancelled",
+            "reconciliation_required",
+            "reconciled",
+        )
+    }
+    if not candidate.is_file():
+        return ProviderAdmissionStatus(
+            initialized=False,
+            provider_id=provider,
+            policy_digest=policy.policy_digest,
+            effective_target=policy.effective_target,
+            candidate_target=policy.candidate_target,
+            hard_max=policy.hard_max,
+            per_project_cap=policy.per_project_cap,
+            circuit_state="closed",
+            last_signal=None,
+            counts=empty_counts,
+            lane_counts={item.value: 0 for item in AdmissionLane},
+            project_active_counts=(),
+            legacy_pre_provider_admission_count=0,
+        )
+    connection = sqlite3.connect(candidate.absolute().as_uri() + "?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        meta = connection.execute(
+            "SELECT version FROM schema_meta WHERE component='runtime'"
+        ).fetchone()
+        if meta is None or meta["version"] < 8:
+            return ProviderAdmissionStatus(
+                initialized=False,
+                provider_id=provider,
+                policy_digest=policy.policy_digest,
+                effective_target=policy.effective_target,
+                candidate_target=policy.candidate_target,
+                hard_max=policy.hard_max,
+                per_project_cap=policy.per_project_cap,
+                circuit_state="closed",
+                last_signal=None,
+                counts=empty_counts,
+                lane_counts={item.value: 0 for item in AdmissionLane},
+                project_active_counts=(),
+                legacy_pre_provider_admission_count=0,
+            )
+        if meta["version"] != RuntimeDatabase.SCHEMA_VERSION:
+            raise ProviderAdmissionConflict(
+                "provider admission runtime schema is unsupported"
+            )
+        policy_row = connection.execute(
+            """SELECT body_json, body_sha256, policy_digest
+            FROM provider_admission_policies
+            WHERE provider_id=? AND revision=?""",
+            (provider, policy.revision),
+        ).fetchone()
+        if policy_row is None:
+            raise ProviderAdmissionConflict(
+                "provider admission policy is missing"
+            )
+        expected_body_sha = hashlib.sha256(
+            policy_row["body_json"].encode("utf-8")
+        ).hexdigest()
+        try:
+            stored_policy = ProviderAdmissionPolicy.from_dict(
+                json.loads(policy_row["body_json"])
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ProviderAdmissionConflict(
+                "provider admission policy is invalid"
+            ) from exc
+        if (
+            expected_body_sha != policy_row["body_sha256"]
+            or stored_policy != policy
+            or stored_policy.policy_digest != policy_row["policy_digest"]
+        ):
+            raise ProviderAdmissionConflict(
+                "provider admission policy is invalid"
+            )
+        state = connection.execute(
+            "SELECT * FROM provider_admission_state WHERE provider_id=?",
+            (provider,),
+        ).fetchone()
+        if state is None or state["policy_digest"] != policy.policy_digest:
+            raise ProviderAdmissionConflict(
+                "provider admission state is unavailable"
+            )
+        rows = connection.execute(
+            """SELECT state, COUNT(*) AS count
+            FROM provider_admission_requests WHERE provider_id=?
+            GROUP BY state""",
+            (provider,),
+        ).fetchall()
+        lane_rows = connection.execute(
+            """SELECT admission_lane, COUNT(*) AS count
+            FROM provider_admission_requests
+            WHERE provider_id=? AND state IN ('waiting','granted','dispatched')
+            GROUP BY admission_lane""",
+            (provider,),
+        ).fetchall()
+        project_rows = connection.execute(
+            """SELECT project_binding_digest, active_units
+            FROM provider_admission_projects
+            WHERE provider_id=? AND active_units > 0
+            ORDER BY project_binding_digest""",
+            (provider,),
+        ).fetchall()
+        batch_columns = {
+            item[1]
+            for item in connection.execute(
+                "PRAGMA table_info(plan_queue_batches)"
+            ).fetchall()
+        }
+        legacy_count = (
+            connection.execute(
+                """SELECT COUNT(*) FROM plan_queue_batches
+                WHERE project_binding_digest IS NULL
+                   OR admission_lane IS NULL
+                   OR provider_admission_policy_digest IS NULL"""
+            ).fetchone()[0]
+            if {
+                "project_binding_digest",
+                "admission_lane",
+                "provider_admission_policy_digest",
+            }
+            <= batch_columns
+            else 0
+        )
+        counts = dict(empty_counts)
+        counts.update({row["state"]: row["count"] for row in rows})
+        lane_counts = {item.value: 0 for item in AdmissionLane}
+        lane_counts.update(
+            {row["admission_lane"]: row["count"] for row in lane_rows}
+        )
+        return ProviderAdmissionStatus(
+            initialized=True,
+            provider_id=provider,
+            policy_digest=policy.policy_digest,
+            effective_target=state["effective_target"],
+            candidate_target=policy.candidate_target,
+            hard_max=policy.hard_max,
+            per_project_cap=policy.per_project_cap,
+            circuit_state=state["circuit_state"],
+            last_signal=state["last_signal"],
+            counts=counts,
+            lane_counts=lane_counts,
+            project_active_counts=tuple(
+                {
+                    "project_binding_digest": row[
+                        "project_binding_digest"
+                    ],
+                    "active_units": row["active_units"],
+                }
+                for row in project_rows
+            ),
+            legacy_pre_provider_admission_count=legacy_count,
+        )
+    except sqlite3.Error as exc:
+        raise ProviderAdmissionConflict(
+            "provider admission runtime database is invalid"
+        ) from exc
+    finally:
+        connection.close()
 
 
 __all__ = [
@@ -1238,5 +1612,7 @@ __all__ = [
     "ProviderAdmissionRecord",
     "ProviderAdmissionRequest",
     "ProviderAdmissionStatus",
+    "ProviderAdmissionTargetBinding",
+    "read_provider_admission_status",
     "glm_provider_admission_policy",
 ]

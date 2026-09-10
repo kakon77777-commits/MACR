@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.cli import (
+    _admission_status,
     _accounting_status,
     _capability_status,
     _doctor,
@@ -109,6 +110,23 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_admission_status_is_readonly_when_runtime_is_absent(self) -> None:
+        with d_drive_tempdir() as root:
+            state_root = root / "absent-state"
+            output = io.StringIO()
+            environment = {**os.environ, "MACR_STATE_ROOT": str(state_root)}
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(output):
+                    status = _admission_status("glm_flash_worker")
+
+            document = json.loads(output.getvalue())
+
+        self.assertEqual(status, 0)
+        self.assertEqual(document["status"], "provider_admission_status")
+        self.assertFalse(document["admission"]["initialized"])
+        self.assertFalse(state_root.exists())
+        self.assertFalse(document["network_activity"])
+
     def test_accounting_status_parser_accepts_provider_and_since_filters(self) -> None:
         try:
             args = build_parser().parse_args(

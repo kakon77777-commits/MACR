@@ -45,6 +45,7 @@ from .provider_capability_store import read_effective_policy
 from .provider_admission import (
     AdmissionLane,
     ProjectAdmissionBinding,
+    read_provider_admission_status,
 )
 from .observatory import ModelObservatory
 from .observatory_db import ObservatoryDatabase
@@ -211,6 +212,42 @@ def _accounting_status(
             {
                 "status": "accounting_status",
                 "accounting": snapshot.to_dict(),
+                "network_activity": False,
+                "provider_generation": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _admission_status(provider_id: str) -> int:
+    layout = StorageLayout.from_environment()
+    try:
+        snapshot = read_provider_admission_status(
+            layout.runtime_db_path,
+            provider_id,
+        )
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "provider_admission_status_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "provider_generation": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "provider_admission_status",
+                "admission": snapshot.to_dict(),
                 "network_activity": False,
                 "provider_generation": False,
             },
@@ -1415,6 +1452,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider",
         help="restrict invocation accounting to one exact provider ID",
     )
+
+    admission_status = sub.add_parser(
+        "admission-status",
+        help="read bounded provider admission state without provider use",
+    )
+    admission_status.add_argument(
+        "--provider",
+        default="glm_flash_worker",
+        help="exact provider admission domain",
+    )
     accounting_status.add_argument(
         "--since",
         help="restrict invocation accounting to an aware ISO timestamp",
@@ -1643,6 +1690,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _capability_status(args.provider, args.config)
     if args.command == "accounting-status":
         return _accounting_status(args.provider, args.since)
+    if args.command == "admission-status":
+        return _admission_status(args.provider)
     if args.command == "migrate-ledger":
         return _migrate_ledger(
             dry_run=args.dry_run,

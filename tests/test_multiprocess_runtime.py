@@ -10,6 +10,7 @@ import sys
 import time
 import unittest
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +28,7 @@ from macr_runtime.ledger import AppendOnlyLedger
 from macr_runtime.legacy_ledger import LegacyLedgerImporter
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.provider_admission import ProviderAdmissionKernel
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import RuntimeServices
 from macr_runtime.scheduler import PlanQueue, QueueMember, T1QueuePlan
@@ -251,14 +253,23 @@ class MultiprocessRuntimeTests(unittest.TestCase):
         self.assertEqual(report["consecutive_zero_samples"], 5)
         self.assertNotIn("command", report)
 
-    def test_five_t1_workers_produce_exact_complete_path_evidence(self) -> None:
+    def test_five_t1_workers_share_one_slot_then_drain_without_extra_attempts(self) -> None:
         with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            services = replace(
+                services,
+                provider_admission=ProviderAdmissionKernel(
+                    services.events.path
+                ),
+            )
+            transport = FakeTransport(success_document())
             provider = GlmFlashWorkerProvider(
                 glm_config(),
-                transport=FakeTransport(success_document()),
+                transport=transport,
                 environ={"MACR_STATE_ROOT": str(temp)},
                 key_source=StaticKeySource(),
                 token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
             )
             subject = approved_manifest(
                 provider,
@@ -276,7 +287,6 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                         item.provider_tier_binding_digest
                     ),
                 )
-            services = build_test_services(temp)
             dispatcher = T1Dispatcher(
                 ProviderRegistry((provider,)),
                 services,
@@ -321,6 +331,17 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                     time.sleep(0.005)
                 self.assertEqual(len(tuple(temp.glob("t1-ready-*"))), 5)
                 start_signal.touch()
+                deadline = time.monotonic() + 30
+                while (
+                    sum(process.poll() is not None for process in processes) < 4
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.005)
+                self.assertEqual(
+                    sum(process.poll() is not None for process in processes),
+                    4,
+                )
+                (temp / "t1-transport-release.signal").touch()
                 completed = [
                     process.communicate(timeout=60) for process in processes
                 ]
@@ -330,14 +351,34 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                         process.terminate()
                         process.wait(timeout=15)
 
-            results = []
+            first_wave = []
             for process, (stdout, stderr) in zip(processes, completed):
                 self.assertEqual(
                     process.returncode,
                     0,
                     msg=f"stdout={stdout!r} stderr={stderr!r}",
                 )
-                results.append(json.loads(stdout))
+                first_wave.append(json.loads(stdout))
+            completed_results = [
+                item["result"]
+                for item in first_wave
+                if item["status"] == "completed"
+            ]
+            self.assertEqual(len(completed_results), 1)
+            self.assertEqual(
+                sum(item["status"] == "provider_admission_busy" for item in first_wave),
+                4,
+            )
+            for index in range(4):
+                drained = dispatcher.run_one(
+                    subject,
+                    dispatcher.load_bundle(subject),
+                    subject.authorized_dispatchers[index],
+                    DispatchOrigin("test", "process_id", str(9000 + index)),
+                    allow_network=True,
+                    allow_local=False,
+                )
+                completed_results.append(drained.to_dict())
             events = services.events.read_events()
             queue_records = dispatcher.queue.list_members(subject.plan_digest)
             runtime_connection = services.events.database.connect()
@@ -366,14 +407,17 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                 "reconciliation_required"
             ]
 
-        self.assertEqual(len({item["member_id"] for item in results}), 5)
+        self.assertEqual(
+            len({item["member_id"] for item in completed_results}),
+            5,
+        )
         self.assertEqual(
             [item.state.value for item in queue_records],
             ["completed", "completed", "completed", "completed", "completed"],
         )
         self.assertEqual(
             len([item for item in events if item["event_type"] == "mock.t1_transport_called"]),
-            5,
+            1,
         )
         self.assertEqual(
             len([item for item in events if item["event_type"] == "provider.dispatch_requested"]),
@@ -384,6 +428,11 @@ class MultiprocessRuntimeTests(unittest.TestCase):
             5,
         )
         self.assertEqual((capture_count, invocation_count, plan_cost_count), (5, 5, 5))
+        self.assertEqual(len(transport.posts), 4)
+        self.assertEqual(
+            [item.attempts for item in queue_records],
+            [1, 1, 1, 1, 1],
+        )
         self.assertEqual(unsettled_count, 0)
         self.assertEqual(reconciliation_count, 0)
         for item in subject.members:

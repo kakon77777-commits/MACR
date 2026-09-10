@@ -32,7 +32,7 @@ def _try_admission_worker(
     request = ProviderAdmissionRequest(
         request_id=str(uuid.uuid4()),
         provider_id="glm_flash_worker",
-        project=project,
+        project_binding_digest=project.binding_digest,
         lane=AdmissionLane.ROUTINE,
         run_id=str(uuid.uuid4()),
         authorization=reference,

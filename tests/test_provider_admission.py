@@ -19,7 +19,9 @@ from macr_runtime.provider_admission import (
     ProviderAdmissionKernel,
     ProviderAdmissionPolicy,
     ProviderAdmissionRequest,
+    ProviderAdmissionTargetBinding,
     glm_provider_admission_policy,
+    read_provider_admission_status,
 )
 from macr_runtime.runtime_db import RuntimeDatabase
 from tests.support import d_drive_tempdir
@@ -185,6 +187,28 @@ class ProviderAdmissionAuthorityTests(unittest.TestCase):
 
 
 class ProviderAdmissionSchemaTests(unittest.TestCase):
+    def test_readonly_status_does_not_create_or_mutate_runtime_database(self) -> None:
+        with d_drive_tempdir() as temp:
+            absent = temp / "absent" / "dispatch.sqlite3"
+            empty = read_provider_admission_status(
+                absent,
+                "glm_flash_worker",
+            )
+            self.assertFalse(absent.exists())
+            path = temp / "runtime" / "dispatch.sqlite3"
+            ProviderAdmissionKernel(path)
+            before = path.read_bytes()
+
+            status = read_provider_admission_status(
+                path,
+                "glm_flash_worker",
+            )
+            after = path.read_bytes()
+
+        self.assertFalse(empty.initialized)
+        self.assertTrue(status.initialized)
+        self.assertEqual(before, after)
+
     def test_runtime_schema_eight_adds_admission_tables(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
@@ -242,6 +266,69 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
 
 
 class ProviderAdmissionKernelTests(unittest.TestCase):
+    def test_candidate_target_two_requires_exact_preissued_authority(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            target = ProviderAdmissionTargetBinding.create(
+                kernel.policy,
+                target=2,
+            )
+            reference = authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="glm-target-two",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_capacity_target",),
+                    provider_admission_target_digests=(
+                        target.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+
+            activated = kernel.activate_target(target, reference)
+            dispatch_reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            first = kernel.try_admit(
+                self._request(
+                    dispatch_reference,
+                    self.project_a,
+                    AdmissionLane.ROUTINE,
+                ),
+                ttl_seconds=60,
+            )
+            second = kernel.try_admit(
+                self._request(
+                    dispatch_reference,
+                    self.project_b,
+                    AdmissionLane.BULK,
+                ),
+                ttl_seconds=60,
+            )
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(
+                    self._request(
+                        dispatch_reference,
+                        self.project_b,
+                        AdmissionLane.INTERACTIVE,
+                    ),
+                    ttl_seconds=60,
+                )
+            kernel.cancel_before_transport(first)
+            kernel.cancel_before_transport(second)
+
+        self.assertEqual(activated.effective_target, 2)
+        with self.assertRaises(ValueError):
+            ProviderAdmissionTargetBinding.create(kernel.policy, target=3)
+
     def setUp(self) -> None:
         self.now = datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc)
         self.clock = Clock(self.now)
@@ -501,6 +588,70 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
         self.assertEqual(unknown_record.state, "reconciliation_required")
         self.assertEqual(status.counts["reconciliation_required"], 1)
         self.assertEqual(status.circuit_state, "open")
+
+    def test_reconciliation_requires_exact_authority_and_restores_capacity(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            dispatch_reference = self._authority(authorities, (self.project_a,))
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.BULK,
+            )
+            permit = kernel.try_admit(request, ttl_seconds=60)
+            kernel.begin_transport(permit, request)
+            kernel.finish(
+                permit,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="e" * 64,
+            )
+
+            with self.assertRaises(DispatchAuthorizationError):
+                kernel.resolve_reconciliation(
+                    request.request_id,
+                    dispatch_reference,
+                    resolution_evidence_digest="f" * 64,
+                )
+            resolution_reference = authorities.issue(
+                source_kind="operator_reconciliation",
+                source_id="resolve-one",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_admission_reconciliation",),
+                    task_types=("provider_admission_resolution",),
+                    member_digests=(request.member_digest,),
+                    provider_tier_binding_digests=(
+                        request.provider_tier_binding_digest,
+                    ),
+                    project_binding_digests=(
+                        request.project_binding_digest,
+                    ),
+                    admission_lanes=(request.lane.value,),
+                    provider_admission_policy_digests=(
+                        kernel.policy.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            record = kernel.resolve_reconciliation(
+                request.request_id,
+                resolution_reference,
+                resolution_evidence_digest="f" * 64,
+            )
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(record.state, "reconciled")
+        self.assertEqual(record.resolution_evidence_digest, "f" * 64)
+        self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(status.counts["reconciled"], 1)
 
     def test_expired_waiting_cancels_but_expired_grant_never_auto_releases(self) -> None:
         with d_drive_tempdir() as temp:

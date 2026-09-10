@@ -9,6 +9,7 @@ from pathlib import Path
 
 from macr_runtime.config import load_provider_configs
 from macr_runtime.event_store import SqliteEventStore
+from macr_runtime.errors import ProviderAdmissionBusyError
 from macr_runtime.execution import DispatchOrigin
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.registry import ProviderRegistry
@@ -31,9 +32,15 @@ class StaticKeySource:
 
 
 class RecordingTransport:
-    def __init__(self, database: Path, dispatcher_id: str) -> None:
+    def __init__(
+        self,
+        database: Path,
+        dispatcher_id: str,
+        release_signal: Path,
+    ) -> None:
         self.events = SqliteEventStore(database)
         self.dispatcher_id = dispatcher_id
+        self.release_signal = release_signal
 
     def post_json(self, url, *, headers, payload, timeout_s):
         del url, headers, payload, timeout_s
@@ -42,6 +49,11 @@ class RecordingTransport:
             str(uuid.uuid4()),
             {"dispatcher_id": self.dispatcher_id},
         )
+        deadline = time.monotonic() + 30
+        while not self.release_signal.exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("T1 transport release signal was not observed")
+            time.sleep(0.001)
         return {
             "id": f"mock-{self.dispatcher_id}",
             "model": "glm-5.3-flash",
@@ -91,10 +103,15 @@ def main() -> int:
     )
     provider = GlmFlashWorkerProvider(
         config,
-        transport=RecordingTransport(services.events.path, args.dispatcher_id),
+        transport=RecordingTransport(
+            services.events.path,
+            args.dispatcher_id,
+            state_root / "t1-transport-release.signal",
+        ),
         environ=os.environ,
         key_source=StaticKeySource(),
         token_policy=t1_glm_live_policy(),
+        admission_guard=services.provider_admission,
     )
     manifest = load_t1_manifest(args.manifest)
     dispatcher = T1Dispatcher(ProviderRegistry((provider,)), services)
@@ -107,15 +124,31 @@ def main() -> int:
             raise TimeoutError("T1 worker start signal was not observed")
         time.sleep(0.001)
 
-    result = dispatcher.run_one(
-        manifest,
-        bundle,
-        args.dispatcher_id,
-        DispatchOrigin("test-process", "process_id", str(os.getpid())),
-        allow_network=True,
-        allow_local=False,
+    try:
+        result = dispatcher.run_one(
+            manifest,
+            bundle,
+            args.dispatcher_id,
+            DispatchOrigin("test-process", "process_id", str(os.getpid())),
+            allow_network=True,
+            allow_local=False,
+        )
+    except ProviderAdmissionBusyError:
+        print(
+            json.dumps(
+                {"status": "provider_admission_busy"},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
+    print(
+        json.dumps(
+            {"status": "completed", "result": result.to_dict()},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
     )
-    print(json.dumps(result.to_dict(), ensure_ascii=False, sort_keys=True))
     return 0
 
 

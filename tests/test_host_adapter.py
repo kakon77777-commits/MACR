@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 import uuid
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -24,11 +25,26 @@ from macr_runtime.host_adapter import (
     MacrHostAdapter,
     VerifiedHostBinding,
 )
+from macr_runtime.provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+    ProviderAdmissionKernel,
+    glm_provider_admission_policy,
+)
 from macr_runtime.provider_capability import ProviderTierBinding
 from macr_runtime.providers.base import BaseProvider, ProviderHealth
 from macr_runtime.registry import ProviderRegistry
 from tests.support import build_test_services, d_drive_tempdir
 from tests.test_runtime_v05 import delegated_task
+from tests.test_glm_provider import (
+    AllowingApprovalStore,
+    CountingKeySource,
+    FakeTransport,
+    delegated_task as glm_task,
+    glm_config,
+    success_document,
+)
+from macr_runtime.providers.glm import GlmFlashWorkerProvider
 
 
 class StaticHostVerifier:
@@ -124,6 +140,77 @@ class HostTestProvider(BaseProvider):
 
 
 class HostAdapterTests(unittest.TestCase):
+    def test_glm_host_adapter_binds_project_lane_and_admission_policy(self) -> None:
+        task = glm_task()
+        project = ProjectAdmissionBinding(
+            "host-project",
+            1,
+            "operator_enrolled",
+        )
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            kernel = ProviderAdmissionKernel(services.events.path)
+            services = replace(services, provider_admission=kernel)
+            transport = FakeTransport(success_document())
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=transport,
+                key_source=CountingKeySource(),
+                approval_store=AllowingApprovalStore(),
+                admission_guard=kernel,
+            )
+            tier = provider.capability_binding.binding_digest
+            policy = glm_provider_admission_policy()
+            reference = services.authorities.issue(
+                source_kind="operator_host_grant",
+                source_id="glm-host-admission",
+                scope=AuthorityScope(
+                    providers=(provider.provider_id,),
+                    planes=(InteractionPlane.DELEGATION.value,),
+                    task_types=(task.task_type,),
+                    member_digests=(task.delegation_approval_sha256,),
+                    provider_tier_binding_digests=(tier,),
+                    project_binding_digests=(project.binding_digest,),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(policy.policy_digest,),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            grant = HostInvocationGrant(
+                authorization=reference,
+                provider_id=provider.provider_id,
+                connection_scope="external_https",
+                provider_tier_binding_digest=tier,
+                grant_digest="c" * 64,
+                project_binding_digest=project.binding_digest,
+                admission_lane=AdmissionLane.ROUTINE.value,
+                provider_admission_policy_digest=policy.policy_digest,
+            )
+            adapter = MacrHostAdapter(
+                ProviderRegistry((provider,)),
+                services,
+                host_verifier=StaticHostVerifier(
+                    HostKind.CLAUDE_CODE,
+                    "22222222-2222-4222-8222-222222222222",
+                ),
+                grant_verifier=ExactGrantVerifier("c" * 64),
+                admission_project=project,
+                admission_lane=AdmissionLane.ROUTINE,
+            )
+
+            result = adapter.invoke(provider.provider_id, task, grant)
+            events = services.events.read_events()
+
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_SUCCESS)
+        self.assertEqual(len(transport.posts), 1)
+        self.assertEqual(
+            events[0]["payload"]["project_binding_digest"],
+            project.binding_digest,
+        )
+
     def test_host_adapter_contracts_are_lazy_root_exports(self) -> None:
         import macr_runtime
 

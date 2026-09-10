@@ -152,7 +152,16 @@ exit 0
         self.assertTrue(document["preflight_seen"])
         self.assertEqual(
             document["arguments"],
-            ["invoke", "glm_flash_worker", str(task_path), "--allow-network"],
+            [
+                "invoke",
+                "glm_flash_worker",
+                str(task_path),
+                "--project-id",
+                "operator-default",
+                "--admission-lane",
+                "routine",
+                "--allow-network",
+            ],
         )
 
     def test_wrapper_preflight_failure_happens_before_missing_key_read(self):

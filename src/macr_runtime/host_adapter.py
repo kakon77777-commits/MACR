@@ -17,6 +17,7 @@ from .execution import (
     InteractionPlane,
 )
 from .provider_capability import ProviderTierBinding
+from .provider_admission import AdmissionLane, ProjectAdmissionBinding
 from .registry import ProviderRegistry
 from .runtime import MacrRuntime, RuntimeServices, task_contract_digest
 
@@ -131,6 +132,9 @@ class HostInvocationGrant:
     connection_scope: str
     provider_tier_binding_digest: str | None
     grant_digest: str
+    project_binding_digest: str | None = None
+    admission_lane: str | None = None
+    provider_admission_policy_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.authorization, AuthorizationReference):
@@ -159,6 +163,36 @@ class HostInvocationGrant:
             "grant_digest",
             _digest("grant_digest", self.grant_digest),
         )
+        admission_values = (
+            self.project_binding_digest,
+            self.admission_lane,
+            self.provider_admission_policy_digest,
+        )
+        if any(item is not None for item in admission_values):
+            if any(item is None for item in admission_values):
+                raise ValueError(
+                    "host invocation admission binding must be complete"
+                )
+            object.__setattr__(
+                self,
+                "project_binding_digest",
+                _digest(
+                    "project_binding_digest",
+                    self.project_binding_digest,
+                ),
+            )
+            if self.admission_lane not in {
+                item.value for item in AdmissionLane
+            }:
+                raise ValueError("host invocation admission lane is invalid")
+            object.__setattr__(
+                self,
+                "provider_admission_policy_digest",
+                _digest(
+                    "provider_admission_policy_digest",
+                    self.provider_admission_policy_digest,
+                ),
+            )
 
 
 class HostInvocationGrantVerifier(Protocol):
@@ -180,6 +214,9 @@ class HostDispatchPreparation:
     cost_ceiling_usd: float
     host_binding_digest: str
     request_digest: str
+    project_binding_digest: str | None
+    admission_lane: str | None
+    provider_admission_policy_digest: str | None
     _binding: VerifiedHostBinding = field(repr=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
@@ -193,6 +230,11 @@ class HostDispatchPreparation:
             "cost_ceiling_usd": self.cost_ceiling_usd,
             "host_binding_digest": self.host_binding_digest,
             "request_digest": self.request_digest,
+            "project_binding_digest": self.project_binding_digest,
+            "admission_lane": self.admission_lane,
+            "provider_admission_policy_digest": (
+                self.provider_admission_policy_digest
+            ),
         }
 
 
@@ -204,6 +246,8 @@ class MacrHostAdapter:
         *,
         host_verifier: HostBindingVerifier,
         grant_verifier: HostInvocationGrantVerifier,
+        admission_project: ProjectAdmissionBinding | None = None,
+        admission_lane: AdmissionLane = AdmissionLane.ROUTINE,
     ) -> None:
         if not isinstance(registry, ProviderRegistry):
             raise ValueError("registry must be a ProviderRegistry")
@@ -213,6 +257,17 @@ class MacrHostAdapter:
         self.services = services
         self.host_verifier = host_verifier
         self.grant_verifier = grant_verifier
+        if admission_project is not None and not isinstance(
+            admission_project,
+            ProjectAdmissionBinding,
+        ):
+            raise ValueError(
+                "admission_project must be a ProjectAdmissionBinding"
+            )
+        if not isinstance(admission_lane, AdmissionLane):
+            raise ValueError("admission_lane must be an AdmissionLane")
+        self.admission_project = admission_project
+        self.admission_lane = admission_lane
 
     def _verified_binding(self) -> VerifiedHostBinding:
         method = getattr(self.host_verifier, "verify", None)
@@ -235,6 +290,16 @@ class MacrHostAdapter:
             raise ValueError("task must be a TaskContract")
         binding = self._verified_binding()
         provider = self.registry.get(provider_id)
+        requires_provider_admission = bool(
+            getattr(provider, "requires_provider_admission", False)
+        )
+        if requires_provider_admission and (
+            self.admission_project is None
+            or self.services.provider_admission is None
+        ):
+            raise ProviderPolicyError(
+                "host adapter requires operator-bound provider admission identity"
+            )
         model_token_policy_digest = None
         if self.registry.requires_model_token_policy(provider_id):
             token_policy = self.registry.token_policy(
@@ -277,6 +342,23 @@ class MacrHostAdapter:
             "provider_tier_binding_digest": provider_tier_binding_digest,
             "approval_digest": approval_digest,
             "cost_ceiling_usd": cost_ceiling,
+            "project_binding_digest": (
+                self.admission_project.binding_digest
+                if requires_provider_admission
+                and self.admission_project is not None
+                else None
+            ),
+            "admission_lane": (
+                self.admission_lane.value
+                if requires_provider_admission
+                else None
+            ),
+            "provider_admission_policy_digest": (
+                self.services.provider_admission.policy.policy_digest
+                if requires_provider_admission
+                and self.services.provider_admission is not None
+                else None
+            ),
         }
         host_binding_digest = binding.binding_digest
         request_digest = sha256_id(
@@ -319,6 +401,11 @@ class MacrHostAdapter:
             or grant.connection_scope != preparation.connection_scope
             or grant.provider_tier_binding_digest
             != preparation.provider_tier_binding_digest
+            or grant.project_binding_digest
+            != preparation.project_binding_digest
+            or grant.admission_lane != preparation.admission_lane
+            or grant.provider_admission_policy_digest
+            != preparation.provider_admission_policy_digest
         ):
             raise DispatchAuthorizationError(
                 "host invocation grant does not match preparation"
@@ -338,6 +425,11 @@ class MacrHostAdapter:
             model_token_policy_digest=preparation.model_token_policy_digest,
             provider_tier_binding_digest=(
                 preparation.provider_tier_binding_digest
+            ),
+            project_binding_digest=preparation.project_binding_digest,
+            admission_lane=preparation.admission_lane,
+            provider_admission_policy_digest=(
+                preparation.provider_admission_policy_digest
             ),
         )
         return MacrRuntime(self.registry, self.services).invoke(

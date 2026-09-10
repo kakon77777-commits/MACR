@@ -71,6 +71,7 @@ class AuthorityScope:
     project_binding_digests: tuple[str, ...] = ()
     admission_lanes: tuple[str, ...] = ()
     provider_admission_policy_digests: tuple[str, ...] = ()
+    provider_admission_target_digests: tuple[str, ...] = ()
     scope_contract_version: int = 2
 
     def __post_init__(self) -> None:
@@ -158,12 +159,26 @@ class AuthorityScope:
             "provider_admission_policy_digests",
             tuple(item.lower() for item in admission_digests),
         )
+        target_digests = _string_tuple(
+            "authority provider_admission_target_digests",
+            self.provider_admission_target_digests,
+            required=False,
+        )
+        if any(not _SHA256.fullmatch(item.lower()) for item in target_digests):
+            raise ValueError(
+                "authority provider_admission_target_digests must be SHA-256 hex"
+            )
+        object.__setattr__(
+            self,
+            "provider_admission_target_digests",
+            tuple(item.lower() for item in target_digests),
+        )
         if self.scope_contract_version not in {1, 2, 3}:
             raise ValueError("authority scope contract version is unsupported")
         if self.scope_contract_version == 1 and tier_digests:
             raise ValueError("legacy authority scope cannot bind provider tiers")
         if self.scope_contract_version < 3 and (
-            project_digests or lanes or admission_digests
+            project_digests or lanes or admission_digests or target_digests
         ):
             raise ValueError(
                 "legacy authority scope cannot bind provider admission"
@@ -202,6 +217,7 @@ class AuthorityScope:
                 "project_binding_digests",
                 "admission_lanes",
                 "provider_admission_policy_digests",
+                "provider_admission_target_digests",
             }
         else:
             raise ValueError("authority scope contract version is unsupported")
@@ -221,6 +237,10 @@ class AuthorityScope:
             admission_lanes=data.get("admission_lanes", ()),
             provider_admission_policy_digests=data.get(
                 "provider_admission_policy_digests",
+                (),
+            ),
+            provider_admission_target_digests=data.get(
+                "provider_admission_target_digests",
                 (),
             ),
             scope_contract_version=version,
@@ -252,6 +272,9 @@ class AuthorityScope:
                     "provider_admission_policy_digests": list(
                         self.provider_admission_policy_digests
                     ),
+                    "provider_admission_target_digests": list(
+                        self.provider_admission_target_digests
+                    ),
                 }
             )
         return document
@@ -271,6 +294,7 @@ class AuthorityScope:
         project_binding_digest: str | None = None,
         admission_lane: str | None = None,
         provider_admission_policy_digest: str | None = None,
+        provider_admission_target_digest: str | None = None,
     ) -> bool:
         tier_permitted = (
             provider_tier_binding_digest is None
@@ -305,6 +329,16 @@ class AuthorityScope:
             and provider_admission_policy_digest.lower()
             in self.provider_admission_policy_digests
         )
+        target_requested = (
+            provider_admission_target_digest is not None
+            or bool(self.provider_admission_target_digests)
+        )
+        target_permitted = not target_requested or (
+            self.scope_contract_version == 3
+            and isinstance(provider_admission_target_digest, str)
+            and provider_admission_target_digest.lower()
+            in self.provider_admission_target_digests
+        )
         return (
             provider_id in self.providers
             and plane in self.planes
@@ -319,6 +353,7 @@ class AuthorityScope:
             )
             and tier_permitted
             and admission_permitted
+            and target_permitted
         )
 
 
@@ -509,6 +544,7 @@ class DispatchAuthorityStore:
         project_binding_digest: str | None = None,
         admission_lane: str | None = None,
         provider_admission_policy_digest: str | None = None,
+        provider_admission_target_digest: str | None = None,
     ) -> AuthorizationReference:
         if not isinstance(reference, AuthorizationReference):
             raise DispatchAuthorizationError(
@@ -586,6 +622,9 @@ class DispatchAuthorityStore:
             admission_lane=admission_lane,
             provider_admission_policy_digest=(
                 provider_admission_policy_digest
+            ),
+            provider_admission_target_digest=(
+                provider_admission_target_digest
             ),
         ):
             raise DispatchAuthorizationError(

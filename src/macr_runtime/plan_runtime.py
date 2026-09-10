@@ -26,6 +26,7 @@ from .execution import (
     VerificationState,
 )
 from .registry import ProviderRegistry
+from .provider_admission import AdmissionLane, ProjectAdmissionBinding
 from .route_resolution import ExecutionRouteProposal
 from .runtime import MacrRuntime, RuntimeServices, task_contract_digest
 
@@ -177,16 +178,53 @@ class PlanRuntime:
         proposal: ExecutionRouteProposal,
         authority: AuthorizationReference,
         origin: DispatchOrigin,
+        *,
+        admission_project: ProjectAdmissionBinding | None = None,
+        admission_lane: AdmissionLane = AdmissionLane.ROUTINE,
     ) -> PlanExecutionResult:
         self._validate_plan_task_proposal(plan, task, proposal)
         if not isinstance(origin, DispatchOrigin):
             raise ValueError("origin must be a DispatchOrigin")
+        provider = self.registry.get(proposal.provider_id)
+        requires_provider_admission = bool(
+            getattr(provider, "requires_provider_admission", False)
+        )
+        if requires_provider_admission and (
+            not isinstance(admission_project, ProjectAdmissionBinding)
+            or not isinstance(admission_lane, AdmissionLane)
+            or self.services.provider_admission is None
+        ):
+            raise PlanExecutionError(
+                "T0 GLM execution requires operator-bound provider admission"
+            )
+        capability_binding = getattr(provider, "capability_binding", None)
+        provider_tier_binding_digest = (
+            capability_binding.binding_digest
+            if requires_provider_admission and capability_binding is not None
+            else None
+        )
+        admission_policy_digest = (
+            self.services.provider_admission.policy.policy_digest
+            if requires_provider_admission
+            and self.services.provider_admission is not None
+            else None
+        )
         self.services.authorities.verify(
             authority,
             provider_id=proposal.provider_id,
             plane=InteractionPlane.DELEGATION.value,
             task_type=task.task_type,
             member_digest=plan.plan_digest,
+            provider_tier_binding_digest=provider_tier_binding_digest,
+            project_binding_digest=(
+                admission_project.binding_digest
+                if admission_project is not None
+                else None
+            ),
+            admission_lane=(
+                admission_lane.value if requires_provider_admission else None
+            ),
+            provider_admission_policy_digest=admission_policy_digest,
         )
         run_id = str(uuid.uuid4())
         binding = plan.bindings[0]
@@ -201,6 +239,16 @@ class PlanRuntime:
             plan_revision=plan.plan_revision,
             role_slot_id=binding.slot_id,
             route_id=binding.route_id,
+            provider_tier_binding_digest=provider_tier_binding_digest,
+            project_binding_digest=(
+                admission_project.binding_digest
+                if admission_project is not None
+                else None
+            ),
+            admission_lane=(
+                admission_lane.value if requires_provider_admission else None
+            ),
+            provider_admission_policy_digest=admission_policy_digest,
         )
         try:
             result = MacrRuntime(self.registry, self.services).invoke(
