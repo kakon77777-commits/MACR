@@ -68,6 +68,9 @@ class AuthorityScope:
     batch_ids: tuple[str, ...] = ()
     member_digests: tuple[str, ...] = ()
     provider_tier_binding_digests: tuple[str, ...] = ()
+    project_binding_digests: tuple[str, ...] = ()
+    admission_lanes: tuple[str, ...] = ()
+    provider_admission_policy_digests: tuple[str, ...] = ()
     scope_contract_version: int = 2
 
     def __post_init__(self) -> None:
@@ -117,10 +120,54 @@ class AuthorityScope:
             "provider_tier_binding_digests",
             tuple(item.lower() for item in tier_digests),
         )
-        if self.scope_contract_version not in {1, 2}:
+        project_digests = _string_tuple(
+            "authority project_binding_digests",
+            self.project_binding_digests,
+            required=False,
+        )
+        if any(not _SHA256.fullmatch(item.lower()) for item in project_digests):
+            raise ValueError(
+                "authority project_binding_digests must be SHA-256 hex"
+            )
+        object.__setattr__(
+            self,
+            "project_binding_digests",
+            tuple(item.lower() for item in project_digests),
+        )
+        lanes = _string_tuple(
+            "authority admission_lanes",
+            self.admission_lanes,
+            required=False,
+        )
+        if any(item not in {"interactive", "routine", "bulk"} for item in lanes):
+            raise ValueError("authority admission_lanes contains an invalid lane")
+        object.__setattr__(self, "admission_lanes", lanes)
+        admission_digests = _string_tuple(
+            "authority provider_admission_policy_digests",
+            self.provider_admission_policy_digests,
+            required=False,
+        )
+        if any(
+            not _SHA256.fullmatch(item.lower()) for item in admission_digests
+        ):
+            raise ValueError(
+                "authority provider_admission_policy_digests must be SHA-256 hex"
+            )
+        object.__setattr__(
+            self,
+            "provider_admission_policy_digests",
+            tuple(item.lower() for item in admission_digests),
+        )
+        if self.scope_contract_version not in {1, 2, 3}:
             raise ValueError("authority scope contract version is unsupported")
         if self.scope_contract_version == 1 and tier_digests:
             raise ValueError("legacy authority scope cannot bind provider tiers")
+        if self.scope_contract_version < 3 and (
+            project_digests or lanes or admission_digests
+        ):
+            raise ValueError(
+                "legacy authority scope cannot bind provider admission"
+            )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "AuthorityScope":
@@ -143,6 +190,19 @@ class AuthorityScope:
                 "member_digests",
                 "provider_tier_binding_digests",
             }
+        elif version == 3:
+            expected = {
+                "scope_contract_version",
+                "providers",
+                "planes",
+                "task_types",
+                "batch_ids",
+                "member_digests",
+                "provider_tier_binding_digests",
+                "project_binding_digests",
+                "admission_lanes",
+                "provider_admission_policy_digests",
+            }
         else:
             raise ValueError("authority scope contract version is unsupported")
         if set(data) != expected:
@@ -157,6 +217,12 @@ class AuthorityScope:
                 "provider_tier_binding_digests",
                 (),
             ),
+            project_binding_digests=data.get("project_binding_digests", ()),
+            admission_lanes=data.get("admission_lanes", ()),
+            provider_admission_policy_digests=data.get(
+                "provider_admission_policy_digests",
+                (),
+            ),
             scope_contract_version=version,
         )
 
@@ -168,14 +234,26 @@ class AuthorityScope:
             "batch_ids": list(self.batch_ids),
             "member_digests": list(self.member_digests),
         }
-        if self.scope_contract_version == 2:
+        if self.scope_contract_version in {2, 3}:
             document = {
-                "scope_contract_version": 2,
+                "scope_contract_version": self.scope_contract_version,
                 **document,
                 "provider_tier_binding_digests": list(
                     self.provider_tier_binding_digests
                 ),
             }
+        if self.scope_contract_version == 3:
+            document.update(
+                {
+                    "project_binding_digests": list(
+                        self.project_binding_digests
+                    ),
+                    "admission_lanes": list(self.admission_lanes),
+                    "provider_admission_policy_digests": list(
+                        self.provider_admission_policy_digests
+                    ),
+                }
+            )
         return document
 
     def canonical_json(self) -> str:
@@ -190,15 +268,42 @@ class AuthorityScope:
         batch_id: str | None,
         member_digest: str | None,
         provider_tier_binding_digest: str | None = None,
+        project_binding_digest: str | None = None,
+        admission_lane: str | None = None,
+        provider_admission_policy_digest: str | None = None,
     ) -> bool:
         tier_permitted = (
             provider_tier_binding_digest is None
             and not self.provider_tier_binding_digests
         ) or (
-            self.scope_contract_version == 2
+            self.scope_contract_version in {2, 3}
             and isinstance(provider_tier_binding_digest, str)
             and provider_tier_binding_digest.lower()
             in self.provider_tier_binding_digests
+        )
+        admission_requested = any(
+            item is not None
+            for item in (
+                project_binding_digest,
+                admission_lane,
+                provider_admission_policy_digest,
+            )
+        ) or any(
+            (
+                self.project_binding_digests,
+                self.admission_lanes,
+                self.provider_admission_policy_digests,
+            )
+        )
+        admission_permitted = not admission_requested or (
+            self.scope_contract_version == 3
+            and isinstance(project_binding_digest, str)
+            and project_binding_digest.lower() in self.project_binding_digests
+            and isinstance(admission_lane, str)
+            and admission_lane in self.admission_lanes
+            and isinstance(provider_admission_policy_digest, str)
+            and provider_admission_policy_digest.lower()
+            in self.provider_admission_policy_digests
         )
         return (
             provider_id in self.providers
@@ -213,6 +318,7 @@ class AuthorityScope:
                 )
             )
             and tier_permitted
+            and admission_permitted
         )
 
 
@@ -400,6 +506,9 @@ class DispatchAuthorityStore:
         batch_id: str | None = None,
         member_digest: str | None = None,
         provider_tier_binding_digest: str | None = None,
+        project_binding_digest: str | None = None,
+        admission_lane: str | None = None,
+        provider_admission_policy_digest: str | None = None,
     ) -> AuthorizationReference:
         if not isinstance(reference, AuthorizationReference):
             raise DispatchAuthorizationError(
@@ -473,6 +582,11 @@ class DispatchAuthorityStore:
             batch_id=batch_id,
             member_digest=member_digest,
             provider_tier_binding_digest=provider_tier_binding_digest,
+            project_binding_digest=project_binding_digest,
+            admission_lane=admission_lane,
+            provider_admission_policy_digest=(
+                provider_admission_policy_digest
+            ),
         ):
             raise DispatchAuthorizationError(
                 "dispatch authorization scope does not permit request"

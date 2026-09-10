@@ -10,7 +10,7 @@ from .errors import EventStoreConflict, StoragePolicyError
 class RuntimeDatabase:
     """Connection policy and schema owner for MACR runtime coordination state."""
 
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 8
 
     def __init__(self, path: str | Path) -> None:
         candidate = Path(path)
@@ -388,6 +388,80 @@ class RuntimeDatabase:
                 connection.execute(
                     "UPDATE schema_meta SET version = ? WHERE component = ?",
                     (7, "runtime"),
+                )
+                version = 7
+            if version == 7:
+                migration_eight = (
+                    """CREATE TABLE IF NOT EXISTS provider_admission_policies (
+                        provider_id TEXT NOT NULL,
+                        revision INTEGER NOT NULL CHECK(revision >= 1),
+                        body_json TEXT NOT NULL,
+                        body_sha256 TEXT NOT NULL,
+                        policy_digest TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL,
+                        PRIMARY KEY(provider_id, revision)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS provider_admission_state (
+                        provider_id TEXT PRIMARY KEY,
+                        policy_digest TEXT NOT NULL,
+                        effective_target INTEGER NOT NULL
+                            CHECK(effective_target >= 1),
+                        circuit_state TEXT NOT NULL CHECK(circuit_state IN (
+                            'closed', 'open', 'half_open'
+                        )),
+                        grant_sequence INTEGER NOT NULL
+                            CHECK(grant_sequence >= 0),
+                        last_signal TEXT,
+                        updated_at TEXT NOT NULL
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS provider_admission_projects (
+                        provider_id TEXT NOT NULL,
+                        project_binding_digest TEXT NOT NULL,
+                        active_units INTEGER NOT NULL CHECK(active_units >= 0),
+                        last_grant_sequence INTEGER NOT NULL
+                            CHECK(last_grant_sequence >= 0),
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY(provider_id, project_binding_digest)
+                    )""",
+                    """CREATE TABLE IF NOT EXISTS provider_admission_requests (
+                        request_id TEXT PRIMARY KEY,
+                        provider_id TEXT NOT NULL,
+                        project_binding_digest TEXT NOT NULL,
+                        admission_lane TEXT NOT NULL CHECK(admission_lane IN (
+                            'interactive', 'routine', 'bulk'
+                        )),
+                        run_id TEXT NOT NULL UNIQUE,
+                        authority_digest TEXT NOT NULL,
+                        authority_epoch INTEGER NOT NULL CHECK(authority_epoch >= 0),
+                        task_digest TEXT NOT NULL,
+                        member_digest TEXT,
+                        provider_tier_binding_digest TEXT,
+                        policy_digest TEXT NOT NULL,
+                        capacity_unit INTEGER NOT NULL CHECK(capacity_unit = 1),
+                        state TEXT NOT NULL CHECK(state IN (
+                            'waiting', 'granted', 'dispatched', 'completed',
+                            'cancelled', 'reconciliation_required'
+                        )),
+                        fencing_token INTEGER,
+                        requested_at TEXT NOT NULL,
+                        granted_at TEXT,
+                        transport_started_at TEXT,
+                        terminal_at TEXT,
+                        expires_at TEXT NOT NULL,
+                        terminal_evidence_digest TEXT
+                    )""",
+                    """CREATE INDEX IF NOT EXISTS provider_admission_waiting
+                    ON provider_admission_requests(
+                        provider_id, state, admission_lane, requested_at
+                    )""",
+                    """CREATE INDEX IF NOT EXISTS provider_admission_active
+                    ON provider_admission_requests(provider_id, state)""",
+                )
+                for statement in migration_eight:
+                    connection.execute(statement)
+                connection.execute(
+                    "UPDATE schema_meta SET version = ? WHERE component = ?",
+                    (8, "runtime"),
                 )
             connection.commit()
         except Exception:
