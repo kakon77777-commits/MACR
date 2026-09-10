@@ -15,7 +15,7 @@ from .batch_authority import (
 from .canonical import aware_iso8601, sha256_id
 from .config import ConnectionScope
 from .contracts import ResultStatus
-from .errors import MacrError
+from .errors import MacrError, ProviderAdmissionBusyError
 from .execution import (
     AcceptanceState,
     AuthorizationReference,
@@ -24,9 +24,16 @@ from .execution import (
     InteractionPlane,
 )
 from .registry import ProviderRegistry
-from .runtime import MacrRuntime, RuntimeServices
+from .provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+    ProviderAdmissionPermit,
+    ProviderAdmissionRequest,
+)
+from .runtime import MacrRuntime, RuntimeServices, task_contract_digest
 from .scheduler import (
     PlanQueue,
+    QueueCandidate,
     QueueClaim,
     QueueMember,
     QueueMemberState,
@@ -159,12 +166,20 @@ class T1Dispatcher:
         self,
         manifest: T1ExecutionManifest,
         batch_authority: BatchAuthorityReference,
+        project_binding_digest: str,
+        admission_lane: str,
+        provider_admission_policy_digest: str,
     ) -> T1QueuePlan:
         return T1QueuePlan(
             plan_digest=manifest.plan_digest,
             members=tuple(self._queue_member(item) for item in manifest.members),
             aggregate_cost_ceiling_usd=manifest.aggregate_cost_ceiling_usd,
             authority=batch_authority,
+            project_binding_digest=project_binding_digest,
+            admission_lane=admission_lane,
+            provider_admission_policy_digest=(
+                provider_admission_policy_digest
+            ),
         )
 
     def _validate_manifest_routes(self, manifest: T1ExecutionManifest) -> None:
@@ -240,7 +255,12 @@ class T1Dispatcher:
                 )
 
     @staticmethod
-    def _dispatch_scope(manifest: T1ExecutionManifest) -> AuthorityScope:
+    def _dispatch_scope(
+        manifest: T1ExecutionManifest,
+        project_binding_digest: str,
+        admission_lane: str,
+        provider_admission_policy_digest: str,
+    ) -> AuthorityScope:
         return AuthorityScope(
             providers=tuple(
                 sorted({item.route.provider_id for item in manifest.members})
@@ -259,12 +279,22 @@ class T1Dispatcher:
                     }
                 )
             ),
+            project_binding_digests=(project_binding_digest,),
+            admission_lanes=(admission_lane,),
+            provider_admission_policy_digests=(
+                provider_admission_policy_digest,
+            ),
+            scope_contract_version=3,
         )
 
     def _verify_dispatch_authority(
         self,
         manifest: T1ExecutionManifest,
         reference: AuthorizationReference,
+        *,
+        project_binding_digest: str,
+        admission_lane: str,
+        provider_admission_policy_digest: str,
     ) -> None:
         for member in manifest.members:
             self.dispatch_authorities.verify(
@@ -276,6 +306,11 @@ class T1Dispatcher:
                 member_digest=member.member_digest,
                 provider_tier_binding_digest=(
                     member.provider_tier_binding_digest
+                ),
+                project_binding_digest=project_binding_digest,
+                admission_lane=admission_lane,
+                provider_admission_policy_digest=(
+                    provider_admission_policy_digest
                 ),
             )
 
@@ -306,6 +341,18 @@ class T1Dispatcher:
             raise T1DispatchError(
                 "existing T1 queue has no exact dispatch authority"
             )
+        if any(
+            batch[name] is None
+            for name in (
+                "project_binding_digest",
+                "admission_lane",
+                "provider_admission_policy_digest",
+            )
+        ):
+            raise T1DispatchError(
+                "legacy_pre_provider_admission: existing T1 queue lacks "
+                "provider admission binding"
+            )
         batch_reference = BatchAuthorityReference(
             authority_id=batch["authority_id"],
             digest=batch["authority_digest"],
@@ -321,9 +368,23 @@ class T1Dispatcher:
             scope=dispatch["scope_json"],
         )
         member_ids = self.queue.enqueue(
-            self._queue_plan(manifest, batch_reference)
+            self._queue_plan(
+                manifest,
+                batch_reference,
+                batch["project_binding_digest"],
+                batch["admission_lane"],
+                batch["provider_admission_policy_digest"],
+            )
         )
-        self._verify_dispatch_authority(manifest, dispatch_reference)
+        self._verify_dispatch_authority(
+            manifest,
+            dispatch_reference,
+            project_binding_digest=batch["project_binding_digest"],
+            admission_lane=batch["admission_lane"],
+            provider_admission_policy_digest=(
+                batch["provider_admission_policy_digest"]
+            ),
+        )
         return T1AuthorityBundle(
             manifest_digest=manifest.manifest_digest,
             batch_authority=batch_reference,
@@ -331,6 +392,11 @@ class T1Dispatcher:
             member_ids=member_ids,
             worker_count=manifest.worker_count,
             expires_at=batch["expires_at"],
+            project_binding_digest=batch["project_binding_digest"],
+            admission_lane=batch["admission_lane"],
+            provider_admission_policy_digest=(
+                batch["provider_admission_policy_digest"]
+            ),
         )
 
     def _record_staging_failure(
@@ -380,6 +446,12 @@ class T1Dispatcher:
             or bundle.batch_authority.plan_digest != manifest.plan_digest
             or bundle.worker_count != manifest.worker_count
             or bundle.expires_at != manifest.expires_at
+            or bundle.project_binding_digest is None
+            or bundle.admission_lane is None
+            or bundle.provider_admission_policy_digest is None
+            or self.services.provider_admission is None
+            or bundle.provider_admission_policy_digest
+            != self.services.provider_admission.policy.policy_digest
         ):
             raise T1DispatchError("T1 authority bundle does not match manifest")
         expected_scope = self._batch_scope(manifest, bundle.expires_at)
@@ -388,7 +460,15 @@ class T1Dispatcher:
             expected_scope,
             dispatcher_id=dispatcher_id,
         )
-        self._verify_dispatch_authority(manifest, bundle.dispatch_authority)
+        self._verify_dispatch_authority(
+            manifest,
+            bundle.dispatch_authority,
+            project_binding_digest=bundle.project_binding_digest,
+            admission_lane=bundle.admission_lane,
+            provider_admission_policy_digest=(
+                bundle.provider_admission_policy_digest
+            ),
+        )
         actual_member_ids = tuple(
             item.member_id for item in self.queue.list_members(manifest.plan_digest)
         )
@@ -399,7 +479,7 @@ class T1Dispatcher:
     def _member_for_claim(
         manifest: T1ExecutionManifest,
         bundle: T1AuthorityBundle,
-        claim: QueueClaim,
+        claim: QueueClaim | QueueCandidate,
     ) -> T1ExecutionMember:
         if (
             claim.plan_digest != manifest.plan_digest
@@ -637,18 +717,85 @@ class T1Dispatcher:
                 + 60,
             ),
         )
+        candidate = self.queue.peek_claimable(
+            dispatcher_id,
+            plan_digest=manifest.plan_digest,
+        )
+        if candidate is None:
+            raise T1DispatchError("T1 manifest has no queued member")
+        member = self._member_for_claim(manifest, bundle, candidate)
+        run_id = str(uuid.uuid4())
+        assert self.services.provider_admission is not None
+        assert bundle.project_binding_digest is not None
+        assert bundle.admission_lane is not None
+        assert bundle.provider_admission_policy_digest is not None
+        context = DispatchContext(
+            run_id=run_id,
+            plane=InteractionPlane.DELEGATION,
+            origin=origin,
+            authorization=bundle.dispatch_authority,
+            policy_snapshot_sha256=member.route.policy_snapshot_id,
+            batch_id=manifest.manifest_digest,
+            member_digest=member.member_digest,
+            plan_digest=manifest.plan_digest,
+            plan_revision=manifest.plan_revision,
+            role_slot_id=f"t1-member-{member.ordinal}",
+            route_id=member.route.route_id,
+            model_token_policy_digest=member.token_policy_digest,
+            provider_tier_binding_digest=member.provider_tier_binding_digest,
+            project_binding_digest=bundle.project_binding_digest,
+            admission_lane=bundle.admission_lane,
+            provider_admission_policy_digest=(
+                bundle.provider_admission_policy_digest
+            ),
+        )
+        admission_request = ProviderAdmissionRequest(
+            request_id=str(uuid.uuid4()),
+            provider_id=member.route.provider_id,
+            project_binding_digest=bundle.project_binding_digest,
+            lane=AdmissionLane(bundle.admission_lane),
+            run_id=run_id,
+            authorization=bundle.dispatch_authority,
+            plane=InteractionPlane.DELEGATION.value,
+            task_type=member.task.task_type,
+            task_digest=task_contract_digest(member.task),
+            member_digest=member.member_digest,
+            batch_id=manifest.manifest_digest,
+            provider_tier_binding_digest=(
+                member.provider_tier_binding_digest
+            ),
+        )
+        try:
+            admission_permit = self.services.provider_admission.try_admit(
+                admission_request,
+                ttl_seconds=lease_seconds,
+            )
+        except ProviderAdmissionBusyError:
+            self.services.provider_admission.cancel_waiting(
+                admission_request.request_id,
+                admission_request.run_id,
+            )
+            raise
         claim = self.queue.claim(
             dispatcher_id,
             lease_seconds=lease_seconds,
             plan_digest=manifest.plan_digest,
+            expected_member_id=candidate.member_id,
         )
         if claim is None:
-            raise T1DispatchError("T1 manifest has no queued member")
-        run_id = str(uuid.uuid4())
+            self.services.provider_admission.cancel_before_transport(
+                admission_permit
+            )
+            raise T1DispatchError(
+                "T1 claim changed after provider admission; retry without attempt"
+            )
         try:
             member = self._member_for_claim(manifest, bundle, claim)
             self._validate_bundle(manifest, bundle, dispatcher_id)
         except Exception as exc:
+            self.services.provider_admission.cancel_before_transport(
+                admission_permit
+            )
             evidence = {
                 "dispatched": False,
                 "complete": False,
@@ -675,21 +822,6 @@ class T1Dispatcher:
                 run_id,
                 evidence,
             )
-        context = DispatchContext(
-            run_id=run_id,
-            plane=InteractionPlane.DELEGATION,
-            origin=origin,
-            authorization=bundle.dispatch_authority,
-            policy_snapshot_sha256=member.route.policy_snapshot_id,
-            batch_id=manifest.manifest_digest,
-            member_digest=member.member_digest,
-            plan_digest=manifest.plan_digest,
-            plan_revision=manifest.plan_revision,
-            role_slot_id=f"t1-member-{member.ordinal}",
-            route_id=member.route.route_id,
-            model_token_policy_digest=member.token_policy_digest,
-            provider_tier_binding_digest=member.provider_tier_binding_digest,
-        )
         result = None
         failure_type = None
         try:
@@ -697,6 +829,8 @@ class T1Dispatcher:
                 member.route.provider_id,
                 member.task,
                 context,
+                provider_admission_permit=admission_permit,
+                provider_admission_request=admission_request,
             )
         except Exception as exc:
             failure_type = type(exc).__name__
@@ -790,9 +924,27 @@ class T1Dispatcher:
         manifest: T1ExecutionManifest,
         dispatcher_ids: Sequence[str],
         expires_at: str,
+        project_binding: ProjectAdmissionBinding | None = None,
+        admission_lane: AdmissionLane = AdmissionLane.ROUTINE,
     ) -> T1AuthorityBundle:
         if not isinstance(manifest, T1ExecutionManifest):
             raise ValueError("manifest must be a T1ExecutionManifest")
+        project = project_binding or ProjectAdmissionBinding(
+            "operator-default",
+            1,
+            "operator_asserted",
+        )
+        if not isinstance(project, ProjectAdmissionBinding):
+            raise ValueError(
+                "project_binding must be a ProjectAdmissionBinding"
+            )
+        if not isinstance(admission_lane, AdmissionLane):
+            raise ValueError("admission_lane must be an AdmissionLane")
+        if self.services.provider_admission is None:
+            raise T1DispatchError("T1 provider admission kernel is unavailable")
+        admission_policy_digest = (
+            self.services.provider_admission.policy.policy_digest
+        )
         normalized_dispatchers = tuple(sorted(dispatcher_ids))
         if normalized_dispatchers != manifest.authorized_dispatchers:
             raise T1DispatchError(
@@ -810,6 +962,15 @@ class T1Dispatcher:
         self._validate_manifest_routes(manifest)
         existing = self._existing_bundle(manifest)
         if existing is not None:
+            if (
+                existing.project_binding_digest != project.binding_digest
+                or existing.admission_lane != admission_lane.value
+                or existing.provider_admission_policy_digest
+                != admission_policy_digest
+            ):
+                raise T1DispatchError(
+                    "existing T1 provider admission binding conflicts"
+                )
             return existing
         batch_reference: BatchAuthorityReference | None = None
         dispatch_reference: AuthorizationReference | None = None
@@ -819,11 +980,22 @@ class T1Dispatcher:
             dispatch_reference = self.dispatch_authorities.issue(
                 source_kind="t1_manifest",
                 source_id=manifest.manifest_digest,
-                scope=self._dispatch_scope(manifest),
+                scope=self._dispatch_scope(
+                    manifest,
+                    project.binding_digest,
+                    admission_lane.value,
+                    admission_policy_digest,
+                ),
                 expires_at=normalized_expiry,
             )
             member_ids = self.queue.enqueue(
-                self._queue_plan(manifest, batch_reference)
+                self._queue_plan(
+                    manifest,
+                    batch_reference,
+                    project.binding_digest,
+                    admission_lane.value,
+                    admission_policy_digest,
+                )
             )
         except Exception as exc:
             if dispatch_reference is not None:
@@ -850,6 +1022,9 @@ class T1Dispatcher:
             member_ids=member_ids,
             worker_count=manifest.worker_count,
             expires_at=normalized_expiry,
+            project_binding_digest=project.binding_digest,
+            admission_lane=admission_lane.value,
+            provider_admission_policy_digest=admission_policy_digest,
         )
 
 

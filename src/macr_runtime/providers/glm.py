@@ -24,6 +24,7 @@ from ..errors import (
     LegacyPreTierIncompatibleError,
     MacrError,
     ProviderOutputBudgetTooSmallError,
+    ProviderAdmissionRequiredError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderReasoningBudgetExhaustedError,
@@ -42,6 +43,10 @@ from ..provider_capability import (
     ProviderCapabilityResolver,
     ProviderTierBinding,
     glm_standard_policy,
+)
+from ..provider_admission import (
+    ProviderAdmissionPermit,
+    ProviderAdmissionRequest,
 )
 from ..task_preflight import validate_task_consistency
 from ..token_policy import ModelTokenPolicy, ModelTokenPolicyResolver
@@ -391,6 +396,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         token_policy: ModelTokenPolicy | None = None,
         capability_binding: ProviderTierBinding | None = None,
         capability_policy: ProviderCapabilityPolicy | None = None,
+        admission_guard: Any | None = None,
     ) -> None:
         if config.kind != "zai_glm_worker":
             raise ConfigurationError(
@@ -433,6 +439,8 @@ class GlmFlashWorkerProvider(BaseProvider):
                 r"D:\AI_RESIDENCE\AI_Runtime\macr-state",
             )
         )
+        self.admission_guard = admission_guard
+        self.requires_provider_admission = True
         self.token_policy_is_explicit = token_policy is not None
         canonical_token_policy = ModelTokenPolicyResolver.builtins_only().resolve(
             self.provider_id,
@@ -801,8 +809,24 @@ class GlmFlashWorkerProvider(BaseProvider):
         prepared = self._validate_approval_prepared(task)
         return self._safe_approval_metadata(task, prepared)
 
-    def _post_validated_task_once(self, task: TaskContract) -> Mapping[str, Any]:
+    def _post_validated_task_once(
+        self,
+        task: TaskContract,
+        *,
+        admission_permit: ProviderAdmissionPermit | None,
+        admission_request: ProviderAdmissionRequest | None,
+    ) -> Mapping[str, Any]:
         prepared = self._validate_approval_prepared(task)
+        begin_transport = getattr(self.admission_guard, "begin_transport", None)
+        if (
+            not callable(begin_transport)
+            or not isinstance(admission_permit, ProviderAdmissionPermit)
+            or not isinstance(admission_request, ProviderAdmissionRequest)
+        ):
+            raise ProviderAdmissionRequiredError(
+                "GLM transport requires a one-use provider admission permit"
+            )
+        begin_transport(admission_permit, admission_request)
         api_key = self._api_key()
         self.approval_store.verify(
             prepared["approval_sha256"],
@@ -1096,9 +1120,19 @@ class GlmFlashWorkerProvider(BaseProvider):
             provider_meta=self._provider_meta_from_observation(observation),
         )
 
-    def invoke_observed(self, task: TaskContract) -> ProviderExecution:
+    def invoke_observed(
+        self,
+        task: TaskContract,
+        *,
+        admission_permit: ProviderAdmissionPermit | None = None,
+        admission_request: ProviderAdmissionRequest | None = None,
+    ) -> ProviderExecution:
         started = time.perf_counter()
-        document = self._post_validated_task_once(task)
+        document = self._post_validated_task_once(
+            task,
+            admission_permit=admission_permit,
+            admission_request=admission_request,
+        )
         elapsed_ms = round((time.perf_counter() - started) * 1000)
         observation = self._observe_response(document, elapsed_ms)
         try:
@@ -1121,5 +1155,15 @@ class GlmFlashWorkerProvider(BaseProvider):
             )
         return ProviderExecution.from_observation(observation, result)
 
-    def invoke(self, task: TaskContract) -> ProviderResult:
-        return self.invoke_observed(task).result
+    def invoke(
+        self,
+        task: TaskContract,
+        *,
+        admission_permit: ProviderAdmissionPermit | None = None,
+        admission_request: ProviderAdmissionRequest | None = None,
+    ) -> ProviderResult:
+        return self.invoke_observed(
+            task,
+            admission_permit=admission_permit,
+            admission_request=admission_request,
+        ).result

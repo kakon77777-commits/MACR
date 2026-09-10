@@ -16,6 +16,9 @@ from .contracts import ProviderResult, ResultStatus, TaskContract
 from .dispatch import AdmissionGate, DispatcherLeaseStore
 from .errors import (
     MacrError,
+    ProviderAdmissionBusyError,
+    ProviderAdmissionConflict,
+    ProviderAdmissionRequiredError,
     ProviderOutputBudgetTooSmallError,
     ProviderPolicyError,
 )
@@ -29,6 +32,12 @@ from .execution import (
 from .model_token_store import ModelTokenPolicyStore
 from .provider_capability_store import ProviderCapabilityPolicyStore
 from .provider_capability import ProviderTierBinding
+from .provider_admission import (
+    AdmissionLane,
+    ProviderAdmissionKernel,
+    ProviderAdmissionPermit,
+    ProviderAdmissionRequest,
+)
 from .registry import ProviderRegistry
 from .return_contracts import validate_return_contract
 from .storage import StorageLayout
@@ -45,6 +54,7 @@ class RuntimeServices:
     vault: CandidateVault
     token_policies: ModelTokenPolicyStore
     capability_policies: ProviderCapabilityPolicyStore | None = None
+    provider_admission: ProviderAdmissionKernel | None = None
 
     @classmethod
     def from_layout(cls, layout: StorageLayout) -> "RuntimeServices":
@@ -63,6 +73,9 @@ class RuntimeServices:
             token_policies=ModelTokenPolicyStore(layout.model_token_policy_db_path),
             capability_policies=ProviderCapabilityPolicyStore(
                 layout.provider_capability_policy_db_path
+            ),
+            provider_admission=ProviderAdmissionKernel(
+                layout.runtime_db_path
             ),
         )
 
@@ -85,6 +98,38 @@ def task_contract_digest(task: TaskContract) -> str:
 
 def _task_digest(task: TaskContract) -> str:
     return task_contract_digest(task)
+
+
+def build_provider_admission_request(
+    provider_id: str,
+    task: TaskContract,
+    context: DispatchContext,
+    *,
+    request_id: str | None = None,
+) -> ProviderAdmissionRequest:
+    if (
+        context.project_binding_digest is None
+        or context.admission_lane is None
+    ):
+        raise ProviderAdmissionRequiredError(
+            "provider admission identity is missing"
+        )
+    return ProviderAdmissionRequest(
+        request_id=request_id or str(uuid.uuid4()),
+        provider_id=provider_id,
+        project_binding_digest=context.project_binding_digest,
+        lane=AdmissionLane(context.admission_lane),
+        run_id=context.run_id,
+        authorization=context.authorization,
+        plane=context.plane.value,
+        task_type=task.task_type,
+        task_digest=_task_digest(task),
+        member_digest=context.member_digest,
+        batch_id=context.batch_id,
+        provider_tier_binding_digest=(
+            context.provider_tier_binding_digest
+        ),
+    )
 
 
 def dispatch_resource_key(provider_id: str, task: TaskContract) -> str:
@@ -269,6 +314,9 @@ class MacrRuntime:
         provider_id: str,
         task: TaskContract,
         context: DispatchContext,
+        *,
+        provider_admission_permit: ProviderAdmissionPermit | None = None,
+        provider_admission_request: ProviderAdmissionRequest | None = None,
     ) -> ProviderResult:
         validate_task_consistency(task)
         if not isinstance(context, DispatchContext):
@@ -357,6 +405,34 @@ class MacrRuntime:
                     )
             except MacrError as exc:
                 return _provider_approval_failure(provider_id, task, exc)
+        requires_provider_admission = bool(
+            getattr(provider, "requires_provider_admission", False)
+        )
+        provider_admission = self.services.provider_admission
+        if requires_provider_admission and (
+            provider_admission is None
+            or context.project_binding_digest is None
+            or context.admission_lane is None
+            or context.provider_admission_policy_digest
+            != provider_admission.policy.policy_digest
+        ):
+            return _admission_failure(
+                provider_id,
+                task,
+                ProviderAdmissionRequiredError(
+                    "provider admission identity or policy is missing"
+                ),
+            )
+        if (provider_admission_permit is None) != (
+            provider_admission_request is None
+        ):
+            return _admission_failure(
+                provider_id,
+                task,
+                ProviderAdmissionRequiredError(
+                    "provider admission permit and request must be supplied together"
+                ),
+            )
         resource_key = dispatch_resource_key(provider_id, task)
         ttl_seconds = max(
             1,
@@ -373,7 +449,44 @@ class MacrRuntime:
         except MacrError as exc:
             return _admission_failure(provider_id, task, exc)
 
+        provider_request = provider_admission_request
+        provider_permit = provider_admission_permit
+        provider_admission_finished = False
+        execution: ProviderExecution | None = None
         try:
+            if requires_provider_admission:
+                assert provider_admission is not None
+                assert context.project_binding_digest is not None
+                assert context.admission_lane is not None
+                if provider_request is None:
+                    provider_request = build_provider_admission_request(
+                        provider_id,
+                        task,
+                        context,
+                    )
+                    try:
+                        provider_permit = provider_admission.try_admit(
+                            provider_request,
+                            ttl_seconds=ttl_seconds,
+                        )
+                    except ProviderAdmissionBusyError:
+                        provider_admission.cancel_waiting(
+                            provider_request.request_id,
+                            provider_request.run_id,
+                        )
+                        raise
+                else:
+                    expected_request = build_provider_admission_request(
+                        provider_id,
+                        task,
+                        context,
+                        request_id=provider_request.request_id,
+                    )
+                    if expected_request != provider_request:
+                        raise ProviderAdmissionConflict(
+                            "pre-granted provider admission request is stale"
+                        )
+                assert provider_permit is not None
             dispatch_event_id = str(uuid.uuid4())
             self.services.events.start_run(
                 run_id=context.run_id,
@@ -396,7 +509,14 @@ class MacrRuntime:
 
             provider_started = time.perf_counter()
             try:
-                execution = provider.invoke_observed(task)
+                if requires_provider_admission:
+                    execution = provider.invoke_observed(
+                        task,
+                        admission_permit=provider_permit,
+                        admission_request=provider_request,
+                    )
+                else:
+                    execution = provider.invoke_observed(task)
                 if not isinstance(execution, ProviderExecution):
                     raise TypeError(
                         "provider invoke_observed returned an invalid execution"
@@ -441,23 +561,77 @@ class MacrRuntime:
                 failure_code=execution.result.failure_code,
                 failure_stage=execution.result.failure_stage,
             )
+            terminal_payload = self._terminal_payload(
+                provider_id,
+                task,
+                context,
+                dispatch_event_id,
+                execution,
+                capture,
+                billing_state,
+                return_reason,
+            )
             self.services.events.finish_run(
                 run_id=context.run_id,
                 terminal_event_id=str(uuid.uuid4()),
                 state=execution.result.status.value,
-                payload=self._terminal_payload(
-                    provider_id,
-                    task,
-                    context,
-                    dispatch_event_id,
-                    execution,
-                    capture,
-                    billing_state,
-                    return_reason,
-                ),
+                payload=terminal_payload,
             )
+            if provider_permit is not None:
+                assert provider_admission is not None
+                provider_admission.finish(
+                    provider_permit,
+                    network_attempted=execution.observation.network_attempted,
+                    response_received=execution.observation.response_received,
+                    provider_http_status=(
+                        execution.observation.provider_http_status
+                    ),
+                    terminal_persisted=True,
+                    terminal_evidence_digest=hashlib.sha256(
+                        _canonical_json(terminal_payload).encode("utf-8")
+                    ).hexdigest(),
+                )
+                provider_admission_finished = True
             return execution.result
         finally:
+            if (
+                provider_permit is not None
+                and provider_admission is not None
+                and not provider_admission_finished
+            ):
+                try:
+                    record = provider_admission.read_request(
+                        provider_permit.request_id
+                    )
+                    if record.state == "granted":
+                        provider_admission.cancel_before_transport(
+                            provider_permit
+                        )
+                    elif record.state == "dispatched":
+                        observation = (
+                            execution.observation
+                            if execution is not None
+                            else RawProviderObservation.empty(provider_id)
+                        )
+                        provider_admission.finish(
+                            provider_permit,
+                            network_attempted=observation.network_attempted,
+                            response_received=observation.response_received,
+                            provider_http_status=(
+                                observation.provider_http_status
+                            ),
+                            terminal_persisted=False,
+                            terminal_evidence_digest=hashlib.sha256(
+                                _canonical_json(
+                                    {
+                                        "run_id": context.run_id,
+                                        "state": "terminal_persistence_incomplete",
+                                    }
+                                ).encode("utf-8")
+                            ).hexdigest(),
+                        )
+                except Exception:
+                    pass
             self.services.leases.release(
                 permit.resource_key,
                 permit.run_id,
@@ -524,7 +698,7 @@ class MacrRuntime:
         fencing_token: int,
     ) -> dict[str, Any]:
         return {
-            "dispatch_contract_version": 2,
+            "dispatch_contract_version": 3,
             "provider_id": provider_id,
             "task_id": task.task_id,
             "task_type": task.task_type,
@@ -544,6 +718,11 @@ class MacrRuntime:
             "model_token_policy_digest": context.model_token_policy_digest,
             "provider_tier_binding_digest": (
                 context.provider_tier_binding_digest
+            ),
+            "project_binding_digest": context.project_binding_digest,
+            "admission_lane": context.admission_lane,
+            "provider_admission_policy_digest": (
+                context.provider_admission_policy_digest
             ),
             "batch_id": context.batch_id,
             "member_digest": context.member_digest,
@@ -577,7 +756,7 @@ class MacrRuntime:
             return value
 
         return {
-            "terminal_contract_version": 3,
+            "terminal_contract_version": 4,
             "provider_id": provider_id,
             "task_id": task.task_id,
             "dispatch_event_id": dispatch_event_id,
@@ -624,5 +803,10 @@ class MacrRuntime:
             "route_id": context.route_id,
             "provider_tier_binding_digest": (
                 context.provider_tier_binding_digest
+            ),
+            "project_binding_digest": context.project_binding_digest,
+            "admission_lane": context.admission_lane,
+            "provider_admission_policy_digest": (
+                context.provider_admission_policy_digest
             ),
         }

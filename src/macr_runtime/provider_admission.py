@@ -253,7 +253,7 @@ def glm_provider_admission_policy() -> ProviderAdmissionPolicy:
 class ProviderAdmissionRequest:
     request_id: str
     provider_id: str
-    project: ProjectAdmissionBinding
+    project_binding_digest: str
     lane: AdmissionLane
     run_id: str
     authorization: AuthorizationReference
@@ -275,8 +275,14 @@ class ProviderAdmissionRequest:
             "provider_id",
             _identifier("provider_id", self.provider_id),
         )
-        if not isinstance(self.project, ProjectAdmissionBinding):
-            raise ValueError("project must be a ProjectAdmissionBinding")
+        object.__setattr__(
+            self,
+            "project_binding_digest",
+            _digest(
+                "project_binding_digest",
+                self.project_binding_digest,
+            ),
+        )
         if not isinstance(self.lane, AdmissionLane):
             raise ValueError("lane must be an AdmissionLane")
         object.__setattr__(self, "run_id", _uuid4("run_id", self.run_id))
@@ -378,6 +384,8 @@ class ProviderAdmissionRecord:
     terminal_at: str | None
     expires_at: str
     terminal_evidence_digest: str | None
+    resolution_evidence_digest: str | None
+    resolved_at: str | None
 
 
 @dataclass(frozen=True)
@@ -509,7 +517,7 @@ class ProviderAdmissionKernel:
             batch_id=request.batch_id,
             member_digest=request.member_digest,
             provider_tier_binding_digest=request.provider_tier_binding_digest,
-            project_binding_digest=request.project.binding_digest,
+            project_binding_digest=request.project_binding_digest,
             admission_lane=request.lane.value,
             provider_admission_policy_digest=self.policy.policy_digest,
         )
@@ -523,7 +531,7 @@ class ProviderAdmissionKernel:
         return (
             row["provider_id"] == request.provider_id
             and row["project_binding_digest"]
-            == request.project.binding_digest
+            == request.project_binding_digest
             and row["admission_lane"] == request.lane.value
             and row["run_id"] == request.run_id
             and row["authority_digest"] == request.authorization.digest
@@ -746,7 +754,7 @@ class ProviderAdmissionKernel:
                     (
                         request.request_id,
                         request.provider_id,
-                        request.project.binding_digest,
+                        request.project_binding_digest,
                         request.lane.value,
                         request.run_id,
                         request.authorization.digest,
@@ -799,7 +807,7 @@ class ProviderAdmissionKernel:
                     updated_at=excluded.updated_at""",
                 (
                     request.provider_id,
-                    request.project.binding_digest,
+                    request.project_binding_digest,
                     sequence,
                     now.isoformat(),
                 ),
@@ -888,6 +896,43 @@ class ProviderAdmissionKernel:
                 (now, permit.request_id),
             )
             connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def cancel_waiting(self, request_id: str, run_id: str) -> bool:
+        request = _uuid4("request_id", request_id)
+        run = _uuid4("run_id", run_id)
+        now = self._current_time().isoformat()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT state, run_id FROM provider_admission_requests
+                WHERE request_id=?""",
+                (request,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return False
+            if row["run_id"] != run:
+                raise ProviderAdmissionConflict(
+                    "provider admission waiting identity is invalid"
+                )
+            if row["state"] != "waiting":
+                raise ProviderAdmissionConflict(
+                    "provider admission request is not waiting"
+                )
+            changed = connection.execute(
+                """UPDATE provider_admission_requests
+                SET state='cancelled', terminal_at=?
+                WHERE request_id=? AND state='waiting'""",
+                (now, request),
+            ).rowcount
+            connection.commit()
+            return changed == 1
         except Exception:
             connection.rollback()
             raise
@@ -1044,7 +1089,92 @@ class ProviderAdmissionKernel:
             terminal_at=row["terminal_at"],
             expires_at=row["expires_at"],
             terminal_evidence_digest=row["terminal_evidence_digest"],
+            resolution_evidence_digest=row["resolution_evidence_digest"],
+            resolved_at=row["resolved_at"],
         )
+
+    def resolve_reconciliation(
+        self,
+        request_id: str,
+        reference: AuthorizationReference,
+        *,
+        resolution_evidence_digest: str,
+    ) -> ProviderAdmissionRecord:
+        request = _uuid4("request_id", request_id)
+        if not isinstance(reference, AuthorizationReference):
+            raise ValueError("reference must be an AuthorizationReference")
+        evidence = _digest(
+            "resolution_evidence_digest",
+            resolution_evidence_digest,
+        )
+        connection = self.database.connect()
+        try:
+            row = connection.execute(
+                """SELECT * FROM provider_admission_requests
+                WHERE request_id=?""",
+                (request,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None or row["state"] != "reconciliation_required":
+            raise ProviderAdmissionConflict(
+                "provider admission request does not require reconciliation"
+            )
+        self.authorities.verify(
+            reference,
+            provider_id=row["provider_id"],
+            plane="provider_admission_reconciliation",
+            task_type="provider_admission_resolution",
+            member_digest=row["member_digest"],
+            provider_tier_binding_digest=row[
+                "provider_tier_binding_digest"
+            ],
+            project_binding_digest=row["project_binding_digest"],
+            admission_lane=row["admission_lane"],
+            provider_admission_policy_digest=row["policy_digest"],
+        )
+        now = self._current_time().isoformat()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT * FROM provider_admission_requests
+                WHERE request_id=?""",
+                (request,),
+            ).fetchone()
+            if row is None or row["state"] != "reconciliation_required":
+                raise ProviderAdmissionConflict(
+                    "provider admission reconciliation state changed"
+                )
+            self._decrement_project(connection, row, now)
+            connection.execute(
+                """UPDATE provider_admission_requests
+                SET state='reconciled', resolution_evidence_digest=?,
+                    resolved_at=? WHERE request_id=?""",
+                (evidence, now, request),
+            )
+            remaining = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_requests
+                WHERE provider_id=? AND state='reconciliation_required'""",
+                (row["provider_id"],),
+            ).fetchone()[0]
+            connection.execute(
+                """UPDATE provider_admission_state
+                SET circuit_state=?, last_signal='reconciled', updated_at=?
+                WHERE provider_id=?""",
+                (
+                    "open" if remaining else "closed",
+                    now,
+                    row["provider_id"],
+                ),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.read_request(request)
 
     def status(self, provider_id: str) -> ProviderAdmissionStatus:
         provider = _identifier("provider_id", provider_id)
@@ -1082,6 +1212,7 @@ class ProviderAdmissionKernel:
                 "completed",
                 "cancelled",
                 "reconciliation_required",
+                "reconciled",
             )
         }
         counts.update({row["state"]: row["count"] for row in rows})

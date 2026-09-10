@@ -8,6 +8,7 @@ from .errors import ConfigurationError, ProviderPolicyError, ProviderUnavailable
 from .model_token_store import ModelTokenPolicyStore
 from .provider_capability import ProviderTierBinding
 from .provider_capability_store import ProviderCapabilityPolicyStore
+from .provider_admission import ProviderAdmissionKernel
 from .providers.base import BaseProvider
 from .providers.disabled import DisabledProvider
 from .providers.grok import GrokResponsesProvider
@@ -48,6 +49,7 @@ class ProviderRegistry:
         key_sources: Mapping[str, Any] | None = None,
         token_policy_store: ModelTokenPolicyStore | None = None,
         capability_policy_store: ProviderCapabilityPolicyStore | None = None,
+        provider_admission_kernel: ProviderAdmissionKernel | None = None,
     ) -> "ProviderRegistry":
         transport_map = {} if transports is None else dict(transports)
         key_source_map = {} if key_sources is None else dict(key_sources)
@@ -95,6 +97,7 @@ class ProviderRegistry:
                         key_source=key_source_map.get(config.id),
                         token_policy=token_policy,
                         capability_policy=capability_policy,
+                        admission_guard=provider_admission_kernel,
                     )
                 )
             elif config.kind == "ollama_local_chat":

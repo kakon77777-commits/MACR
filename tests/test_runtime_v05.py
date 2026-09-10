@@ -34,6 +34,12 @@ from macr_runtime.providers.base import BaseProvider, ProviderHealth
 from macr_runtime.provider_capability import ProviderTierBinding, glm_standard_policy
 from macr_runtime.provider_capability import glm_extended_text_policy
 from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
+from macr_runtime.provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+    ProviderAdmissionKernel,
+    glm_provider_admission_policy,
+)
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime, dispatch_resource_key
@@ -182,7 +188,11 @@ def issue_context(
     task: TaskContract,
     *,
     provider_tier_binding_digest: str | None = None,
+    project_binding_digest: str | None = None,
+    admission_lane: str | None = None,
+    provider_admission_policy_digest: str | None = None,
 ) -> DispatchContext:
+    admission_bound = project_binding_digest is not None
     reference = services.authorities.issue(
         source_kind="test",
         source_id=f"{provider_id}:{task.task_id}:{uuid.uuid4()}",
@@ -195,6 +205,16 @@ def issue_context(
                 if provider_tier_binding_digest is not None
                 else ()
             ),
+            project_binding_digests=(
+                (project_binding_digest,) if admission_bound else ()
+            ),
+            admission_lanes=(
+                (admission_lane,) if admission_bound else ()
+            ),
+            provider_admission_policy_digests=(
+                (provider_admission_policy_digest,) if admission_bound else ()
+            ),
+            scope_contract_version=3 if admission_bound else 2,
         ),
         expires_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
     )
@@ -205,6 +225,9 @@ def issue_context(
         authorization=reference,
         policy_snapshot_sha256="a" * 64,
         provider_tier_binding_digest=provider_tier_binding_digest,
+        project_binding_digest=project_binding_digest,
+        admission_lane=admission_lane,
+        provider_admission_policy_digest=provider_admission_policy_digest,
     )
 
 
@@ -350,7 +373,7 @@ class RuntimeV05Tests(unittest.TestCase):
             terminal = events[-1]
 
         self.assertEqual(result.status, ResultStatus.CANDIDATE_SUCCESS)
-        self.assertEqual(dispatch["payload"]["dispatch_contract_version"], 2)
+        self.assertEqual(dispatch["payload"]["dispatch_contract_version"], 3)
         self.assertEqual(
             dispatch["payload"]["provider_tier_binding_digest"],
             binding_digest,
@@ -359,7 +382,7 @@ class RuntimeV05Tests(unittest.TestCase):
             terminal["payload"]["provider_tier_binding_digest"],
             binding_digest,
         )
-        self.assertEqual(terminal["payload"]["terminal_contract_version"], 3)
+        self.assertEqual(terminal["payload"]["terminal_contract_version"], 4)
 
     def test_model_token_policy_refuses_before_authority_or_provider(self) -> None:
         provider = ObservedProvider(
@@ -556,35 +579,49 @@ class RuntimeV05Tests(unittest.TestCase):
         document["usage"]["completion_tokens"] = 65_536
         document["usage"]["completion_tokens_details"]["reasoning_tokens"] = 65_536
         document["usage"]["total_tokens"] = 65_556
-        provider = GlmFlashWorkerProvider(
-            glm_config(),
-            transport=FakeTransport(document),
-            environ={},
-            key_source=StaticKeySource(),
-            approval_store=AllowingApprovalStore(),
-        )
-        base = delegated_task(task_id="glm-reasoning-exhaustion-runtime")
-        unsigned = replace(
-            base,
-            constraints=replace(
-                base.constraints,
-                max_cost_usd=0.10,
-                privacy=PrivacyLevel.PUBLIC,
-            ),
-            delegation_approval_sha256=None,
-        )
-        approval = provider.approval_metadata(unsigned)[
-            "required_approval_sha256"
-        ]
-        task = replace(unsigned, delegation_approval_sha256=approval)
         with d_drive_tempdir() as state_root:
             services = build_test_services(state_root)
+            kernel = ProviderAdmissionKernel(services.events.path)
+            services = replace(services, provider_admission=kernel)
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=FakeTransport(document),
+                environ={},
+                key_source=StaticKeySource(),
+                approval_store=AllowingApprovalStore(),
+                admission_guard=kernel,
+            )
+            base = delegated_task(task_id="glm-reasoning-exhaustion-runtime")
+            unsigned = replace(
+                base,
+                constraints=replace(
+                    base.constraints,
+                    max_cost_usd=0.10,
+                    privacy=PrivacyLevel.PUBLIC,
+                ),
+                delegation_approval_sha256=None,
+            )
+            approval = provider.approval_metadata(unsigned)[
+                "required_approval_sha256"
+            ]
+            task = replace(unsigned, delegation_approval_sha256=approval)
+            project = ProjectAdmissionBinding(
+                "runtime-test",
+                1,
+                "test_harness",
+            )
+            admission_policy = glm_provider_admission_policy()
             context = issue_context(
                 services,
                 provider.provider_id,
                 task,
                 provider_tier_binding_digest=(
                     provider.capability_binding.binding_digest
+                ),
+                project_binding_digest=project.binding_digest,
+                admission_lane=AdmissionLane.ROUTINE.value,
+                provider_admission_policy_digest=(
+                    admission_policy.policy_digest
                 ),
             )
             result = MacrRuntime(

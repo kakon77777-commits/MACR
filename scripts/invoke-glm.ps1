@@ -1,7 +1,13 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$TaskPath
+    [string]$TaskPath,
+
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')]
+    [string]$ProjectId = 'operator-default',
+
+    [ValidateSet('interactive', 'routine', 'bulk')]
+    [string]$AdmissionLane = 'routine'
 )
 
 Set-StrictMode -Version Latest
@@ -26,6 +32,8 @@ try {
         invoke `
         glm_flash_worker `
         $TaskPath `
+        --project-id $ProjectId `
+        --admission-lane $AdmissionLane `
         --allow-network
     $exitCode = $LASTEXITCODE
 }

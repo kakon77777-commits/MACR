@@ -208,6 +208,9 @@ class DispatchContext:
     route_id: str | None = None
     model_token_policy_digest: str | None = None
     provider_tier_binding_digest: str | None = None
+    project_binding_digest: str | None = None
+    admission_lane: str | None = None
+    provider_admission_policy_digest: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "run_id", _uuid4("run_id", self.run_id))
@@ -274,6 +277,27 @@ class DispatchContext:
                 _digest(
                     "provider_tier_binding_digest",
                     self.provider_tier_binding_digest,
+                ),
+            )
+        if self.project_binding_digest is not None:
+            object.__setattr__(
+                self,
+                "project_binding_digest",
+                _digest(
+                    "project_binding_digest",
+                    self.project_binding_digest,
+                ),
+            )
+        if self.admission_lane is not None:
+            if self.admission_lane not in {"interactive", "routine", "bulk"}:
+                raise ValueError("admission_lane is invalid")
+        if self.provider_admission_policy_digest is not None:
+            object.__setattr__(
+                self,
+                "provider_admission_policy_digest",
+                _digest(
+                    "provider_admission_policy_digest",
+                    self.provider_admission_policy_digest,
                 ),
             )
 

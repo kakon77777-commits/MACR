@@ -61,6 +61,9 @@ _OPERATIONAL_PAYLOAD_KEYS = {
             "policy_snapshot_sha256",
             "model_token_policy_digest",
             "provider_tier_binding_digest",
+            "project_binding_digest",
+            "admission_lane",
+            "provider_admission_policy_digest",
             "batch_id",
             "member_digest",
             "relay_is_authorship",
@@ -114,6 +117,9 @@ _OPERATIONAL_PAYLOAD_KEYS = {
             "role_slot_id",
             "route_id",
             "provider_tier_binding_digest",
+            "project_binding_digest",
+            "admission_lane",
+            "provider_admission_policy_digest",
         }
     ),
 }
@@ -152,6 +158,9 @@ _OPERATIONAL_FIELD_KINDS = {
         "policy_snapshot_sha256": "text",
         "model_token_policy_digest": "optional_text",
         "provider_tier_binding_digest": "optional_text",
+        "project_binding_digest": "optional_text",
+        "admission_lane": "optional_text",
+        "provider_admission_policy_digest": "optional_text",
         "batch_id": "optional_text",
         "member_digest": "optional_text",
         "relay_is_authorship": "boolean",
@@ -203,6 +212,9 @@ _OPERATIONAL_FIELD_KINDS = {
         "role_slot_id": "optional_text",
         "route_id": "optional_text",
         "provider_tier_binding_digest": "optional_text",
+        "project_binding_digest": "optional_text",
+        "admission_lane": "optional_text",
+        "provider_admission_policy_digest": "optional_text",
     },
 }
 _CANDIDATE_CAPTURE_FIELD_KINDS = {

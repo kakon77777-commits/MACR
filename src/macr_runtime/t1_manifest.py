@@ -642,6 +642,9 @@ class T1AuthorityBundle:
     member_ids: tuple[str, ...]
     worker_count: int
     expires_at: str
+    project_binding_digest: str | None = None
+    admission_lane: str | None = None
+    provider_admission_policy_digest: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -668,6 +671,34 @@ class T1AuthorityBundle:
             "expires_at",
             aware_iso8601("expires_at", self.expires_at),
         )
+        admission_values = (
+            self.project_binding_digest,
+            self.admission_lane,
+            self.provider_admission_policy_digest,
+        )
+        if any(item is not None for item in admission_values):
+            if any(item is None for item in admission_values):
+                raise ValueError(
+                    "T1 authority bundle admission binding must be complete"
+                )
+            object.__setattr__(
+                self,
+                "project_binding_digest",
+                _digest(
+                    "project_binding_digest",
+                    self.project_binding_digest,
+                ),
+            )
+            if self.admission_lane not in {"interactive", "routine", "bulk"}:
+                raise ValueError("T1 authority bundle admission lane is invalid")
+            object.__setattr__(
+                self,
+                "provider_admission_policy_digest",
+                _digest(
+                    "provider_admission_policy_digest",
+                    self.provider_admission_policy_digest,
+                ),
+            )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -689,6 +720,11 @@ class T1AuthorityBundle:
             "member_ids": list(self.member_ids),
             "worker_count": self.worker_count,
             "expires_at": self.expires_at,
+            "project_binding_digest": self.project_binding_digest,
+            "admission_lane": self.admission_lane,
+            "provider_admission_policy_digest": (
+                self.provider_admission_policy_digest
+            ),
         }
 
 

@@ -200,6 +200,9 @@ class T1QueuePlan:
     members: tuple[QueueMember, ...]
     aggregate_cost_ceiling_usd: float
     authority: BatchAuthorityReference
+    project_binding_digest: str | None = None
+    admission_lane: str | None = None
+    provider_admission_policy_digest: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -228,6 +231,30 @@ class T1QueuePlan:
             raise ValueError("authority must be a BatchAuthorityReference")
         if self.authority.plan_digest != self.plan_digest:
             raise ValueError("authority plan digest does not match queue plan")
+        if self.project_binding_digest is not None:
+            object.__setattr__(
+                self,
+                "project_binding_digest",
+                _digest(
+                    "project_binding_digest",
+                    self.project_binding_digest,
+                ),
+            )
+        if self.admission_lane is not None and self.admission_lane not in {
+            "interactive",
+            "routine",
+            "bulk",
+        }:
+            raise ValueError("admission_lane is invalid")
+        if self.provider_admission_policy_digest is not None:
+            object.__setattr__(
+                self,
+                "provider_admission_policy_digest",
+                _digest(
+                    "provider_admission_policy_digest",
+                    self.provider_admission_policy_digest,
+                ),
+            )
 
 
 @dataclass(frozen=True)
@@ -247,6 +274,21 @@ class QueueClaim:
     fencing_token: int
     lease_expires_at: str
     attempts: int
+
+
+@dataclass(frozen=True)
+class QueueCandidate:
+    member_id: str
+    plan_digest: str
+    ordinal: int
+    member_digest: str
+    provider_id: str
+    route_id: str
+    role_digest: str
+    privacy: str
+    context_class: str
+    cost_ceiling_usd: float
+    provider_tier_binding_digest: str | None
 
 
 @dataclass(frozen=True)
@@ -366,6 +408,11 @@ class PlanQueue:
                     and existing["authorized_dispatchers_json"] == dispatcher_json
                     and existing["expires_at"] == authority_scope.expires_at
                     and existing["members_sha256"] == members_digest
+                    and existing["project_binding_digest"]
+                    == plan.project_binding_digest
+                    and existing["admission_lane"] == plan.admission_lane
+                    and existing["provider_admission_policy_digest"]
+                    == plan.provider_admission_policy_digest
                 )
                 if not matches:
                     raise DispatchLeaseError(
@@ -386,8 +433,9 @@ class PlanQueue:
                     plan_digest, authority_id, authority_digest,
                     authority_revision, aggregate_cost_ceiling_usd,
                     authorized_dispatchers_json, expires_at,
-                    members_sha256, enqueued_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    members_sha256, enqueued_at, project_binding_digest,
+                    admission_lane, provider_admission_policy_digest
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan.plan_digest,
@@ -399,6 +447,9 @@ class PlanQueue:
                     authority_scope.expires_at,
                     members_digest,
                     enqueued_at,
+                    plan.project_binding_digest,
+                    plan.admission_lane,
+                    plan.provider_admission_policy_digest,
                 ),
             )
             for ordinal, (member, member_id) in enumerate(
@@ -494,12 +545,18 @@ class PlanQueue:
         *,
         lease_seconds: int = 300,
         plan_digest: str | None = None,
+        expected_member_id: str | None = None,
     ) -> QueueClaim | None:
         dispatcher = _identifier("dispatcher_id", dispatcher_id)
         ttl = _ttl(lease_seconds)
         plan = (
             _digest("plan_digest", plan_digest)
             if plan_digest is not None
+            else None
+        )
+        expected = (
+            _digest("expected_member_id", expected_member_id)
+            if expected_member_id is not None
             else None
         )
         now = self._current_time()
@@ -556,6 +613,9 @@ class PlanQueue:
             if selected is None:
                 assert last_authorization_error is not None
                 raise last_authorization_error
+            if expected is not None and selected["member_id"] != expected:
+                connection.commit()
+                return None
             reserved = connection.execute(
                 """
                 SELECT COALESCE(SUM(
@@ -613,6 +673,88 @@ class PlanQueue:
                 fencing_token=token,
                 lease_expires_at=expires_at,
                 attempts=1,
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def peek_claimable(
+        self,
+        dispatcher_id: str,
+        *,
+        plan_digest: str,
+    ) -> QueueCandidate | None:
+        dispatcher = _identifier("dispatcher_id", dispatcher_id)
+        plan = _digest("plan_digest", plan_digest)
+        now = self._current_time()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            self._mark_expired_claims(connection, now)
+            connection.commit()
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """SELECT m.*, b.authority_id, b.authority_digest,
+                          b.authority_revision,
+                          b.aggregate_cost_ceiling_usd,
+                          b.authorized_dispatchers_json, b.expires_at
+                FROM plan_queue_members AS m
+                JOIN plan_queue_batches AS b USING(plan_digest)
+                WHERE m.state='queued' AND m.plan_digest=?
+                ORDER BY m.ordinal""",
+                (plan,),
+            ).fetchall()
+            if not rows:
+                connection.commit()
+                return None
+            selected = None
+            last_authorization_error: DispatchAuthorizationError | None = None
+            for row in rows:
+                try:
+                    scope = self.authorities.scope(
+                        self._reference_from_row(row),
+                        dispatcher_id=dispatcher,
+                    )
+                except DispatchAuthorizationError as exc:
+                    last_authorization_error = exc
+                    continue
+                if (
+                    scope.aggregate_cost_ceiling_usd
+                    != row["aggregate_cost_ceiling_usd"]
+                ):
+                    raise DispatchAuthorizationError(
+                        "batch authorization aggregate cost mismatch"
+                    )
+                if (
+                    row["ordinal"] >= len(scope.ordered_members)
+                    or scope.ordered_members[row["ordinal"]]
+                    != self._scope_member_from_row(row)
+                ):
+                    raise DispatchAuthorizationError(
+                        "batch authorization member scope mismatch"
+                    )
+                selected = row
+                break
+            if selected is None:
+                assert last_authorization_error is not None
+                raise last_authorization_error
+            connection.commit()
+            return QueueCandidate(
+                member_id=selected["member_id"],
+                plan_digest=selected["plan_digest"],
+                ordinal=selected["ordinal"],
+                member_digest=selected["member_digest"],
+                provider_id=selected["provider_id"],
+                route_id=selected["route_id"],
+                role_digest=selected["role_digest"],
+                privacy=selected["privacy"],
+                context_class=selected["context_class"],
+                cost_ceiling_usd=selected["cost_ceiling_usd"],
+                provider_tier_binding_digest=selected[
+                    "provider_tier_binding_digest"
+                ],
             )
         except Exception:
             connection.rollback()
@@ -1208,6 +1350,7 @@ def read_queue_tier_status(path: str | Path) -> dict[str, int]:
 
 __all__ = [
     "PlanQueue",
+    "QueueCandidate",
     "QueueClaim",
     "QueueMember",
     "QueueMemberRecord",

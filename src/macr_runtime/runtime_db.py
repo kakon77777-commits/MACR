@@ -446,7 +446,7 @@ class RuntimeDatabase:
                         capacity_unit INTEGER NOT NULL CHECK(capacity_unit = 1),
                         state TEXT NOT NULL CHECK(state IN (
                             'waiting', 'granted', 'dispatched', 'completed',
-                            'cancelled', 'reconciliation_required'
+                            'cancelled', 'reconciliation_required', 'reconciled'
                         )),
                         fencing_token INTEGER,
                         requested_at TEXT NOT NULL,
@@ -454,7 +454,9 @@ class RuntimeDatabase:
                         transport_started_at TEXT,
                         terminal_at TEXT,
                         expires_at TEXT NOT NULL,
-                        terminal_evidence_digest TEXT
+                        terminal_evidence_digest TEXT,
+                        resolution_evidence_digest TEXT,
+                        resolved_at TEXT
                     )""",
                     """CREATE INDEX IF NOT EXISTS provider_admission_waiting
                     ON provider_admission_requests(
@@ -465,6 +467,27 @@ class RuntimeDatabase:
                 )
                 for statement in migration_eight:
                     connection.execute(statement)
+                batch_exists = connection.execute(
+                    """SELECT 1 FROM sqlite_master
+                    WHERE type='table' AND name='plan_queue_batches'"""
+                ).fetchone()
+                if batch_exists is not None:
+                    batch_columns = {
+                        item[1]
+                        for item in connection.execute(
+                            "PRAGMA table_info(plan_queue_batches)"
+                        ).fetchall()
+                    }
+                    for name in (
+                        "project_binding_digest",
+                        "admission_lane",
+                        "provider_admission_policy_digest",
+                    ):
+                        if name not in batch_columns:
+                            connection.execute(
+                                "ALTER TABLE plan_queue_batches "
+                                f"ADD COLUMN {name} TEXT"
+                            )
                 connection.execute(
                     "UPDATE schema_meta SET version = ? WHERE component = ?",
                     (8, "runtime"),

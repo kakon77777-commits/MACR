@@ -28,6 +28,8 @@ from .differential import (
 )
 from .errors import (
     MacrError,
+    ProviderAdmissionBusyError,
+    ProviderAdmissionReconciliationError,
     ProviderOutputBudgetTooSmallError,
     ProviderTaskTypeError,
 )
@@ -40,6 +42,10 @@ from .model_token_store import (
     read_model_token_override_status,
 )
 from .provider_capability_store import read_effective_policy
+from .provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+)
 from .observatory import ModelObservatory
 from .observatory_db import ObservatoryDatabase
 from .discovery.openrouter import (
@@ -279,6 +285,8 @@ def _t1_stage(
     *,
     dispatcher_ids: Sequence[str],
     expires_in_minutes: int,
+    project_id: str = "operator-default",
+    admission_lane: str = "routine",
 ) -> int:
     if (
         isinstance(expires_in_minutes, bool)
@@ -328,6 +336,12 @@ def _t1_stage(
         manifest,
         tuple(dispatcher_ids),
         manifest.expires_at,
+        ProjectAdmissionBinding(
+            project_id,
+            1,
+            "operator_asserted",
+        ),
+        AdmissionLane(admission_lane),
     )
     print(
         json.dumps(
@@ -337,6 +351,8 @@ def _t1_stage(
                 "provider_call_performed": False,
                 "worker_count": manifest.worker_count,
                 "member_count": len(manifest.members),
+                "project_binding_digest": bundle.project_binding_digest,
+                "admission_lane": bundle.admission_lane,
                 "authority_bundle": bundle.to_dict(),
             },
             ensure_ascii=False,
@@ -392,20 +408,43 @@ def _t1_worker(
                     config.model or "",
                 )
             ),
+            admission_guard=services.provider_admission,
         )
         registry = ProviderRegistry((provider,))
     else:
         registry = registry_override
     manifest = load_t1_manifest(manifest_path)
     dispatcher = T1Dispatcher(registry, services)
-    result = dispatcher.run_one(
-        manifest,
-        dispatcher.load_bundle(manifest),
-        dispatcher_id,
-        DispatchOrigin("cli", "process_id", str(os.getpid())),
-        allow_network=allow_network,
-        allow_local=allow_local,
-    )
+    try:
+        result = dispatcher.run_one(
+            manifest,
+            dispatcher.load_bundle(manifest),
+            dispatcher_id,
+            DispatchOrigin("cli", "process_id", str(os.getpid())),
+            allow_network=allow_network,
+            allow_local=allow_local,
+        )
+    except (
+        ProviderAdmissionBusyError,
+        ProviderAdmissionReconciliationError,
+    ) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": (
+                        "t1_provider_admission_busy"
+                        if isinstance(exc, ProviderAdmissionBusyError)
+                        else "t1_provider_admission_reconciliation_required"
+                    ),
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "provider_generation": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 6
     status = (
         "t1_worker_completed"
         if result.queue_state == QueueMemberState.COMPLETED.value
@@ -1104,6 +1143,9 @@ def _cli_policy_snapshot_sha256(
     allow_local: bool,
     model_token_policy_digest: str | None,
     provider_tier_binding_digest: str | None,
+    project_binding_digest: str | None,
+    admission_lane: str | None,
+    provider_admission_policy_digest: str | None,
 ) -> str:
     document = {
         "schema": "macr_cli_one_shot_v2",
@@ -1118,6 +1160,11 @@ def _cli_policy_snapshot_sha256(
         "max_context_tokens": task.constraints.max_context_tokens,
         "model_token_policy_digest": model_token_policy_digest,
         "provider_tier_binding_digest": provider_tier_binding_digest,
+        "project_binding_digest": project_binding_digest,
+        "admission_lane": admission_lane,
+        "provider_admission_policy_digest": (
+            provider_admission_policy_digest
+        ),
         "allow_network": allow_network,
         "allow_local": allow_local,
     }
@@ -1137,6 +1184,8 @@ def _invoke(
     config_path: str | None,
     allow_network: bool,
     allow_local: bool,
+    project_id: str = "operator-default",
+    admission_lane: str = "routine",
 ) -> int:
     layout = StorageLayout.from_environment()
     path = Path(config_path) if config_path else _default_config(layout)
@@ -1165,6 +1214,7 @@ def _invoke(
         configs,
         token_policy_store=services.token_policies,
         capability_policy_store=services.capability_policies,
+        provider_admission_kernel=services.provider_admission,
     )
     provider = registry.get(provider_id)
     if not _legacy_migration_complete(layout, services):
@@ -1200,6 +1250,29 @@ def _invoke(
         if capability_binding is not None
         else None
     )
+    requires_provider_admission = bool(
+        getattr(provider, "requires_provider_admission", False)
+    )
+    project_binding = (
+        ProjectAdmissionBinding(
+            project_id,
+            1,
+            "operator_asserted",
+        )
+        if requires_provider_admission
+        else None
+    )
+    selected_lane = (
+        AdmissionLane(admission_lane)
+        if requires_provider_admission
+        else None
+    )
+    provider_admission_policy_digest = (
+        services.provider_admission.policy.policy_digest
+        if requires_provider_admission
+        and services.provider_admission is not None
+        else None
+    )
     reference = services.authorities.issue(
         source_kind="cli_opt_in",
         source_id=f"{provider_id}:{task.task_id}:{run_id}",
@@ -1212,6 +1285,24 @@ def _invoke(
                 (provider_tier_binding_digest,)
                 if provider_tier_binding_digest is not None
                 else ()
+            ),
+            project_binding_digests=(
+                (project_binding.binding_digest,)
+                if project_binding is not None
+                else ()
+            ),
+            admission_lanes=(
+                (selected_lane.value,)
+                if selected_lane is not None
+                else ()
+            ),
+            provider_admission_policy_digests=(
+                (provider_admission_policy_digest,)
+                if provider_admission_policy_digest is not None
+                else ()
+            ),
+            scope_contract_version=(
+                3 if requires_provider_admission else 2
             ),
         ),
         expires_at=(now + timedelta(minutes=10)).isoformat(),
@@ -1233,6 +1324,17 @@ def _invoke(
                 else None
             ),
             provider_tier_binding_digest=provider_tier_binding_digest,
+            project_binding_digest=(
+                project_binding.binding_digest
+                if project_binding is not None
+                else None
+            ),
+            admission_lane=(
+                selected_lane.value if selected_lane is not None else None
+            ),
+            provider_admission_policy_digest=(
+                provider_admission_policy_digest
+            ),
         ),
         model_token_policy_digest=(
             model_token_policy.policy_digest
@@ -1241,12 +1343,43 @@ def _invoke(
         ),
         member_digest=member_digest,
         provider_tier_binding_digest=provider_tier_binding_digest,
+        project_binding_digest=(
+            project_binding.binding_digest
+            if project_binding is not None
+            else None
+        ),
+        admission_lane=(
+            selected_lane.value if selected_lane is not None else None
+        ),
+        provider_admission_policy_digest=provider_admission_policy_digest,
     )
-    result = MacrRuntime(registry, services).invoke(
-        provider_id,
-        task,
-        context,
-    )
+    try:
+        result = MacrRuntime(registry, services).invoke(
+            provider_id,
+            task,
+            context,
+        )
+    except (
+        ProviderAdmissionBusyError,
+        ProviderAdmissionReconciliationError,
+    ) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": (
+                        "provider_admission_busy"
+                        if isinstance(exc, ProviderAdmissionBusyError)
+                        else "provider_admission_reconciliation_required"
+                    ),
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "provider_generation": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 6
     print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
     return 0 if result.status is ResultStatus.CANDIDATE_SUCCESS else 4
 
@@ -1333,6 +1466,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--expires-in-minutes",
         type=int,
         default=30,
+    )
+    t1_stage.add_argument(
+        "--project-id",
+        default="operator-default",
+        help="operator-bound provider admission project ID",
+    )
+    t1_stage.add_argument(
+        "--admission-lane",
+        choices=tuple(item.value for item in AdmissionLane),
+        default=AdmissionLane.BULK.value,
+        help="operator-bound provider admission lane for the staged batch",
     )
 
     t1_worker = sub.add_parser(
@@ -1453,6 +1597,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="explicitly authorize this command to load and call a loopback provider",
     )
+    invoke.add_argument(
+        "--project-id",
+        default="operator-default",
+        help="operator-bound provider admission project ID",
+    )
+    invoke.add_argument(
+        "--admission-lane",
+        choices=tuple(item.value for item in AdmissionLane),
+        default=AdmissionLane.ROUTINE.value,
+        help="operator-bound provider admission lane",
+    )
 
     direct = sub.add_parser(
         "direct-chat",
@@ -1507,6 +1662,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.config,
             dispatcher_ids=args.dispatcher_ids,
             expires_in_minutes=args.expires_in_minutes,
+            project_id=args.project_id,
+            admission_lane=args.admission_lane,
         )
     if args.command == "t1-worker":
         return _t1_worker(
@@ -1569,6 +1726,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.config,
             args.allow_network,
             args.allow_local,
+            args.project_id,
+            args.admission_lane,
         )
     if args.command == "direct-chat":
         from .direct_launcher import run_direct_chat, smoke_direct_chat

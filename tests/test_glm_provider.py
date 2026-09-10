@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import unittest
+import uuid
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -26,9 +28,17 @@ from macr_runtime.errors import (
     ProviderPolicyError,
     ProviderUnavailableError,
 )
+from macr_runtime.execution import AuthorizationReference
+from macr_runtime.provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+    ProviderAdmissionPermit,
+    ProviderAdmissionRequest,
+    glm_provider_admission_policy,
+)
 from macr_runtime.providers.glm import (
     GlmFixedKeySource,
-    GlmFlashWorkerProvider as _GlmFlashWorkerProvider,
+    GlmFlashWorkerProvider as _RawGlmFlashWorkerProvider,
 )
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.provider_capability import (
@@ -36,6 +46,7 @@ from macr_runtime.provider_capability import (
     glm_standard_policy,
 )
 from macr_runtime.token_policy import ModelTokenPolicyResolver, t1_glm_live_policy
+from macr_runtime.runtime import task_contract_digest
 from tests.support import d_drive_tempdir
 
 
@@ -89,6 +100,102 @@ class StaticKeySource:
 
     def check_metadata(self):
         return None
+
+
+class _UnitAdmissionGuard:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def begin_transport(self, permit, request) -> None:
+        if not isinstance(permit, ProviderAdmissionPermit):
+            raise AssertionError("unit permit is invalid")
+        if not isinstance(request, ProviderAdmissionRequest):
+            raise AssertionError("unit request is invalid")
+        self.calls += 1
+
+
+class _UnitAdmittedProvider:
+    def __init__(self, provider: _RawGlmFlashWorkerProvider) -> None:
+        self._provider = provider
+
+    def __getattr__(self, name):
+        return getattr(self._provider, name)
+
+    def _admission(self, task: TaskContract):
+        now = datetime.now(timezone.utc)
+        run_id = str(uuid.uuid4())
+        request_id = str(uuid.uuid4())
+        project = ProjectAdmissionBinding(
+            "unit-test",
+            1,
+            "test_harness",
+        )
+        authorization = AuthorizationReference(
+            source_kind="test_harness",
+            source_id=request_id,
+            digest="d" * 64,
+            revision=1,
+            epoch=0,
+            scope="{}",
+        )
+        policy = glm_provider_admission_policy()
+        request = ProviderAdmissionRequest(
+            request_id=request_id,
+            provider_id=self._provider.provider_id,
+            project_binding_digest=project.binding_digest,
+            lane=AdmissionLane.ROUTINE,
+            run_id=run_id,
+            authorization=authorization,
+            plane="delegation",
+            task_type=task.task_type,
+            task_digest=task_contract_digest(task),
+            member_digest=task.delegation_approval_sha256,
+            batch_id=None,
+            provider_tier_binding_digest=(
+                self._provider.capability_binding.binding_digest
+            ),
+        )
+        permit = ProviderAdmissionPermit(
+            request_id=request_id,
+            provider_id=self._provider.provider_id,
+            project_binding_digest=project.binding_digest,
+            admission_lane=AdmissionLane.ROUTINE.value,
+            run_id=run_id,
+            authority_digest=authorization.digest,
+            authority_epoch=authorization.epoch,
+            task_digest=request.task_digest,
+            member_digest=request.member_digest,
+            provider_tier_binding_digest=(
+                request.provider_tier_binding_digest
+            ),
+            policy_digest=policy.policy_digest,
+            capacity_unit=1,
+            fencing_token=1,
+            acquired_at=now.isoformat(),
+            expires_at=(now + timedelta(minutes=10)).isoformat(),
+        )
+        return permit, request
+
+    def invoke(self, task: TaskContract):
+        permit, request = self._admission(task)
+        return self._provider.invoke(
+            task,
+            admission_permit=permit,
+            admission_request=request,
+        )
+
+    def invoke_observed(self, task: TaskContract):
+        permit, request = self._admission(task)
+        return self._provider.invoke_observed(
+            task,
+            admission_permit=permit,
+            admission_request=request,
+        )
+
+
+def _GlmFlashWorkerProvider(*args, **kwargs):
+    kwargs.setdefault("admission_guard", _UnitAdmissionGuard())
+    return _UnitAdmittedProvider(_RawGlmFlashWorkerProvider(*args, **kwargs))
 
 
 def GlmFlashWorkerProvider(*args, **kwargs):

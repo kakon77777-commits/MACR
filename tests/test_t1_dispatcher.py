@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import unittest
+import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
 from datetime import timedelta
 
 from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.event_store import SqliteEventStore
-from macr_runtime.errors import DispatchAuthorizationError
+from macr_runtime.errors import (
+    DispatchAuthorizationError,
+    ProviderAdmissionBusyError,
+)
 from macr_runtime.execution import DispatchOrigin, InteractionPlane
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.provider_capability import (
@@ -18,7 +22,13 @@ from macr_runtime.provider_capability_store import (
     ProviderCapabilityGovernance,
     ProviderCapabilityPolicyStore,
 )
+from macr_runtime.provider_admission import (
+    AdmissionLane,
+    ProviderAdmissionKernel,
+    ProviderAdmissionRequest,
+)
 from macr_runtime.registry import ProviderRegistry
+from macr_runtime.runtime import task_contract_digest
 from macr_runtime.scheduler import PlanQueue, QueueMemberState
 from macr_runtime.t1_dispatcher import T1DispatchError, T1Dispatcher
 from macr_runtime.t1_manifest import T1ExecutionManifest, T1ExecutionMember
@@ -33,6 +43,17 @@ from tests.test_glm_provider import (
 )
 from tests.test_scheduler import Clock
 from tests.test_t1_manifest import manifest as unapproved_manifest
+
+
+def t1_services(state_root, clock):
+    services = build_test_services(state_root)
+    return replace(
+        services,
+        provider_admission=ProviderAdmissionKernel(
+            services.events.path,
+            now=clock,
+        ),
+    )
 
 
 def approved_manifest(
@@ -123,11 +144,77 @@ class FailingFinishEventStore(SqliteEventStore):
 
 
 class T1DispatcherTests(unittest.TestCase):
+    def test_provider_busy_leaves_t1_member_queued_without_attempt(self) -> None:
+        now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
+            transport = FakeTransport(success_document())
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=transport,
+                environ={"MACR_STATE_ROOT": str(state_root)},
+                key_source=StaticKeySource(),
+                approval_store=AllowingApprovalStore(),
+                token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
+            )
+            dispatcher = T1Dispatcher(
+                ProviderRegistry((provider,)),
+                services,
+                now=clock,
+            )
+            subject = approved_manifest(provider)
+            bundle = dispatcher.stage(
+                subject,
+                subject.authorized_dispatchers,
+                subject.expires_at,
+            )
+            member = subject.members[0]
+            held_request = ProviderAdmissionRequest(
+                request_id=str(uuid.uuid4()),
+                provider_id=provider.provider_id,
+                project_binding_digest=bundle.project_binding_digest,
+                lane=AdmissionLane(bundle.admission_lane),
+                run_id=str(uuid.uuid4()),
+                authorization=bundle.dispatch_authority,
+                plane=InteractionPlane.DELEGATION.value,
+                task_type=member.task.task_type,
+                task_digest=task_contract_digest(member.task),
+                member_digest=member.member_digest,
+                batch_id=subject.manifest_digest,
+                provider_tier_binding_digest=(
+                    member.provider_tier_binding_digest
+                ),
+            )
+            held = services.provider_admission.try_admit(
+                held_request,
+                ttl_seconds=60,
+            )
+
+            with self.assertRaises(ProviderAdmissionBusyError):
+                dispatcher.run_one(
+                    subject,
+                    bundle,
+                    subject.authorized_dispatchers[0],
+                    DispatchOrigin("test", "process_id", "1234"),
+                    allow_network=True,
+                    allow_local=False,
+                )
+            records = dispatcher.queue.list_members(subject.plan_digest)
+            services.provider_admission.cancel_before_transport(held)
+
+        self.assertEqual(
+            [(item.state.value, item.attempts) for item in records],
+            [("queued", 0)] * len(subject.members),
+        )
+        self.assertEqual(transport.posts, [])
+
     def test_stage_rechecks_active_head_after_registry_construction(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
-            services = build_test_services(state_root)
+            services = t1_services(state_root, clock)
             store = ProviderCapabilityPolicyStore(
                 state_root / "settings" / "provider-capability-policies.sqlite3"
             )
@@ -161,6 +248,7 @@ class T1DispatcherTests(unittest.TestCase):
                         approval_store=AllowingApprovalStore(),
                         token_policy=t1_glm_live_policy(),
                         capability_policy=policy,
+                        admission_guard=services.provider_admission,
                     )
                     subject = approved_manifest(provider)
             dispatcher = T1Dispatcher(
@@ -193,6 +281,7 @@ class T1DispatcherTests(unittest.TestCase):
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
             provider = GlmFlashWorkerProvider(
                 glm_config(),
                 transport=FakeTransport(success_document()),
@@ -200,8 +289,8 @@ class T1DispatcherTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 approval_store=AllowingApprovalStore(),
                 token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
             )
-            services = build_test_services(state_root)
             dispatcher = T1Dispatcher(
                 ProviderRegistry((provider,)),
                 services,
@@ -259,6 +348,7 @@ class T1DispatcherTests(unittest.TestCase):
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
             transport = FakeTransport(success_document())
             provider = GlmFlashWorkerProvider(
                 glm_config(),
@@ -267,8 +357,8 @@ class T1DispatcherTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 approval_store=AllowingApprovalStore(),
                 token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
             )
-            services = build_test_services(state_root)
             dispatcher = T1Dispatcher(
                 ProviderRegistry((provider,)),
                 services,
@@ -342,6 +432,7 @@ class T1DispatcherTests(unittest.TestCase):
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
             transport = FakeTransport(success_document())
             provider = GlmFlashWorkerProvider(
                 glm_config(),
@@ -350,8 +441,8 @@ class T1DispatcherTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 approval_store=AllowingApprovalStore(),
                 token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
             )
-            services = build_test_services(state_root)
             dispatcher = T1Dispatcher(
                 ProviderRegistry((provider,)),
                 services,
@@ -392,6 +483,7 @@ class T1DispatcherTests(unittest.TestCase):
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
             transport = FakeTransport(success_document())
             provider = GlmFlashWorkerProvider(
                 glm_config(),
@@ -400,8 +492,8 @@ class T1DispatcherTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 approval_store=AllowingApprovalStore(),
                 token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
             )
-            services = build_test_services(state_root)
             services = replace(
                 services,
                 events=FailingFinishEventStore(services.events.path),
@@ -441,6 +533,42 @@ class T1DispatcherTests(unittest.TestCase):
                 terminal_state=QueueMemberState.FAILED,
                 reconciliation_evidence_digest="e" * 64,
                 observed_cost_usd=result.observed_cost_usd or 0.0,
+            )
+            connection = services.events.database.connect()
+            try:
+                admission_request_id = connection.execute(
+                    """SELECT request_id FROM provider_admission_requests
+                    WHERE run_id=?""",
+                    (result.run_id,),
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            admission_reference = dispatcher.dispatch_authorities.issue(
+                source_kind="operator_admission_reconciliation",
+                source_id=result.run_id,
+                scope=AuthorityScope(
+                    providers=(provider.provider_id,),
+                    planes=("provider_admission_reconciliation",),
+                    task_types=("provider_admission_resolution",),
+                    member_digests=(result.member_digest,),
+                    provider_tier_binding_digests=(
+                        provider.capability_binding.binding_digest,
+                    ),
+                    project_binding_digests=(
+                        bundle.project_binding_digest,
+                    ),
+                    admission_lanes=(bundle.admission_lane,),
+                    provider_admission_policy_digests=(
+                        bundle.provider_admission_policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=5)).isoformat(),
+            )
+            services.provider_admission.resolve_reconciliation(
+                admission_request_id,
+                admission_reference,
+                resolution_evidence_digest="f" * 64,
             )
             with self.assertRaisesRegex(DispatchAuthorizationError, "revoked"):
                 dispatcher.run_one(
@@ -486,6 +614,7 @@ class T1DispatcherTests(unittest.TestCase):
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
             provider = GlmFlashWorkerProvider(
                 glm_config(),
                 transport=FakeTransport(success_document()),
@@ -493,8 +622,8 @@ class T1DispatcherTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 approval_store=AllowingApprovalStore(),
                 token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
             )
-            services = build_test_services(state_root)
             dispatcher = T1Dispatcher(
                 ProviderRegistry((provider,)),
                 services,
@@ -553,6 +682,7 @@ class T1DispatcherTests(unittest.TestCase):
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
             transport = FakeTransport(success_document())
             provider = GlmFlashWorkerProvider(
                 glm_config(),
@@ -561,8 +691,8 @@ class T1DispatcherTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 approval_store=AllowingApprovalStore(),
                 token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
             )
-            services = build_test_services(state_root)
             dispatcher = T1Dispatcher(
                 ProviderRegistry((provider,)),
                 services,
@@ -600,6 +730,11 @@ class T1DispatcherTests(unittest.TestCase):
                     provider_tier_binding_digest=(
                         item.provider_tier_binding_digest
                     ),
+                    project_binding_digest=bundle.project_binding_digest,
+                    admission_lane=bundle.admission_lane,
+                    provider_admission_policy_digest=(
+                        bundle.provider_admission_policy_digest
+                    ),
                 )
             self.assertEqual(transport.posts, [])
 
@@ -607,6 +742,7 @@ class T1DispatcherTests(unittest.TestCase):
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
             provider = GlmFlashWorkerProvider(
                 glm_config(),
                 transport=FakeTransport(success_document()),
@@ -614,8 +750,8 @@ class T1DispatcherTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 approval_store=AllowingApprovalStore(),
                 token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
             )
-            services = build_test_services(state_root)
             dispatcher = T1Dispatcher(
                 ProviderRegistry((provider,)),
                 services,

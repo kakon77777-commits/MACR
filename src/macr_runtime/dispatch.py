@@ -267,6 +267,11 @@ class AdmissionGate:
             "provider_tier_binding_digest": (
                 context.provider_tier_binding_digest
             ),
+            "project_binding_digest": context.project_binding_digest,
+            "admission_lane": context.admission_lane,
+            "provider_admission_policy_digest": (
+                context.provider_admission_policy_digest
+            ),
         }
         self.authorities.verify(context.authorization, **verification)
         permit = self.leases.acquire(

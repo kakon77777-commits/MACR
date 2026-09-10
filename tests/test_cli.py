@@ -260,6 +260,7 @@ class DoctorTests(unittest.TestCase):
                 services = RuntimeServices.from_layout(
                     StorageLayout.from_environment()
                 )
+                provider.admission_guard = services.provider_admission
                 with contextlib.redirect_stdout(worker_output):
                     worker_status = _t1_worker(
                         str(manifest_path),

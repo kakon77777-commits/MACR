@@ -292,7 +292,7 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
         return ProviderAdmissionRequest(
             request_id=request_id or str(uuid.uuid4()),
             provider_id="glm_flash_worker",
-            project=project,
+            project_binding_digest=project.binding_digest,
             lane=lane,
             run_id=run_id or str(uuid.uuid4()),
             authorization=authority,
