@@ -36,8 +36,8 @@ not consumed and Agent Phase D was not started.
 - A pre-dispatch runtime refusal cancels its unused provider grant. A T1 member
   is atomically returned to `queued/attempts=0` rather than being burned.
 - Production/default GLM transport is bound to the operator-selected canonical
-  runtime path and its persisted deployment digest. Alternate temp databases
-  are explicit `offline_test` capabilities and cannot be reopened as canonical.
+  runtime path and its persisted deployment digest. Databases initialized as
+  `offline_test` cannot be reopened as canonical.
 - A main-derived schema-7 fixture is replayed additively. Legacy nonterminal
   runs or active dispatch leases block admission genesis until external
   quiescence is established.

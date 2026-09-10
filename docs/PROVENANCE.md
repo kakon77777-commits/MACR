@@ -597,8 +597,8 @@ and simultaneous primary/cleanup failures. This concurrence is limited to the
 offline slice and trusts operator custody of `MACR_STATE_ROOT`; it is not
 OS-level deployment attestation.
 
-The shared runtime remained schema 7. No key read, provider call, paid/local
-generation, shared-state migration, target-2 activation, merge, tag, push,
-release, deployment, or adoption occurred. Exact evidence and retained limits
-are recorded in
+The shared runtime remained schema 7. No production credential read or real
+provider/network call, paid/local generation, shared-state migration, target-2
+activation, merge, tag, push, release, deployment, or adoption occurred. Exact
+evidence and retained limits are recorded in
 `docs/checkpoints/MACR-v0.7.0a0-provider-admission-kernel-2026-09-10.md`.
