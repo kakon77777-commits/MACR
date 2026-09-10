@@ -565,3 +565,40 @@ the tier check and reports required approval digest
 no approval or provider call was performed. Exact backup hashes, table counts,
 authority provenance, falsifying readback and recovery boundary are recorded
 in `docs/checkpoints/MACR-v0.7.0a0-glm-extended-tier-activation-2026-09-09.md`.
+
+## v0.7.0a0 Provider Admission Kernel offline candidate
+
+On 2026-09-10 the provider-capacity work was implemented on the isolated
+`feature/v070a1-provider-admission-kernel` branch without consuming the
+reserved `0.7.0a1` Agent version. The exact reviewed implementation subject is
+commit `7a395e0654e1d0381ac47da7b34f6ca5e60fef9d` / tree
+`ccafa43033eed24c6b645f9a84141c0ba1b60784`.
+
+The kernel starts GLM at effective target 1, records target 2 as the only
+bounded candidate, retains hard ceiling 8, and separates operator-selected T1
+demand from provider capacity. It adds exact project/lane/authority binding,
+cross-process admission, append-only target/circuit receipts, one-request
+half-open authority, final-lock expiry/circuit/authority revalidation,
+pre-dispatch T1 requeue, canonical deployment identity, and quiescent
+schema-7-to-8 bootstrap.
+
+The exact implementation subject passed 880 repository tests with two existing
+platform skips. `verify-v06.ps1` passed the same 880 inherited tests plus 198
+focused tests with summary digest
+`7cb3f1ed3af759d14e7b5e54354441bdd4db09912b8c356b760712c8ee3ce003`.
+The Phase-C gate passed 98 focused tests and produced wheel SHA
+`1b011b4e87998b109f4b8da1b5ae334f2d048ecdff57afb1d3f96653955f0743`.
+Both gates reported network/provider false and Phase D remained false.
+
+The governing Twin independently returned Behavioral/Structural/
+Discriminative `PASS` after 105 focused tests and direct negative probes for an
+expired grant, a 429-superseded sibling grant, an alternate concrete kernel,
+and simultaneous primary/cleanup failures. This concurrence is limited to the
+offline slice and trusts operator custody of `MACR_STATE_ROOT`; it is not
+OS-level deployment attestation.
+
+The shared runtime remained schema 7. No key read, provider call, paid/local
+generation, shared-state migration, target-2 activation, merge, tag, push,
+release, deployment, or adoption occurred. Exact evidence and retained limits
+are recorded in
+`docs/checkpoints/MACR-v0.7.0a0-provider-admission-kernel-2026-09-10.md`.

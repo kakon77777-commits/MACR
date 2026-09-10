@@ -1,6 +1,6 @@
 # MACR v0.7.0a0 Provider Admission Kernel Implementation Plan
 
-Status: implementation candidate; final exact-head gates and Twin closure pending
+Status: offline implementation complete; merge and live activation remain separate
 
 Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel-design.md`
 
