@@ -99,6 +99,9 @@ crashed transport becomes durable provider reconciliation and is never freed
 by TTL alone. Governed target/circuit transitions form an append-only digest
 chain matched to the active projection. Half-open consumes one exact authority
 and only its bound request digest may probe; pre-network failure reopens it.
+The deployment digest distinguishes the canonical operator runtime from
+offline-test databases, and final transport admission rechecks expiry, circuit
+and authority under one SQLite write lock.
 This gate is separate from Phase D observation and Phase E semantic action
 admission.
 

@@ -76,7 +76,7 @@ class RuntimeServices:
             capability_policies=ProviderCapabilityPolicyStore(
                 layout.provider_capability_policy_db_path
             ),
-            provider_admission=ProviderAdmissionKernel(
+            provider_admission=ProviderAdmissionKernel.canonical_runtime(
                 layout.runtime_db_path
             ),
         )
@@ -167,6 +167,15 @@ def _admission_failure(
     task: TaskContract,
     exc: MacrError,
 ) -> ProviderResult:
+    diagnostic_method = getattr(exc, "safe_diagnostic", None)
+    raw_diagnostic = (
+        diagnostic_method() if callable(diagnostic_method) else {}
+    )
+    diagnostic = (
+        dict(raw_diagnostic)
+        if isinstance(raw_diagnostic, Mapping)
+        else {}
+    )
     return ProviderResult(
         task_id=task.task_id,
         status=ResultStatus.CANDIDATE_FAILURE,
@@ -177,6 +186,7 @@ def _admission_failure(
             "provider": provider_id,
             "failure_type": type(exc).__name__,
             "failure_stage": "admission",
+            **diagnostic,
         },
     )
 
@@ -340,29 +350,45 @@ class MacrRuntime:
         provider_admission_request: ProviderAdmissionRequest | None = None,
     ) -> ProviderResult:
         try:
-            return self._invoke_owned(
+            result = self._invoke_owned(
                 provider_id,
                 task,
                 context,
                 provider_admission_permit=provider_admission_permit,
                 provider_admission_request=provider_admission_request,
             )
-        finally:
-            # T1 can reserve provider capacity before it claims a queue member.
-            # Any refusal above the dispatch lease boundary must therefore give
-            # the still-unused grant back.  The inner lifecycle owns grants once
-            # transport starts; this outer guard exists specifically so early
-            # validation returns and exceptions cannot strand capacity.
-            if provider_admission_permit is not None:
-                admission = self.services.provider_admission
-                if admission is not None:
-                    record = admission.read_request(
-                        provider_admission_permit.request_id
-                    )
-                    if record.state == "granted":
-                        admission.cancel_before_transport(
-                            provider_admission_permit
-                        )
+        except Exception as primary_error:
+            try:
+                self._cleanup_unused_pregrant(provider_admission_permit)
+            except Exception as cleanup_error:
+                primary_error.add_note(
+                    "provider admission cleanup also failed: "
+                    f"{type(cleanup_error).__name__}"
+                )
+                raise primary_error from cleanup_error
+            raise
+        self._cleanup_unused_pregrant(provider_admission_permit)
+        return result
+
+    def _cleanup_unused_pregrant(
+        self,
+        permit: ProviderAdmissionPermit | None,
+    ) -> None:
+        # T1 can reserve provider capacity before it claims a queue member.
+        # Any refusal above the dispatch lease boundary must therefore give the
+        # still-unused grant back.  The inner lifecycle owns grants once
+        # transport starts; this outer guard exists specifically so early
+        # validation returns and exceptions cannot strand capacity.
+        if permit is None:
+            return
+        admission = self.services.provider_admission
+        if admission is None:
+            raise ProviderAdmissionRequiredError(
+                "pre-granted provider admission has no shared kernel"
+            )
+        record = admission.read_request(permit.request_id)
+        if record.state == "granted":
+            admission.cancel_before_transport(permit)
 
     def _invoke_owned(
         self,
@@ -480,6 +506,24 @@ class MacrRuntime:
                     "provider admission identity or policy is missing"
                 ),
             )
+        if requires_provider_admission:
+            validate_transport_binding = getattr(
+                provider,
+                "validate_admission_transport_binding",
+                None,
+            )
+            if not callable(validate_transport_binding):
+                return _admission_failure(
+                    provider_id,
+                    task,
+                    ProviderAdmissionRequiredError(
+                        "provider has no admission transport binding"
+                    ),
+                )
+            try:
+                validate_transport_binding()
+            except MacrError as exc:
+                return _admission_failure(provider_id, task, exc)
         if (provider_admission_permit is None) != (
             provider_admission_request is None
         ):
@@ -636,18 +680,34 @@ class MacrRuntime:
             )
             if provider_permit is not None:
                 assert provider_admission is not None
-                provider_admission.finish(
-                    provider_permit,
-                    network_attempted=execution.observation.network_attempted,
-                    response_received=execution.observation.response_received,
-                    provider_http_status=(
-                        execution.observation.provider_http_status
-                    ),
-                    terminal_persisted=True,
-                    terminal_evidence_digest=hashlib.sha256(
-                        _canonical_json(terminal_payload).encode("utf-8")
-                    ).hexdigest(),
+                admission_record = provider_admission.read_request(
+                    provider_permit.request_id
                 )
+                if admission_record.state == "dispatched":
+                    provider_admission.finish(
+                        provider_permit,
+                        network_attempted=(
+                            execution.observation.network_attempted
+                        ),
+                        response_received=(
+                            execution.observation.response_received
+                        ),
+                        provider_http_status=(
+                            execution.observation.provider_http_status
+                        ),
+                        terminal_persisted=True,
+                        terminal_evidence_digest=hashlib.sha256(
+                            _canonical_json(terminal_payload).encode("utf-8")
+                        ).hexdigest(),
+                    )
+                elif not (
+                    admission_record.state
+                    in {"cancelled", "reconciliation_required"}
+                    and execution.observation.network_attempted is False
+                ):
+                    raise ProviderAdmissionConflict(
+                        "provider admission terminal state is inconsistent"
+                    )
                 provider_admission_finished = True
             return execution.result
         finally:

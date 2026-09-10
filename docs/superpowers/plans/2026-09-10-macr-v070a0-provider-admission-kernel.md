@@ -31,6 +31,8 @@ Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel
 - Make `MacrRuntime` return/raise typed nonterminal BUSY before provider work.
 - Require GLM adapter permit validation immediately before key/transport.
 - Reject duck-typed admission shims and providers bound to another kernel.
+- Bind production transport to the operator-selected canonical runtime;
+  temp-path kernels are explicit offline-only capabilities.
 - RED/GREEN: ordinary invoke and direct-adapter bypass, key/transport sentinels,
   terminal/reconciliation lifecycle, non-GLM compatibility.
 
@@ -51,6 +53,8 @@ Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel
 - Add explicit governed reconciliation/target-transition APIs; do not add a
   self-authorizing capacity CLI.
 - Bind one-use half-open authority to one exact probe request digest.
+- Revalidate expiry, circuit and dispatch authority under the final transport
+  write lock; require a quiescent legacy runtime before schema-8 genesis.
 - Update PowerShell wrappers with project/lane and bounded wait options while
   keeping provider calls opt-in.
 - RED/GREEN: privacy sentinels, absent-store read, exact resolution authority,

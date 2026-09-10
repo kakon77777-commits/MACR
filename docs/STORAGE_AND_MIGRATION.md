@@ -92,7 +92,10 @@ transports in explicit reconciliation. Existing batch-authority bodies,
 digest-only target claims, events, runs and fenced target-path leases remain
 intact. Migration coverage loads an independently captured complete schema-7
 fixture from `main@f806fdb` before applying schema 8; it does not synthesize an
-8→7 downgrade. The separate future `runtime\agent.sqlite3` remains the Agent lifecycle
+8→7 downgrade. Genesis is refused while any legacy run is nonterminal or any
+dispatch lease remains active; migration therefore does not infer external
+quiescence from a successful schema rewrite. The separate future
+`runtime\agent.sqlite3` remains the Agent lifecycle
 and semantic database; provider admission does not begin Phase D. Raw task
 bodies, answers and target paths remain absent from runtime/accounting
 databases.

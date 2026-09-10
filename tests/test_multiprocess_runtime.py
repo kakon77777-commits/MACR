@@ -270,6 +270,7 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 token_policy=t1_glm_live_policy(),
                 admission_guard=services.provider_admission,
+                offline_test_transport=True,
             )
             subject = approved_manifest(
                 provider,
@@ -313,7 +314,12 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                         str(temp / f"t1-ready-{index}"),
                         dispatcher_id,
                     ],
-                    env={**os.environ, "PYTHONPATH": str(ROOT / "src")},
+                    env={
+                        **os.environ,
+                        "PYTHONPATH": os.pathsep.join(
+                            (str(ROOT / "src"), str(ROOT))
+                        ),
+                    },
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -329,7 +335,18 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                     and time.monotonic() < deadline
                 ):
                     time.sleep(0.005)
-                self.assertEqual(len(tuple(temp.glob("t1-ready-*"))), 5)
+                ready_count = len(tuple(temp.glob("t1-ready-*")))
+                if ready_count != 5:
+                    diagnostics = [
+                        process.communicate(timeout=5)
+                        if process.poll() is not None
+                        else ("", "worker still running without ready signal")
+                        for process in processes
+                    ]
+                    self.fail(
+                        f"expected 5 ready workers, got {ready_count}: "
+                        f"{diagnostics!r}"
+                    )
                 start_signal.touch()
                 deadline = time.monotonic() + 30
                 while (

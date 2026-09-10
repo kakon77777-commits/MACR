@@ -68,6 +68,7 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
                 key_source=key_source,
                 approval_store=RejectingMacApprovalStore(),
                 admission_guard=kernel,
+                offline_test_transport=True,
             )
             task = delegated_task()
             project = ProjectAdmissionBinding(
@@ -147,6 +148,7 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
             key_source=key_source,
             approval_store=AllowingApprovalStore(),
             admission_guard=kernel,
+            offline_test_transport=True,
         )
 
     def test_runtime_success_uses_one_permit_and_persists_admission_identity(self) -> None:
@@ -453,6 +455,130 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
             ).invoke(provider.provider_id, task, context)
 
         self.assertEqual(result.failure_stage, "admission")
+        self.assertEqual(key_source.calls, 0)
+        self.assertEqual(transport.posts, [])
+
+    def test_direct_adapter_rejects_alternate_concrete_runtime(self) -> None:
+        with d_drive_tempdir() as temp:
+            alternate = ProviderAdmissionKernel(
+                temp / "alternate" / "runtime" / "dispatch.sqlite3"
+            )
+            transport = FakeTransport(success_document())
+            key_source = CountingKeySource()
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=transport,
+                environ={
+                    "MACR_STATE_ROOT": str(temp / "canonical-state"),
+                },
+                key_source=key_source,
+                approval_store=AllowingApprovalStore(),
+                admission_guard=alternate,
+            )
+            task = delegated_task()
+            project = ProjectAdmissionBinding(
+                "project-a",
+                1,
+                "operator_asserted",
+            )
+            run_id = str(uuid.uuid4())
+            reference = alternate.authorities.issue(
+                source_kind="operator_test",
+                source_id="redirected-concrete-kernel",
+                scope=AuthorityScope(
+                    providers=(provider.provider_id,),
+                    planes=(InteractionPlane.DELEGATION.value,),
+                    task_types=(task.task_type,),
+                    member_digests=(task.delegation_approval_sha256,),
+                    provider_tier_binding_digests=(
+                        provider.capability_binding.binding_digest,
+                    ),
+                    project_binding_digests=(project.binding_digest,),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(
+                        alternate.policy.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=10)
+                ).isoformat(),
+            )
+            request = ProviderAdmissionRequest(
+                request_id=str(uuid.uuid4()),
+                provider_id=provider.provider_id,
+                project_binding_digest=project.binding_digest,
+                lane=AdmissionLane.ROUTINE,
+                run_id=run_id,
+                authorization=reference,
+                plane=InteractionPlane.DELEGATION.value,
+                task_type=task.task_type,
+                task_digest=task_contract_digest(task),
+                member_digest=task.delegation_approval_sha256,
+                batch_id=None,
+                provider_tier_binding_digest=(
+                    provider.capability_binding.binding_digest
+                ),
+            )
+            permit = alternate.try_admit(request, ttl_seconds=60)
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionRequiredError,
+                "canonical runtime",
+            ):
+                provider.invoke(
+                    task,
+                    admission_permit=permit,
+                    admission_request=request,
+                )
+            alternate.cancel_before_transport(permit)
+
+        self.assertEqual(key_source.calls, 0)
+        self.assertEqual(transport.posts, [])
+
+    def test_transport_binding_refusal_is_known_pre_network(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            kernel = ProviderAdmissionKernel(services.events.path)
+            services = replace(services, provider_admission=kernel)
+            transport = FakeTransport(success_document())
+            key_source = CountingKeySource()
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=transport,
+                environ={
+                    "MACR_STATE_ROOT": str(temp / "canonical-state"),
+                },
+                key_source=key_source,
+                approval_store=AllowingApprovalStore(),
+                admission_guard=kernel,
+            )
+            task = delegated_task()
+            project = ProjectAdmissionBinding(
+                "project-a",
+                1,
+                "operator_asserted",
+            )
+            context, _ = self._context_and_reference(
+                services,
+                task,
+                project,
+                AdmissionLane.ROUTINE,
+            )
+
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+            accounting = services.accounting.read_invocation(context.run_id)
+            status = kernel.status(provider.provider_id)
+
+        self.assertEqual(result.failure_code, "ProviderAdmissionRequiredError")
+        self.assertEqual(result.failure_stage, "admission")
+        self.assertFalse(result.provider_meta["network_attempted"])
+        self.assertIsNone(accounting)
+        self.assertEqual(status.counts["completed"], 0)
+        self.assertEqual(status.counts["reconciliation_required"], 0)
         self.assertEqual(key_source.calls, 0)
         self.assertEqual(transport.posts, [])
 

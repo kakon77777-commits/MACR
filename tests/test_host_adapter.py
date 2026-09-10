@@ -158,6 +158,7 @@ class HostAdapterTests(unittest.TestCase):
                 key_source=CountingKeySource(),
                 approval_store=AllowingApprovalStore(),
                 admission_guard=kernel,
+                offline_test_transport=True,
             )
             tier = provider.capability_binding.binding_digest
             policy = glm_provider_admission_policy()

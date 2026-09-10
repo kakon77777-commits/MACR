@@ -15,9 +15,11 @@ from typing import Any, Mapping
 from .authority import DispatchAuthorityStore
 from .canonical import canonical_json_bytes, sha256_id
 from .errors import (
+    DispatchAuthorizationError,
     ProviderAdmissionBusyError,
     ProviderAdmissionConflict,
     ProviderAdmissionReconciliationError,
+    ProviderAdmissionRequiredError,
 )
 from .execution import AuthorizationReference
 from .runtime_db import RuntimeDatabase
@@ -94,6 +96,9 @@ def _aware(value: str) -> datetime:
 def _validated_control_state(
     connection: sqlite3.Connection,
     policy: "ProviderAdmissionPolicy",
+    *,
+    deployment_mode: str | None = None,
+    deployment_digest: str | None = None,
 ) -> sqlite3.Row:
     """Verify the active projection against its immutable latest receipt."""
 
@@ -104,6 +109,17 @@ def _validated_control_state(
     if (
         state is None
         or state["policy_digest"] != policy.policy_digest
+        or state["deployment_mode"]
+        not in {"canonical_runtime", "offline_test"}
+        or not _SHA256.fullmatch(state["deployment_digest"] or "")
+        or (
+            deployment_mode is not None
+            and state["deployment_mode"] != deployment_mode
+        )
+        or (
+            deployment_digest is not None
+            and state["deployment_digest"] != deployment_digest
+        )
         or not 1 <= state["effective_target"] <= policy.candidate_target
         or state["control_revision"] < 1
         or not _SHA256.fullmatch(state["control_digest"] or "")
@@ -154,6 +170,8 @@ def _validated_control_state(
         "schema": "provider_admission_control_transition_v1",
         "provider_id": policy.provider_id,
         "policy_digest": policy.policy_digest,
+        "deployment_mode": state["deployment_mode"],
+        "deployment_digest": state["deployment_digest"],
         "control_revision": state["control_revision"],
         "prior_control_digest": transition["prior_control_digest"],
         "transition_kind": transition["transition_kind"],
@@ -195,6 +213,11 @@ class AdmissionLane(str, Enum):
     INTERACTIVE = "interactive"
     ROUTINE = "routine"
     BULK = "bulk"
+
+
+class AdmissionDeploymentMode(str, Enum):
+    CANONICAL_RUNTIME = "canonical_runtime"
+    OFFLINE_TEST = "offline_test"
 
 
 @dataclass(frozen=True)
@@ -655,6 +678,8 @@ class ProviderAdmissionStatus:
     initialized: bool
     provider_id: str
     policy_digest: str
+    deployment_mode: str | None
+    deployment_digest: str | None
     effective_target: int
     candidate_target: int
     hard_max: int
@@ -671,6 +696,8 @@ class ProviderAdmissionStatus:
             "initialized": self.initialized,
             "provider_id": self.provider_id,
             "policy_digest": self.policy_digest,
+            "deployment_mode": self.deployment_mode,
+            "deployment_digest": self.deployment_digest,
             "effective_target": self.effective_target,
             "candidate_target": self.candidate_target,
             "hard_max": self.hard_max,
@@ -695,22 +722,102 @@ class ProviderAdmissionKernel:
         *,
         policy: ProviderAdmissionPolicy | None = None,
         now: Callable[[], datetime] = _utc_now,
+        deployment_mode: AdmissionDeploymentMode = (
+            AdmissionDeploymentMode.OFFLINE_TEST
+        ),
     ) -> None:
+        if not isinstance(deployment_mode, AdmissionDeploymentMode):
+            raise ValueError(
+                "deployment_mode must be an AdmissionDeploymentMode"
+            )
         self.database = RuntimeDatabase(path)
         self.authorities = DispatchAuthorityStore(path, now=now)
         self.policy = policy or glm_provider_admission_policy()
         self._now = now
+        self._deployment_mode = deployment_mode
         self._install_policy()
+
+    @classmethod
+    def canonical_runtime(
+        cls,
+        path: str | Path,
+        *,
+        policy: ProviderAdmissionPolicy | None = None,
+        now: Callable[[], datetime] = _utc_now,
+    ) -> "ProviderAdmissionKernel":
+        return cls(
+            path,
+            policy=policy,
+            now=now,
+            deployment_mode=AdmissionDeploymentMode.CANONICAL_RUNTIME,
+        )
 
     @property
     def path(self) -> Path:
         return self.database.path
+
+    @property
+    def deployment_mode(self) -> AdmissionDeploymentMode:
+        return self._deployment_mode
+
+    @property
+    def deployment_digest(self) -> str:
+        normalized = str(self.path.resolve(strict=False)).replace(
+            "\\",
+            "/",
+        ).casefold()
+        return sha256_id(
+            "provider_admission_deployment_v1",
+            {
+                "deployment_mode": self.deployment_mode.value,
+                "runtime_path_sha256": hashlib.sha256(
+                    normalized.encode("utf-8")
+                ).hexdigest(),
+                "provider_id": self.policy.provider_id,
+                "policy_digest": self.policy.policy_digest,
+            },
+        )
+
+    def require_transport_binding(
+        self,
+        expected_runtime_path: str | Path,
+        *,
+        offline_test: bool,
+    ) -> None:
+        if not isinstance(offline_test, bool):
+            raise ValueError("offline_test must be boolean")
+        expected = Path(expected_runtime_path).resolve(strict=False)
+        actual = self.path.resolve(strict=False)
+        if offline_test:
+            if self.deployment_mode is not AdmissionDeploymentMode.OFFLINE_TEST:
+                raise ProviderAdmissionRequiredError(
+                    "offline provider transport requires an offline-test kernel"
+                )
+            return
+        if (
+            self.deployment_mode is not AdmissionDeploymentMode.CANONICAL_RUNTIME
+            or actual != expected
+        ):
+            raise ProviderAdmissionRequiredError(
+                "provider transport is not bound to the canonical runtime"
+            )
 
     def _current_time(self) -> datetime:
         value = self._now()
         if not isinstance(value, datetime) or value.tzinfo is None:
             raise ValueError("provider admission clock must be timezone-aware")
         return value.astimezone(timezone.utc)
+
+    def _validated_state(
+        self,
+        connection: sqlite3.Connection,
+    ) -> sqlite3.Row:
+        return _validated_control_state(
+            connection,
+            self.policy,
+            deployment_mode=self.deployment_mode.value,
+            deployment_digest=self.deployment_digest,
+        )
 
     @staticmethod
     def _consume_activation_authority(
@@ -787,6 +894,8 @@ class ProviderAdmissionKernel:
             "schema": "provider_admission_control_transition_v1",
             "provider_id": self.policy.provider_id,
             "policy_digest": self.policy.policy_digest,
+            "deployment_mode": self.deployment_mode.value,
+            "deployment_digest": self.deployment_digest,
             "control_revision": revision,
             "prior_control_digest": prior_digest,
             "transition_kind": kind,
@@ -827,14 +936,17 @@ class ProviderAdmissionKernel:
         if state is None:
             connection.execute(
                 """INSERT INTO provider_admission_state(
-                    provider_id, policy_digest, effective_target,
+                    provider_id, policy_digest, deployment_mode,
+                    deployment_digest, effective_target,
                     circuit_state, grant_sequence, last_granted_lane,
                     half_open_probe_request_digest, control_revision,
                     control_digest, last_signal, updated_at
-                ) VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)""",
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)""",
                 (
                     self.policy.provider_id,
                     self.policy.policy_digest,
+                    self.deployment_mode.value,
+                    self.deployment_digest,
                     effective_target,
                     circuit_state,
                     probe_digest,
@@ -869,7 +981,12 @@ class ProviderAdmissionKernel:
                 raise ProviderAdmissionConflict(
                     "provider admission control projection changed concurrently"
                 )
-        return _validated_control_state(connection, self.policy)
+        return _validated_control_state(
+            connection,
+            self.policy,
+            deployment_mode=self.deployment_mode.value,
+            deployment_digest=self.deployment_digest,
+        )
 
     def _install_policy(self) -> None:
         body = canonical_json_bytes(self.policy.to_dict()).decode("utf-8")
@@ -878,6 +995,23 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT * FROM provider_admission_state WHERE provider_id = ?",
+                (self.policy.provider_id,),
+            ).fetchone()
+            if state is None:
+                nonterminal_runs = connection.execute(
+                    """SELECT COUNT(*) FROM runs
+                    WHERE terminal_event_id IS NULL OR terminal_at IS NULL
+                       OR state='dispatched'"""
+                ).fetchone()[0]
+                active_dispatch_leases = connection.execute(
+                    "SELECT COUNT(*) FROM dispatch_leases"
+                ).fetchone()[0]
+                if nonterminal_runs or active_dispatch_leases:
+                    raise ProviderAdmissionConflict(
+                        "provider admission bootstrap requires a quiescent legacy runtime"
+                    )
             row = connection.execute(
                 """SELECT body_json, body_sha256, policy_digest
                 FROM provider_admission_policies
@@ -907,10 +1041,6 @@ class ProviderAdmissionKernel:
                 raise ProviderAdmissionConflict(
                     "provider admission policy revision conflicts"
                 )
-            state = connection.execute(
-                "SELECT * FROM provider_admission_state WHERE provider_id = ?",
-                (self.policy.provider_id,),
-            ).fetchone()
             if state is None:
                 self._append_control_transition(
                     connection,
@@ -923,7 +1053,7 @@ class ProviderAdmissionKernel:
                     now=now,
                 )
             else:
-                _validated_control_state(connection, self.policy)
+                self._validated_state(connection)
             connection.commit()
         except Exception:
             connection.rollback()
@@ -964,7 +1094,7 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            state = _validated_control_state(connection, self.policy)
+            state = self._validated_state(connection)
             if state["circuit_state"] != "closed":
                 raise ProviderAdmissionConflict(
                     "provider admission target cannot change in current state"
@@ -1009,6 +1139,7 @@ class ProviderAdmissionKernel:
         self,
         binding: ProviderAdmissionCircuitBinding,
         reference: AuthorizationReference,
+        probe_request: ProviderAdmissionRequest,
     ) -> ProviderAdmissionStatus:
         if not isinstance(binding, ProviderAdmissionCircuitBinding):
             raise ValueError(
@@ -1022,6 +1153,16 @@ class ProviderAdmissionKernel:
             raise ProviderAdmissionConflict(
                 "provider admission circuit binding is stale"
             )
+        if (
+            not isinstance(probe_request, ProviderAdmissionRequest)
+            or probe_request.provider_id != self.policy.provider_id
+            or probe_request.lane is not AdmissionLane.INTERACTIVE
+            or probe_request.binding_digest != binding.probe_request_digest
+        ):
+            raise ProviderAdmissionConflict(
+                "half-open binding does not name one exact interactive request"
+            )
+        self._verify_authority(probe_request)
         self.authorities.verify(
             reference,
             provider_id=self.policy.provider_id,
@@ -1033,7 +1174,8 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            state = _validated_control_state(connection, self.policy)
+            state = self._validated_state(connection)
+            self._verify_authority_locked(connection, probe_request)
             unresolved = connection.execute(
                 """SELECT COUNT(*) FROM provider_admission_requests
                 WHERE provider_id=? AND state='reconciliation_required'""",
@@ -1046,10 +1188,16 @@ class ProviderAdmissionKernel:
                 )""",
                 (self.policy.provider_id,),
             ).fetchone()[0]
+            existing_probe = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_requests
+                WHERE request_id=? OR run_id=?""",
+                (probe_request.request_id, probe_request.run_id),
+            ).fetchone()[0]
             if (
                 state["circuit_state"] != binding.from_state
                 or unresolved
                 or active_or_waiting
+                or existing_probe
             ):
                 raise ProviderAdmissionConflict(
                     "provider admission circuit cannot enter half-open"
@@ -1086,6 +1234,27 @@ class ProviderAdmissionKernel:
             batch_id=request.batch_id,
             member_digest=request.member_digest,
             provider_tier_binding_digest=request.provider_tier_binding_digest,
+            project_binding_digest=request.project_binding_digest,
+            admission_lane=request.lane.value,
+            provider_admission_policy_digest=self.policy.policy_digest,
+        )
+
+    def _verify_authority_locked(
+        self,
+        connection: sqlite3.Connection,
+        request: ProviderAdmissionRequest,
+    ) -> None:
+        self.authorities.verify_in_transaction(
+            connection,
+            request.authorization,
+            provider_id=request.provider_id,
+            plane=request.plane,
+            task_type=request.task_type,
+            batch_id=request.batch_id,
+            member_digest=request.member_digest,
+            provider_tier_binding_digest=(
+                request.provider_tier_binding_digest
+            ),
             project_binding_digest=request.project_binding_digest,
             admission_lane=request.lane.value,
             provider_admission_policy_digest=self.policy.policy_digest,
@@ -1153,12 +1322,49 @@ class ProviderAdmissionKernel:
                 "provider admission project capacity is inconsistent"
             )
 
+    def _cancel_granted_row(
+        self,
+        connection: sqlite3.Connection,
+        row: sqlite3.Row,
+        state: sqlite3.Row,
+        *,
+        now: str,
+        reason: str,
+    ) -> None:
+        if row["state"] != "granted":
+            raise ProviderAdmissionConflict(
+                "provider admission request is not an unused grant"
+            )
+        self._decrement_project(connection, row, now)
+        changed = connection.execute(
+            """UPDATE provider_admission_requests
+            SET state='cancelled', terminal_at=?
+            WHERE request_id=? AND state='granted'""",
+            (now, row["request_id"]),
+        ).rowcount
+        if changed != 1:
+            raise ProviderAdmissionConflict(
+                "provider admission grant cancellation lost ownership"
+            )
+        if state["circuit_state"] == "half_open":
+            self._append_control_transition(
+                connection,
+                state,
+                transition_kind="half_open_cancelled",
+                effective_target=state["effective_target"],
+                circuit_state="open",
+                half_open_probe_request_digest=None,
+                last_signal=reason,
+                now=now,
+                request_id=row["request_id"],
+            )
+
     def _expire(
         self,
         connection: sqlite3.Connection,
         now: datetime,
     ) -> None:
-        state = _validated_control_state(connection, self.policy)
+        state = self._validated_state(connection)
         expired_active_request_id: str | None = None
         rows = connection.execute(
             """SELECT * FROM provider_admission_requests
@@ -1280,7 +1486,7 @@ class ProviderAdmissionKernel:
         try:
             connection.execute("BEGIN IMMEDIATE")
             self._expire(connection, now)
-            state = _validated_control_state(connection, self.policy)
+            state = self._validated_state(connection)
             if state["circuit_state"] not in {"closed", "half_open"}:
                 connection.commit()
                 raise ProviderAdmissionReconciliationError(
@@ -1475,17 +1681,18 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            _validated_control_state(connection, self.policy)
+            state = self._validated_state(connection)
             row = self._require_permit_row(connection, permit)
             if row["state"] != "granted":
                 raise ProviderAdmissionConflict(
                     "provider admission permit cannot be cancelled"
                 )
-            self._decrement_project(connection, row, now)
-            connection.execute(
-                """UPDATE provider_admission_requests
-                SET state='cancelled', terminal_at=? WHERE request_id=?""",
-                (now, permit.request_id),
+            self._cancel_granted_row(
+                connection,
+                row,
+                state,
+                now=now,
+                reason="half_open_cancelled",
             )
             connection.commit()
         except Exception:
@@ -1538,33 +1745,78 @@ class ProviderAdmissionKernel:
     ) -> None:
         if not isinstance(request, ProviderAdmissionRequest):
             raise ValueError("request must be a ProviderAdmissionRequest")
-        self._verify_authority(request)
-        now = self._current_time().isoformat()
+        current_time = self._current_time()
+        now = current_time.isoformat()
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            state = _validated_control_state(connection, self.policy)
+            self._expire(connection, current_time)
+            state = self._validated_state(connection)
             row = self._require_permit_row(connection, permit)
             if not self._row_matches_request(
                 row,
                 request,
                 self.policy.policy_digest,
             ):
+                connection.commit()
                 raise ProviderAdmissionConflict(
                     "provider admission permit does not match request"
                 )
+            if row["state"] == "reconciliation_required":
+                connection.commit()
+                raise ProviderAdmissionReconciliationError(
+                    "expired provider admission grant requires reconciliation"
+                )
             if row["state"] != "granted":
+                connection.commit()
                 raise ProviderAdmissionConflict(
                     "provider admission permit is not a fresh grant"
+                )
+            unresolved = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_requests
+                WHERE provider_id=? AND state='reconciliation_required'""",
+                (permit.provider_id,),
+            ).fetchone()[0]
+            if unresolved or state["circuit_state"] == "open":
+                self._cancel_granted_row(
+                    connection,
+                    row,
+                    state,
+                    now=now,
+                    reason="grant_blocked_by_open_circuit",
+                )
+                connection.commit()
+                raise ProviderAdmissionReconciliationError(
+                    "provider admission circuit opened before transport"
                 )
             if (
                 state["circuit_state"] == "half_open"
                 and request.binding_digest
                 != state["half_open_probe_request_digest"]
             ):
+                self._cancel_granted_row(
+                    connection,
+                    row,
+                    state,
+                    now=now,
+                    reason="half_open_probe_mismatch",
+                )
+                connection.commit()
                 raise ProviderAdmissionConflict(
                     "provider admission permit is not the authorized probe"
                 )
+            try:
+                self._verify_authority_locked(connection, request)
+            except DispatchAuthorizationError:
+                self._cancel_granted_row(
+                    connection,
+                    row,
+                    state,
+                    now=now,
+                    reason="half_open_authority_invalid",
+                )
+                connection.commit()
+                raise
             connection.execute(
                 """UPDATE provider_admission_requests
                 SET state='dispatched', transport_started_at=?
@@ -1616,7 +1868,7 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            state = _validated_control_state(connection, self.policy)
+            state = self._validated_state(connection)
             row = self._require_permit_row(connection, permit)
             if row["state"] != "dispatched":
                 raise ProviderAdmissionConflict(
@@ -1772,7 +2024,7 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            state = _validated_control_state(connection, self.policy)
+            state = self._validated_state(connection)
             row = connection.execute(
                 """SELECT * FROM provider_admission_requests
                 WHERE request_id=?""",
@@ -1822,7 +2074,7 @@ class ProviderAdmissionKernel:
             )
         connection = self.database.connect()
         try:
-            state = _validated_control_state(connection, self.policy)
+            state = self._validated_state(connection)
             rows = connection.execute(
                 """SELECT state, COUNT(*) AS count
                 FROM provider_admission_requests WHERE provider_id=?
@@ -1887,6 +2139,8 @@ class ProviderAdmissionKernel:
             initialized=True,
             provider_id=provider,
             policy_digest=self.policy.policy_digest,
+            deployment_mode=state["deployment_mode"],
+            deployment_digest=state["deployment_digest"],
             effective_target=state["effective_target"],
             candidate_target=self.policy.candidate_target,
             hard_max=self.policy.hard_max,
@@ -1936,6 +2190,8 @@ def read_provider_admission_status(
             initialized=False,
             provider_id=provider,
             policy_digest=policy.policy_digest,
+            deployment_mode=None,
+            deployment_digest=None,
             effective_target=policy.effective_target,
             candidate_target=policy.candidate_target,
             hard_max=policy.hard_max,
@@ -1958,6 +2214,8 @@ def read_provider_admission_status(
                 initialized=False,
                 provider_id=provider,
                 policy_digest=policy.policy_digest,
+                deployment_mode=None,
+                deployment_digest=None,
                 effective_target=policy.effective_target,
                 candidate_target=policy.candidate_target,
                 hard_max=policy.hard_max,
@@ -2054,6 +2312,8 @@ def read_provider_admission_status(
             initialized=True,
             provider_id=provider,
             policy_digest=policy.policy_digest,
+            deployment_mode=state["deployment_mode"],
+            deployment_digest=state["deployment_digest"],
             effective_target=state["effective_target"],
             candidate_target=policy.candidate_target,
             hard_max=policy.hard_max,
@@ -2082,6 +2342,7 @@ def read_provider_admission_status(
 
 
 __all__ = [
+    "AdmissionDeploymentMode",
     "AdmissionLane",
     "ProjectAdmissionBinding",
     "ProviderAdmissionCircuitBinding",

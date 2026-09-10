@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sqlite3
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -608,6 +609,115 @@ class DispatchAuthorityStore:
             ).fetchone()
         finally:
             connection.close()
+        if reference.epoch != epoch_row["epoch"]:
+            raise DispatchAuthorizationError(
+                "dispatch authorization has a stale epoch"
+            )
+        if epoch_row["state"] != "open":
+            raise DispatchAuthorizationError(
+                "dispatch authorization state is not open"
+            )
+        if row is None:
+            raise DispatchAuthorizationError(
+                "dispatch authorization record is missing"
+            )
+        try:
+            body = json.loads(row["body_json"])
+            scope = AuthorityScope.from_dict(json.loads(row["scope_json"]))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise DispatchAuthorizationError(
+                "dispatch authorization digest is invalid"
+            ) from exc
+        expected_digest = hashlib.sha256(
+            row["body_json"].encode("utf-8")
+        ).hexdigest()
+        if (
+            expected_digest != row["body_sha256"]
+            or expected_digest != reference.digest
+            or row["epoch"] != reference.epoch
+            or row["scope_json"] != reference.scope
+            or body.get("scope") != scope.to_dict()
+        ):
+            raise DispatchAuthorizationError(
+                "dispatch authorization digest is invalid"
+            )
+        if row["revoked_at"] is not None:
+            raise DispatchAuthorizationError(
+                "dispatch authorization is revoked"
+            )
+        if self._current_time() >= _aware_time(
+            "authority expires_at",
+            row["expires_at"],
+        ):
+            raise DispatchAuthorizationError(
+                "dispatch authorization is expired"
+            )
+        if not scope.permits(
+            provider_id=_non_empty("provider_id", provider_id),
+            plane=_non_empty("plane", plane),
+            task_type=_non_empty("task_type", task_type),
+            batch_id=batch_id,
+            member_digest=member_digest,
+            provider_tier_binding_digest=provider_tier_binding_digest,
+            project_binding_digest=project_binding_digest,
+            admission_lane=admission_lane,
+            provider_admission_policy_digest=(
+                provider_admission_policy_digest
+            ),
+            provider_admission_target_digest=(
+                provider_admission_target_digest
+            ),
+            provider_admission_circuit_digest=(
+                provider_admission_circuit_digest
+            ),
+        ):
+            raise DispatchAuthorizationError(
+                "dispatch authorization scope does not permit request"
+            )
+        return reference
+
+    def verify_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        reference: AuthorizationReference,
+        *,
+        provider_id: str,
+        plane: str,
+        task_type: str,
+        batch_id: str | None = None,
+        member_digest: str | None = None,
+        provider_tier_binding_digest: str | None = None,
+        project_binding_digest: str | None = None,
+        admission_lane: str | None = None,
+        provider_admission_policy_digest: str | None = None,
+        provider_admission_target_digest: str | None = None,
+        provider_admission_circuit_digest: str | None = None,
+    ) -> AuthorizationReference:
+        """Revalidate one authority under the caller's existing write lock."""
+
+        if (
+            not isinstance(connection, sqlite3.Connection)
+            or not connection.in_transaction
+        ):
+            raise DispatchAuthorizationError(
+                "dispatch authorization transaction is not active"
+            )
+        if not isinstance(reference, AuthorizationReference):
+            raise DispatchAuthorizationError(
+                "dispatch authorization reference is invalid"
+            )
+        epoch_row = connection.execute(
+            "SELECT epoch, state FROM authority_epoch WHERE singleton = 1"
+        ).fetchone()
+        row = connection.execute(
+            """SELECT * FROM dispatch_authorities
+            WHERE source_kind = ? AND source_id = ? AND revision = ?""",
+            (
+                reference.source_kind,
+                reference.source_id,
+                reference.revision,
+            ),
+        ).fetchone()
         if reference.epoch != epoch_row["epoch"]:
             raise DispatchAuthorizationError(
                 "dispatch authorization has a stale epoch"

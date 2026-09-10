@@ -13,8 +13,10 @@ from macr_runtime.errors import (
     ProviderAdmissionBusyError,
     ProviderAdmissionConflict,
     ProviderAdmissionReconciliationError,
+    ProviderAdmissionRequiredError,
 )
 from macr_runtime.provider_admission import (
+    AdmissionDeploymentMode,
     AdmissionLane,
     ProjectAdmissionBinding,
     ProviderAdmissionKernel,
@@ -38,6 +40,52 @@ class Clock:
 
 
 class ProviderAdmissionContractTests(unittest.TestCase):
+    def test_deployment_capability_distinguishes_canonical_and_offline(self) -> None:
+        with d_drive_tempdir() as temp:
+            offline_path = temp / "offline" / "dispatch.sqlite3"
+            canonical_path = temp / "canonical" / "dispatch.sqlite3"
+            offline = ProviderAdmissionKernel(offline_path)
+            canonical = ProviderAdmissionKernel.canonical_runtime(
+                canonical_path
+            )
+
+            offline.require_transport_binding(
+                offline_path,
+                offline_test=True,
+            )
+            canonical.require_transport_binding(
+                canonical_path,
+                offline_test=False,
+            )
+            with self.assertRaises(ProviderAdmissionRequiredError):
+                offline.require_transport_binding(
+                    canonical_path,
+                    offline_test=False,
+                )
+            with self.assertRaises(ProviderAdmissionRequiredError):
+                canonical.require_transport_binding(
+                    offline_path,
+                    offline_test=False,
+                )
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "control state",
+            ):
+                ProviderAdmissionKernel.canonical_runtime(offline_path)
+
+        self.assertIs(
+            offline.deployment_mode,
+            AdmissionDeploymentMode.OFFLINE_TEST,
+        )
+        self.assertIs(
+            canonical.deployment_mode,
+            AdmissionDeploymentMode.CANONICAL_RUNTIME,
+        )
+        self.assertNotEqual(
+            offline.deployment_digest,
+            canonical.deployment_digest,
+        )
+
     def test_glm_policy_has_bounded_unmeasured_headroom(self) -> None:
         policy = glm_provider_admission_policy()
 
@@ -189,7 +237,7 @@ class ProviderAdmissionAuthorityTests(unittest.TestCase):
 
 
 class ProviderAdmissionSchemaTests(unittest.TestCase):
-    def test_schema_seven_migrates_without_rewriting_existing_runtime_rows(self) -> None:
+    def test_schema_seven_migrates_but_nonterminal_runtime_blocks_bootstrap(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,8 +259,11 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
                 connection.close()
 
             RuntimeDatabase(path)
-            kernel = ProviderAdmissionKernel(path)
-            status = kernel.status("glm_flash_worker")
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "quiescent",
+            ):
+                ProviderAdmissionKernel(path)
             connection = sqlite3.connect(path)
             try:
                 version = connection.execute(
@@ -230,10 +281,12 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
                         "PRAGMA table_info(plan_queue_batches)"
                     )
                 }
-                transition = connection.execute(
-                    """SELECT transition_kind, control_revision
-                    FROM provider_admission_transitions"""
-                ).fetchone()
+                transition_count = connection.execute(
+                    "SELECT COUNT(*) FROM provider_admission_transitions"
+                ).fetchone()[0]
+                state_count = connection.execute(
+                    "SELECT COUNT(*) FROM provider_admission_state"
+                ).fetchone()[0]
             finally:
                 connection.close()
 
@@ -243,8 +296,7 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
             after[4],
             '{"fixture":"schema7-main-f806fdb"}',
         )
-        self.assertEqual(transition, ("genesis", 1))
-        self.assertTrue(status.initialized)
+        self.assertEqual((transition_count, state_count), (0, 0))
         self.assertTrue(
             {
                 "project_binding_digest",
@@ -253,6 +305,75 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
             }
             <= batch_columns
         )
+
+    def test_quiescent_schema_seven_copy_replay_initializes_genesis(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            source = (
+                Path(__file__).parent
+                / "fixtures"
+                / "runtime-schema7-main-f806fdb.sql"
+            )
+            terminal_id = "33333333-3333-4333-8333-333333333333"
+            connection = sqlite3.connect(path)
+            try:
+                connection.executescript(source.read_text(encoding="utf-8"))
+                connection.execute(
+                    """INSERT INTO events(
+                        event_id, run_id, event_type, observed_at,
+                        payload_json, source_sha256, source_line
+                    ) VALUES (?, ?, 'provider.candidate_completed', ?, ?, NULL, NULL)""",
+                    (
+                        terminal_id,
+                        "11111111-1111-4111-8111-111111111111",
+                        "2026-09-10T00:01:00+00:00",
+                        '{"fixture_terminal":true}',
+                    ),
+                )
+                connection.execute(
+                    """UPDATE runs SET terminal_event_id=?,
+                        state='candidate_success', terminal_at=?
+                    WHERE run_id=?""",
+                    (
+                        terminal_id,
+                        "2026-09-10T00:01:00+00:00",
+                        "11111111-1111-4111-8111-111111111111",
+                    ),
+                )
+                connection.commit()
+                before = tuple(
+                    connection.execute(
+                        """SELECT event_id, run_id, event_type, observed_at,
+                                  payload_json, source_sha256, source_line
+                        FROM events ORDER BY sequence"""
+                    ).fetchall()
+                )
+            finally:
+                connection.close()
+
+            RuntimeDatabase(path)
+            kernel = ProviderAdmissionKernel(path)
+            status = kernel.status("glm_flash_worker")
+            connection = sqlite3.connect(path)
+            try:
+                after = tuple(
+                    connection.execute(
+                        """SELECT event_id, run_id, event_type, observed_at,
+                                  payload_json, source_sha256, source_line
+                        FROM events ORDER BY sequence"""
+                    ).fetchall()
+                )
+                transition = connection.execute(
+                    """SELECT transition_kind, control_revision
+                    FROM provider_admission_transitions"""
+                ).fetchone()
+            finally:
+                connection.close()
+
+        self.assertEqual(before, after)
+        self.assertEqual(transition, ("genesis", 1))
+        self.assertTrue(status.initialized)
 
     def test_readonly_status_does_not_create_or_mutate_runtime_database(self) -> None:
         with d_drive_tempdir() as temp:
@@ -319,6 +440,8 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
         )
         self.assertTrue(
             {
+                "deployment_mode",
+                "deployment_digest",
                 "half_open_probe_request_digest",
                 "control_revision",
                 "control_digest",
@@ -405,9 +528,17 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
                     self.clock.value + timedelta(minutes=5)
                 ).isoformat(),
             )
-            kernel.activate_half_open(half_open, circuit_reference)
+            kernel.activate_half_open(
+                half_open,
+                circuit_reference,
+                probe_request,
+            )
             with self.assertRaises(DispatchAuthorizationError):
-                kernel.activate_half_open(half_open, circuit_reference)
+                kernel.activate_half_open(
+                    half_open,
+                    circuit_reference,
+                    probe_request,
+                )
             with self.assertRaisesRegex(
                 ProviderAdmissionReconciliationError,
                 "another probe",
@@ -486,7 +617,11 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
                     self.clock.value + timedelta(minutes=5)
                 ).isoformat(),
             )
-            kernel.activate_half_open(binding, circuit_reference)
+            kernel.activate_half_open(
+                binding,
+                circuit_reference,
+                probe_request,
+            )
             probe = kernel.try_admit(probe_request, ttl_seconds=60)
             kernel.begin_transport(probe, probe_request)
             kernel.finish(
@@ -1059,6 +1194,183 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
             record = kernel.read_request(permit.request_id)
 
         self.assertEqual(record.state, "dispatched")
+
+    def test_expired_grant_cannot_begin_transport_and_is_reconciled(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(authorities, (self.project_a,))
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            permit = kernel.try_admit(request, ttl_seconds=1)
+            self.clock.value += timedelta(seconds=2)
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionReconciliationError,
+                "expired",
+            ):
+                kernel.begin_transport(permit, request)
+            record = kernel.read_request(request.request_id)
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(record.state, "reconciliation_required")
+        self.assertEqual(status.circuit_state, "open")
+
+    def test_revoked_authority_cancels_grant_before_transport(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(authorities, (self.project_a,))
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            permit = kernel.try_admit(request, ttl_seconds=60)
+            authorities.revoke(reference)
+
+            with self.assertRaisesRegex(
+                DispatchAuthorizationError,
+                "revoked",
+            ):
+                kernel.begin_transport(permit, request)
+            record = kernel.read_request(request.request_id)
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(record.state, "cancelled")
+        self.assertEqual(status.project_active_counts, ())
+
+    def test_open_circuit_cancels_another_preexisting_grant(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            target = ProviderAdmissionTargetBinding.create(
+                kernel.policy,
+                target=2,
+            )
+            target_reference = authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="superseded-grant-target-two",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_capacity_target",),
+                    provider_admission_target_digests=(
+                        target.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            kernel.activate_target(target, target_reference)
+            dispatch_reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            first_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            second_request = self._request(
+                dispatch_reference,
+                self.project_b,
+                AdmissionLane.BULK,
+            )
+            first = kernel.try_admit(first_request, ttl_seconds=60)
+            second = kernel.try_admit(second_request, ttl_seconds=60)
+            kernel.begin_transport(first, first_request)
+            kernel.finish(
+                first,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="a" * 64,
+            )
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionReconciliationError,
+                "opened",
+            ):
+                kernel.begin_transport(second, second_request)
+            second_record = kernel.read_request(second.request_id)
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(second_record.state, "cancelled")
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.project_active_counts, ())
+
+    def test_cancelled_half_open_probe_reopens_circuit(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            dispatch_reference = self._authority(
+                authorities,
+                (self.project_a,),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            opening_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            opening = kernel.try_admit(opening_request, ttl_seconds=60)
+            kernel.begin_transport(opening, opening_request)
+            kernel.finish(
+                opening,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="b" * 64,
+            )
+            probe_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.INTERACTIVE,
+            )
+            binding = ProviderAdmissionCircuitBinding.create(
+                kernel.policy,
+                from_state="open",
+                to_state="half_open",
+                probe_request_digest=probe_request.binding_digest,
+            )
+            circuit_reference = authorities.issue(
+                source_kind="operator_circuit_authority",
+                source_id="cancelled-half-open",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_circuit_activation",),
+                    task_types=("provider_circuit_half_open",),
+                    provider_admission_circuit_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            kernel.activate_half_open(
+                binding,
+                circuit_reference,
+                probe_request,
+            )
+            probe = kernel.try_admit(probe_request, ttl_seconds=60)
+            kernel.cancel_before_transport(probe)
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.last_signal, "half_open_cancelled")
 
     def test_known_terminal_releases_capacity_but_unknown_requires_reconciliation(self) -> None:
         with d_drive_tempdir() as temp:

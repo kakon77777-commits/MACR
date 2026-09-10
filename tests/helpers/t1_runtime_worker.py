@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 from macr_runtime.config import load_provider_configs
@@ -12,12 +13,12 @@ from macr_runtime.event_store import SqliteEventStore
 from macr_runtime.errors import ProviderAdmissionBusyError
 from macr_runtime.execution import DispatchOrigin
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.provider_admission import ProviderAdmissionKernel
 from macr_runtime.registry import ProviderRegistry
-from macr_runtime.runtime import RuntimeServices
-from macr_runtime.storage import StorageLayout
 from macr_runtime.t1_dispatcher import T1Dispatcher
 from macr_runtime.t1_manifest import load_t1_manifest
 from macr_runtime.token_policy import t1_glm_live_policy
+from tests.support import build_test_services
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -90,12 +91,13 @@ def main() -> int:
     start_signal = Path(args.start_signal)
     ready_signal = Path(args.ready_signal)
     os.environ["MACR_STATE_ROOT"] = str(state_root)
-    layout = StorageLayout(
-        source_root=str(ROOT),
-        state_root=str(state_root),
-        codex_home_target=r"D:\AI_RESIDENCE\AI_Runtime\codex-home",
+    services = build_test_services(state_root)
+    services = replace(
+        services,
+        provider_admission=ProviderAdmissionKernel(
+            services.events.path
+        ),
     )
-    services = RuntimeServices.from_layout(layout)
     config = next(
         item
         for item in load_provider_configs(ROOT / "config" / "providers.json")
@@ -112,6 +114,7 @@ def main() -> int:
         key_source=StaticKeySource(),
         token_policy=t1_glm_live_policy(),
         admission_guard=services.provider_admission,
+        offline_test_transport=True,
     )
     manifest = load_t1_manifest(args.manifest)
     dispatcher = T1Dispatcher(ProviderRegistry((provider,)), services)

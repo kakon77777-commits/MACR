@@ -67,7 +67,7 @@ _MODULE_EXPORTS = {
         "glm_extended_text_policy", "glm_standard_policy",
     ),
     "provider_admission": (
-        "AdmissionLane", "ProjectAdmissionBinding",
+        "AdmissionDeploymentMode", "AdmissionLane", "ProjectAdmissionBinding",
         "ProviderAdmissionCircuitBinding", "ProviderAdmissionKernel",
         "ProviderAdmissionPermit",
         "ProviderAdmissionPolicy", "ProviderAdmissionRecord",
@@ -117,7 +117,8 @@ __all__ = [
     "ExecutionRouteSnapshot", "EvidenceImporter", "EligibilityDecision",
     "EligibleCandidate", "ExcludedCandidate", "ExclusionReason", "FallbackMode",
     "FallbackRule", "IdentityStatus", "IngestReport", "ImportMode",
-    "AcceptanceState", "AdmissionLane", "AuthorizationReference", "CaptureState",
+    "AcceptanceState", "AdmissionDeploymentMode", "AdmissionLane",
+    "AuthorizationReference", "CaptureState",
     "DispatchContext", "DispatchOrigin", "InteractionPlane", "ImportReport",
     "HostBindingEvidence", "HostDispatchPreparation", "HostInvocationGrant",
     "HostKind",

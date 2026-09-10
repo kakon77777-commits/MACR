@@ -242,6 +242,7 @@ def _GlmFlashWorkerProvider(*args, **kwargs):
     test_root = Path(tempfile.mkdtemp(prefix="glm-unit-", dir=root))
     kernel = ProviderAdmissionKernel(test_root / "runtime" / "dispatch.sqlite3")
     kwargs["admission_guard"] = kernel
+    kwargs.setdefault("offline_test_transport", True)
     return _UnitAdmittedProvider(
         _RawGlmFlashWorkerProvider(*args, **kwargs),
         kernel,

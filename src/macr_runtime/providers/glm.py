@@ -399,7 +399,10 @@ class GlmFlashWorkerProvider(BaseProvider):
         capability_binding: ProviderTierBinding | None = None,
         capability_policy: ProviderCapabilityPolicy | None = None,
         admission_guard: ProviderAdmissionKernel | None = None,
+        offline_test_transport: bool = False,
     ) -> None:
+        if not isinstance(offline_test_transport, bool):
+            raise ValueError("offline_test_transport must be boolean")
         if config.kind != "zai_glm_worker":
             raise ConfigurationError(
                 "GlmFlashWorkerProvider requires kind=zai_glm_worker"
@@ -432,6 +435,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         self.config = config
         self.provider_id = config.id
         self.connection_scope = config.connection_scope
+        self._transport_injected = transport is not None
         self.transport = transport or UrllibJsonTransport()
         self.environ = os.environ if environ is None else environ
         self.key_source = key_source or GlmFixedKeySource()
@@ -442,6 +446,7 @@ class GlmFlashWorkerProvider(BaseProvider):
             )
         )
         self.admission_guard = admission_guard
+        self.offline_test_transport = offline_test_transport
         self.requires_provider_admission = True
         self.token_policy_is_explicit = token_policy is not None
         canonical_token_policy = ModelTokenPolicyResolver.builtins_only().resolve(
@@ -822,6 +827,36 @@ class GlmFlashWorkerProvider(BaseProvider):
         prepared = self._validate_approval_prepared(task)
         return self._safe_approval_metadata(task, prepared)
 
+    def validate_admission_transport_binding(self) -> None:
+        if not isinstance(self.admission_guard, ProviderAdmissionKernel):
+            raise ProviderAdmissionRequiredError(
+                "GLM transport requires the shared provider admission kernel"
+            )
+        if self.offline_test_transport:
+            if not self._transport_injected or isinstance(
+                self.transport,
+                UrllibJsonTransport,
+            ):
+                raise ProviderAdmissionRequiredError(
+                    "offline-test admission cannot use production transport"
+                )
+            expected_runtime_path = self.admission_guard.path
+        else:
+            state_root = Path(
+                self.environ.get(
+                    "MACR_STATE_ROOT",
+                    r"D:\AI_RESIDENCE\AI_Runtime\macr-state",
+                )
+            )
+            expected_runtime_path = (
+                state_root / "runtime" / "dispatch.sqlite3"
+            )
+        ProviderAdmissionKernel.require_transport_binding(
+            self.admission_guard,
+            expected_runtime_path,
+            offline_test=self.offline_test_transport,
+        )
+
     def _post_validated_task_once(
         self,
         task: TaskContract,
@@ -830,17 +865,20 @@ class GlmFlashWorkerProvider(BaseProvider):
         admission_request: ProviderAdmissionRequest | None,
     ) -> Mapping[str, Any]:
         prepared = self._validate_approval_prepared(task)
-        begin_transport = getattr(self.admission_guard, "begin_transport", None)
         if (
             not isinstance(self.admission_guard, ProviderAdmissionKernel)
-            or not callable(begin_transport)
             or not isinstance(admission_permit, ProviderAdmissionPermit)
             or not isinstance(admission_request, ProviderAdmissionRequest)
         ):
             raise ProviderAdmissionRequiredError(
                 "GLM transport requires a one-use provider admission permit"
             )
-        begin_transport(admission_permit, admission_request)
+        self.validate_admission_transport_binding()
+        ProviderAdmissionKernel.begin_transport(
+            self.admission_guard,
+            admission_permit,
+            admission_request,
+        )
         api_key = self._api_key()
         try:
             self.approval_store.verify(

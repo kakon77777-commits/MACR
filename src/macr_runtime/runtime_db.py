@@ -404,6 +404,12 @@ class RuntimeDatabase:
                     """CREATE TABLE IF NOT EXISTS provider_admission_state (
                         provider_id TEXT PRIMARY KEY,
                         policy_digest TEXT NOT NULL,
+                        deployment_mode TEXT NOT NULL CHECK(
+                            deployment_mode IN (
+                                'canonical_runtime', 'offline_test'
+                            )
+                        ),
+                        deployment_digest TEXT NOT NULL,
                         effective_target INTEGER NOT NULL
                             CHECK(effective_target >= 1),
                         circuit_state TEXT NOT NULL CHECK(circuit_state IN (

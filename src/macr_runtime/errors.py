@@ -249,6 +249,15 @@ class LegacyFixedWorkerTopologyIncompatibleError(MacrError):
 class ProviderAdmissionError(MacrError):
     """Provider-capacity admission cannot safely proceed."""
 
+    def safe_diagnostic(self) -> dict[str, object]:
+        return {
+            "network_attempted": False,
+            "response_received": False,
+            "provider_http_status": None,
+            "provider_error_code": None,
+            "transport_stage": "pre_network",
+        }
+
 
 class ProviderAdmissionBusyError(ProviderAdmissionError):
     """Provider capacity is temporarily unavailable before dispatch."""

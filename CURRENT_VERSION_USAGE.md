@@ -25,7 +25,9 @@ the named checkpoints remain the detailed contracts.
   each worker invocation still claims at most one member.
 - Runtime schema 8 adds a provider-wide Provider Admission Kernel. GLM starts
   with effective target 1, candidate target 2 and hard ceiling 8; queued demand
-  never directly changes provider capacity.
+  never directly changes provider capacity. Production transport accepts only
+  the canonical operator runtime; alternate D-drive databases are explicit
+  offline-test capabilities.
 - The v0.7 Agent contract, state, and semantic kernels through Phase C are
   available offline.
 
@@ -130,6 +132,8 @@ T1 is configured per private schema-4 manifest:
   outside the unchanged schema-4 manifest digest;
 - provider BUSY leaves a member queued with `attempts=0` rather than creating a
   failed candidate or provider accounting row.
+- an authority, TTL, or circuit change between grant and transport is rechecked
+  under the final write lock; an unused blocked grant cannot reach the provider.
 
 Staging is offline:
 

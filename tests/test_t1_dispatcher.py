@@ -14,7 +14,9 @@ from macr_runtime.errors import (
     ProviderUnavailableError,
 )
 from macr_runtime.execution import DispatchOrigin, InteractionPlane
-from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.providers.glm import (
+    GlmFlashWorkerProvider as _RawGlmFlashWorkerProvider,
+)
 from macr_runtime.provider_capability import (
     glm_extended_text_policy,
     glm_standard_policy,
@@ -44,6 +46,11 @@ from tests.test_glm_provider import (
 )
 from tests.test_scheduler import Clock
 from tests.test_t1_manifest import manifest as unapproved_manifest
+
+
+def GlmFlashWorkerProvider(*args, **kwargs):
+    kwargs.setdefault("offline_test_transport", True)
+    return _RawGlmFlashWorkerProvider(*args, **kwargs)
 
 
 def t1_services(state_root, clock):

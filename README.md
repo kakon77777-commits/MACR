@@ -308,6 +308,9 @@ outcomes and expired dispatched permits remain capacity-consuming
 circuit changes append immutable receipts whose latest digest must match the
 active projection. Half-open consumes one exact authority for one exact request
 digest; a local pre-network failure reopens rather than closing the circuit.
+Production transport is bound to the canonical operator state root. Alternate
+D-drive kernels are explicitly `offline_test` and cannot be paired with the
+production transport path or relabelled as canonical.
 
 These commands are implemented, but the T1 route itself is not live-accepted and no exact live T1 manifest is implied by repository state. The separate sequential GLM CLI route has live observations; those do not activate T1 authority.
 

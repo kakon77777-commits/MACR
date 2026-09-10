@@ -112,7 +112,10 @@ circuit until exact evidence-bound resolution. `admission-status` is read-only
 and content-free. Active target/circuit state must match its append-only receipt
 chain. Half-open consumes a one-use authority bound to one exact request digest;
 another request cannot borrow the probe and a pre-network failure reopens the
-circuit.
+circuit. `canonical_runtime` is digest-bound to the operator-selected runtime
+database; an alternate temp database is `offline_test` and cannot authorize
+production transport. The final transport edge rechecks TTL, open circuit,
+unresolved capacity and dispatch authority under the same write lock.
 
 ## Claude boundary
 

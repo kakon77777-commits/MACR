@@ -590,6 +590,7 @@ class RuntimeV05Tests(unittest.TestCase):
                 key_source=StaticKeySource(),
                 approval_store=AllowingApprovalStore(),
                 admission_guard=kernel,
+                offline_test_transport=True,
             )
             base = delegated_task(task_id="glm-reasoning-exhaustion-runtime")
             unsigned = replace(
