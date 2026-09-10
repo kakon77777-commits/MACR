@@ -47,10 +47,12 @@ or raise the effective target through a new forward authority transition.
 
 Policy revision 2 has a new digest. A runtime already initialized under the
 revision-1 `1/2/8/2` policy cannot silently gain capacity: initialization with
-revision 2 fails closed with no state or receipt rewrite. It requires a future
-explicit migration/authority path. The canonical shared runtime was still
-schema 7 when this addendum began, so a fresh quiescent schema-7-to-8 genesis
-can install revision 2 directly.
+revision 2 fails closed with no state or receipt rewrite. Canonical runtime
+discovery continues operating the exact active revision-1 policy until an idle
+forward transition is explicitly authorized. That transition binds both policy
+digests/revisions and the selected successor target, revalidates authority under
+the write lock, preserves the old policy/receipt rows, appends
+`policy_superseded`, and then exposes revision 2.
 
 ## Required evidence
 

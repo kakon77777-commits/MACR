@@ -22,10 +22,12 @@ from macr_runtime.provider_admission import (
     ProjectAdmissionBinding,
     ProviderAdmissionKernel,
     ProviderAdmissionPolicy,
+    ProviderAdmissionPolicyTransitionBinding,
     ProviderAdmissionRequest,
     ProviderAdmissionTargetBinding,
     ProviderAdmissionCircuitBinding,
     glm_provider_admission_policy,
+    glm_provider_admission_policy_v1,
     read_provider_admission_status,
 )
 from macr_runtime.runtime_db import RuntimeDatabase
@@ -239,6 +241,245 @@ class ProviderAdmissionAuthorityTests(unittest.TestCase):
 
 
 class ProviderAdmissionSchemaTests(unittest.TestCase):
+    def test_canonical_runtime_keeps_revision_one_live_until_forward_upgrade(self) -> None:
+        legacy_policy = glm_provider_admission_policy_v1()
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            ProviderAdmissionKernel.canonical_runtime(
+                path,
+                policy=legacy_policy,
+            )
+
+            reopened = ProviderAdmissionKernel.canonical_runtime(path)
+            readonly = read_provider_admission_status(
+                path,
+                legacy_policy.provider_id,
+            )
+
+        self.assertEqual(reopened.policy, legacy_policy)
+        self.assertEqual(readonly.policy_digest, legacy_policy.policy_digest)
+        self.assertEqual(readonly.effective_target, 1)
+        self.assertEqual(readonly.hard_max, 8)
+
+    def test_revision_one_forward_upgrade_is_exact_idle_and_append_only(self) -> None:
+        legacy_policy = glm_provider_admission_policy_v1()
+        successor = glm_provider_admission_policy()
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            legacy = ProviderAdmissionKernel.canonical_runtime(
+                path,
+                policy=legacy_policy,
+            )
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                legacy_policy,
+                successor,
+                target=8,
+            )
+            now = datetime.now(timezone.utc)
+            reference = legacy.authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="policy-v1-to-v2",
+                scope=AuthorityScope(
+                    providers=(legacy_policy.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+
+            status = legacy.supersede_policy(
+                binding,
+                successor,
+                reference,
+            )
+            reopened = ProviderAdmissionKernel.canonical_runtime(path)
+            readonly = read_provider_admission_status(
+                path,
+                successor.provider_id,
+            )
+            connection = sqlite3.connect(path)
+            try:
+                revisions = tuple(
+                    row[0]
+                    for row in connection.execute(
+                        """SELECT revision FROM provider_admission_policies
+                        ORDER BY revision"""
+                    ).fetchall()
+                )
+                transitions = tuple(
+                    row[0]
+                    for row in connection.execute(
+                        """SELECT transition_kind
+                        FROM provider_admission_transitions
+                        ORDER BY control_revision"""
+                    ).fetchall()
+                )
+            finally:
+                connection.close()
+
+        self.assertEqual(status.effective_target, 8)
+        self.assertEqual(status.policy_digest, successor.policy_digest)
+        self.assertEqual(reopened.policy, successor)
+        self.assertEqual(readonly.policy_digest, successor.policy_digest)
+        self.assertEqual(revisions, (1, 2))
+        self.assertEqual(transitions, ("genesis", "policy_superseded"))
+
+    def test_revision_one_forward_upgrade_refuses_active_request(self) -> None:
+        legacy_policy = glm_provider_admission_policy_v1()
+        successor = glm_provider_admission_policy()
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            legacy = ProviderAdmissionKernel.canonical_runtime(
+                path,
+                policy=legacy_policy,
+            )
+            project = ProjectAdmissionBinding(
+                "active-project",
+                1,
+                "operator_asserted",
+            )
+            now = datetime.now(timezone.utc)
+            dispatch_reference = legacy.authorities.issue(
+                source_kind="operator_test",
+                source_id="active-policy-v1",
+                scope=AuthorityScope(
+                    providers=(legacy_policy.provider_id,),
+                    planes=("delegation",),
+                    task_types=("delegated_routine",),
+                    provider_tier_binding_digests=("a" * 64,),
+                    project_binding_digests=(project.binding_digest,),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(
+                        legacy_policy.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+            request = ProviderAdmissionRequest(
+                request_id=str(uuid.uuid4()),
+                provider_id=legacy_policy.provider_id,
+                project_binding_digest=project.binding_digest,
+                lane=AdmissionLane.ROUTINE,
+                run_id=str(uuid.uuid4()),
+                authorization=dispatch_reference,
+                plane="delegation",
+                task_type="delegated_routine",
+                task_digest="b" * 64,
+                member_digest="c" * 64,
+                batch_id=None,
+                provider_tier_binding_digest="a" * 64,
+            )
+            permit = legacy.try_admit(request, ttl_seconds=60)
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                legacy_policy,
+                successor,
+                target=8,
+            )
+            transition_reference = legacy.authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="blocked-policy-v1-to-v2",
+                scope=AuthorityScope(
+                    providers=(legacy_policy.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "idle provider",
+            ):
+                legacy.supersede_policy(
+                    binding,
+                    successor,
+                    transition_reference,
+                )
+            state = legacy.status(legacy_policy.provider_id)
+            legacy.cancel_before_transport(permit)
+
+        self.assertEqual(state.policy_digest, legacy_policy.policy_digest)
+        self.assertEqual(state.effective_target, 1)
+
+    def test_policy_upgrade_revalidates_epoch_under_write_lock(self) -> None:
+        legacy_policy = glm_provider_admission_policy_v1()
+        successor = glm_provider_admission_policy()
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            legacy = ProviderAdmissionKernel.canonical_runtime(
+                path,
+                policy=legacy_policy,
+            )
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                legacy_policy,
+                successor,
+                target=8,
+            )
+            now = datetime.now(timezone.utc)
+            reference = legacy.authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="stale-policy-v1-to-v2",
+                scope=AuthorityScope(
+                    providers=(legacy_policy.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+            original_verify = legacy.authorities.verify
+
+            def verify_then_supersede(*args, **kwargs):
+                result = original_verify(*args, **kwargs)
+                legacy.authorities.advance_epoch(
+                    reason_digest="e" * 64,
+                    state="open",
+                )
+                return result
+
+            with patch.object(
+                legacy.authorities,
+                "verify",
+                side_effect=verify_then_supersede,
+            ):
+                with self.assertRaisesRegex(
+                    DispatchAuthorizationError,
+                    "stale epoch",
+                ):
+                    legacy.supersede_policy(
+                        binding,
+                        successor,
+                        reference,
+                    )
+            status = legacy.status(legacy_policy.provider_id)
+            connection = sqlite3.connect(path)
+            try:
+                counts = (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM provider_admission_policies"
+                    ).fetchone()[0],
+                    connection.execute(
+                        "SELECT COUNT(*) FROM provider_admission_transitions"
+                    ).fetchone()[0],
+                )
+            finally:
+                connection.close()
+
+        self.assertEqual(status.effective_target, 1)
+        self.assertEqual(counts, (1, 1))
+
     def test_revision_one_runtime_cannot_silently_gain_revision_two_capacity(self) -> None:
         legacy_policy = ProviderAdmissionPolicy(
             provider_id="glm_flash_worker",

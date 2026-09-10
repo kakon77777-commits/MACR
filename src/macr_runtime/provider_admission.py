@@ -220,6 +220,28 @@ class AdmissionDeploymentMode(str, Enum):
     OFFLINE_TEST = "offline_test"
 
 
+def _deployment_binding_digest(
+    path: str | Path,
+    mode: AdmissionDeploymentMode,
+    policy: ProviderAdmissionPolicy,
+) -> str:
+    normalized = str(Path(path).resolve(strict=False)).replace(
+        "\\",
+        "/",
+    ).casefold()
+    return sha256_id(
+        "provider_admission_deployment_v1",
+        {
+            "deployment_mode": mode.value,
+            "runtime_path_sha256": hashlib.sha256(
+                normalized.encode("utf-8")
+            ).hexdigest(),
+            "provider_id": policy.provider_id,
+            "policy_digest": policy.policy_digest,
+        },
+    )
+
+
 @dataclass(frozen=True)
 class ProjectAdmissionBinding:
     project_id: str
@@ -367,6 +389,21 @@ def glm_provider_admission_policy() -> ProviderAdmissionPolicy:
     )
 
 
+def glm_provider_admission_policy_v1() -> ProviderAdmissionPolicy:
+    """Historical live policy retained for explicit forward migration."""
+
+    return ProviderAdmissionPolicy(
+        provider_id="glm_flash_worker",
+        revision=1,
+        capacity_unit=1,
+        effective_target=1,
+        candidate_target=2,
+        hard_max=8,
+        per_project_cap=2,
+        policy_source="built_in",
+    )
+
+
 @dataclass(frozen=True)
 class ProviderAdmissionTargetBinding:
     provider_id: str
@@ -436,6 +473,101 @@ class ProviderAdmissionTargetBinding:
             "policy_digest": self.policy_digest,
             "target": self.target,
             "policy_revision": self.policy_revision,
+        }
+
+
+@dataclass(frozen=True)
+class ProviderAdmissionPolicyTransitionBinding:
+    provider_id: str
+    from_policy_digest: str
+    from_policy_revision: int
+    to_policy_digest: str
+    to_policy_revision: int
+    target: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "provider_id",
+            _identifier("provider_id", self.provider_id),
+        )
+        object.__setattr__(
+            self,
+            "from_policy_digest",
+            _digest("from_policy_digest", self.from_policy_digest),
+        )
+        object.__setattr__(
+            self,
+            "to_policy_digest",
+            _digest("to_policy_digest", self.to_policy_digest),
+        )
+        from_revision = _positive_int(
+            "from_policy_revision",
+            self.from_policy_revision,
+            maximum=1_000_000,
+        )
+        to_revision = _positive_int(
+            "to_policy_revision",
+            self.to_policy_revision,
+            maximum=1_000_000,
+        )
+        if to_revision <= from_revision:
+            raise ValueError("provider admission policy revision must advance")
+        object.__setattr__(
+            self,
+            "target",
+            _positive_int(
+                "provider admission transition target",
+                self.target,
+                maximum=_MAX_PROVIDER_CAPACITY,
+            ),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        current: ProviderAdmissionPolicy,
+        successor: ProviderAdmissionPolicy,
+        *,
+        target: int,
+    ) -> "ProviderAdmissionPolicyTransitionBinding":
+        if not isinstance(current, ProviderAdmissionPolicy) or not isinstance(
+            successor,
+            ProviderAdmissionPolicy,
+        ):
+            raise ValueError("policy transition requires exact policy values")
+        if (
+            current.provider_id != successor.provider_id
+            or successor.revision <= current.revision
+            or isinstance(target, bool)
+            or not isinstance(target, int)
+            or not 1 <= target <= successor.hard_max
+        ):
+            raise ValueError("provider admission policy transition is invalid")
+        return cls(
+            provider_id=current.provider_id,
+            from_policy_digest=current.policy_digest,
+            from_policy_revision=current.revision,
+            to_policy_digest=successor.policy_digest,
+            to_policy_revision=successor.revision,
+            target=target,
+        )
+
+    @property
+    def binding_digest(self) -> str:
+        return sha256_id(
+            "provider_admission_policy_transition_v1",
+            self.to_dict(),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "provider_id": self.provider_id,
+            "from_policy_digest": self.from_policy_digest,
+            "from_policy_revision": self.from_policy_revision,
+            "to_policy_digest": self.to_policy_digest,
+            "to_policy_revision": self.to_policy_revision,
+            "target": self.target,
         }
 
 
@@ -750,9 +882,38 @@ class ProviderAdmissionKernel:
         policy: ProviderAdmissionPolicy | None = None,
         now: Callable[[], datetime] = _utc_now,
     ) -> "ProviderAdmissionKernel":
+        selected_policy = policy or glm_provider_admission_policy()
+        candidate = Path(path)
+        if policy is None and candidate.is_file():
+            connection = sqlite3.connect(
+                candidate.absolute().as_uri() + "?mode=ro",
+                uri=True,
+            )
+            connection.row_factory = sqlite3.Row
+            try:
+                meta = connection.execute(
+                    """SELECT version FROM schema_meta
+                    WHERE component='runtime'"""
+                ).fetchone()
+                state = (
+                    connection.execute(
+                        """SELECT policy_digest
+                        FROM provider_admission_state
+                        WHERE provider_id='glm_flash_worker'"""
+                    ).fetchone()
+                    if meta is not None and meta["version"] >= 8
+                    else None
+                )
+            except sqlite3.Error:
+                state = None
+            finally:
+                connection.close()
+            legacy = glm_provider_admission_policy_v1()
+            if state is not None and state["policy_digest"] == legacy.policy_digest:
+                selected_policy = legacy
         return cls(
             path,
-            policy=policy,
+            policy=selected_policy,
             now=now,
             deployment_mode=AdmissionDeploymentMode.CANONICAL_RUNTIME,
         )
@@ -767,20 +928,10 @@ class ProviderAdmissionKernel:
 
     @property
     def deployment_digest(self) -> str:
-        normalized = str(self.path.resolve(strict=False)).replace(
-            "\\",
-            "/",
-        ).casefold()
-        return sha256_id(
-            "provider_admission_deployment_v1",
-            {
-                "deployment_mode": self.deployment_mode.value,
-                "runtime_path_sha256": hashlib.sha256(
-                    normalized.encode("utf-8")
-                ).hexdigest(),
-                "provider_id": self.policy.provider_id,
-                "policy_digest": self.policy.policy_digest,
-            },
+        return _deployment_binding_digest(
+            self.path,
+            self.deployment_mode,
+            self.policy,
         )
 
     def require_transport_binding(
@@ -863,13 +1014,15 @@ class ProviderAdmissionKernel:
         binding_digest: str | None = None,
         request_id: str | None = None,
         evidence_digest: str | None = None,
+        control_policy: ProviderAdmissionPolicy | None = None,
     ) -> sqlite3.Row:
+        active_policy = control_policy or self.policy
         kind = _identifier("transition_kind", transition_kind)
         signal = _identifier("last_signal", last_signal)
         if (
             isinstance(effective_target, bool)
             or not isinstance(effective_target, int)
-            or not 1 <= effective_target <= self.policy.hard_max
+            or not 1 <= effective_target <= active_policy.hard_max
         ):
             raise ProviderAdmissionConflict(
                 "provider admission transition target is invalid"
@@ -898,10 +1051,14 @@ class ProviderAdmissionKernel:
         prior_digest = _ZERO_DIGEST if state is None else state["control_digest"]
         document = {
             "schema": "provider_admission_control_transition_v1",
-            "provider_id": self.policy.provider_id,
-            "policy_digest": self.policy.policy_digest,
+            "provider_id": active_policy.provider_id,
+            "policy_digest": active_policy.policy_digest,
             "deployment_mode": self.deployment_mode.value,
-            "deployment_digest": self.deployment_digest,
+            "deployment_digest": _deployment_binding_digest(
+                self.path,
+                self.deployment_mode,
+                active_policy,
+            ),
             "control_revision": revision,
             "prior_control_digest": prior_digest,
             "transition_kind": kind,
@@ -926,7 +1083,7 @@ class ProviderAdmissionKernel:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 str(uuid.uuid4()),
-                self.policy.provider_id,
+                active_policy.provider_id,
                 revision,
                 prior_digest,
                 kind,
@@ -950,9 +1107,13 @@ class ProviderAdmissionKernel:
                 ) VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)""",
                 (
                     self.policy.provider_id,
-                    self.policy.policy_digest,
+                    active_policy.policy_digest,
                     self.deployment_mode.value,
-                    self.deployment_digest,
+                    _deployment_binding_digest(
+                        self.path,
+                        self.deployment_mode,
+                        active_policy,
+                    ),
                     effective_target,
                     circuit_state,
                     probe_digest,
@@ -965,12 +1126,20 @@ class ProviderAdmissionKernel:
         else:
             changed = connection.execute(
                 """UPDATE provider_admission_state
-                SET effective_target=?, circuit_state=?,
+                SET policy_digest=?, deployment_mode=?, deployment_digest=?,
+                    effective_target=?, circuit_state=?,
                     half_open_probe_request_digest=?, control_revision=?,
                     control_digest=?, last_signal=?, updated_at=?
                 WHERE provider_id=? AND control_revision=?
                   AND control_digest=?""",
                 (
+                    active_policy.policy_digest,
+                    self.deployment_mode.value,
+                    _deployment_binding_digest(
+                        self.path,
+                        self.deployment_mode,
+                        active_policy,
+                    ),
                     effective_target,
                     circuit_state,
                     probe_digest,
@@ -978,7 +1147,7 @@ class ProviderAdmissionKernel:
                     body_sha256,
                     signal,
                     now,
-                    self.policy.provider_id,
+                    active_policy.provider_id,
                     state["control_revision"],
                     state["control_digest"],
                 ),
@@ -989,9 +1158,13 @@ class ProviderAdmissionKernel:
                 )
         return _validated_control_state(
             connection,
-            self.policy,
+            active_policy,
             deployment_mode=self.deployment_mode.value,
-            deployment_digest=self.deployment_digest,
+            deployment_digest=_deployment_binding_digest(
+                self.path,
+                self.deployment_mode,
+                active_policy,
+            ),
         )
 
     def _install_policy(self) -> None:
@@ -1144,6 +1317,121 @@ class ProviderAdmissionKernel:
         finally:
             connection.close()
         return self.status(self.policy.provider_id)
+
+    def supersede_policy(
+        self,
+        binding: ProviderAdmissionPolicyTransitionBinding,
+        successor: ProviderAdmissionPolicy,
+        reference: AuthorizationReference,
+    ) -> ProviderAdmissionStatus:
+        if not isinstance(
+            binding,
+            ProviderAdmissionPolicyTransitionBinding,
+        ) or not isinstance(successor, ProviderAdmissionPolicy):
+            raise ValueError(
+                "provider admission policy transition values are invalid"
+            )
+        if (
+            self.policy.provider_id != binding.provider_id
+            or self.policy.policy_digest != binding.from_policy_digest
+            or self.policy.revision != binding.from_policy_revision
+            or successor.provider_id != binding.provider_id
+            or successor.policy_digest != binding.to_policy_digest
+            or successor.revision != binding.to_policy_revision
+            or successor != glm_provider_admission_policy()
+            or not 1 <= binding.target <= successor.hard_max
+        ):
+            raise ProviderAdmissionConflict(
+                "provider admission policy transition binding is stale"
+            )
+        self.authorities.verify(
+            reference,
+            provider_id=self.policy.provider_id,
+            plane="provider_capacity_activation",
+            task_type="provider_admission_policy_transition",
+            provider_admission_target_digest=binding.binding_digest,
+        )
+        body = canonical_json_bytes(successor.to_dict()).decode("utf-8")
+        body_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        now = self._current_time().isoformat()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            state = self._validated_state(connection)
+            self.authorities.verify_in_transaction(
+                connection,
+                reference,
+                provider_id=self.policy.provider_id,
+                plane="provider_capacity_activation",
+                task_type="provider_admission_policy_transition",
+                provider_admission_target_digest=binding.binding_digest,
+            )
+            active_or_waiting = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_requests
+                WHERE provider_id=? AND state IN (
+                    'waiting','granted','dispatched','reconciliation_required'
+                )""",
+                (self.policy.provider_id,),
+            ).fetchone()[0]
+            if state["circuit_state"] != "closed" or active_or_waiting:
+                raise ProviderAdmissionConflict(
+                    "provider admission policy transition requires an idle provider"
+                )
+            row = connection.execute(
+                """SELECT body_json, body_sha256, policy_digest
+                FROM provider_admission_policies
+                WHERE provider_id=? AND revision=?""",
+                (successor.provider_id, successor.revision),
+            ).fetchone()
+            if row is None:
+                connection.execute(
+                    """INSERT INTO provider_admission_policies(
+                        provider_id, revision, body_json, body_sha256,
+                        policy_digest, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        successor.provider_id,
+                        successor.revision,
+                        body,
+                        body_sha256,
+                        successor.policy_digest,
+                        now,
+                    ),
+                )
+            elif (
+                row["body_json"] != body
+                or row["body_sha256"] != body_sha256
+                or row["policy_digest"] != successor.policy_digest
+            ):
+                raise ProviderAdmissionConflict(
+                    "provider admission successor policy conflicts"
+                )
+            self._consume_activation_authority(connection, reference, now)
+            self._append_control_transition(
+                connection,
+                state,
+                transition_kind="policy_superseded",
+                effective_target=binding.target,
+                circuit_state="closed",
+                half_open_probe_request_digest=None,
+                last_signal="policy_superseded",
+                now=now,
+                authority_digest=reference.digest,
+                binding_digest=binding.binding_digest,
+                control_policy=successor,
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return ProviderAdmissionKernel(
+            self.path,
+            policy=successor,
+            now=self._now,
+            deployment_mode=self.deployment_mode,
+        ).status(successor.provider_id)
 
     def activate_half_open(
         self,
@@ -2249,6 +2537,17 @@ def read_provider_admission_status(
             raise ProviderAdmissionConflict(
                 "provider admission runtime schema is unsupported"
             )
+        state_head = connection.execute(
+            """SELECT policy_digest FROM provider_admission_state
+            WHERE provider_id=?""",
+            (provider,),
+        ).fetchone()
+        legacy_policy = glm_provider_admission_policy_v1()
+        if (
+            state_head is not None
+            and state_head["policy_digest"] == legacy_policy.policy_digest
+        ):
+            policy = legacy_policy
         policy_row = connection.execute(
             """SELECT body_json, body_sha256, policy_digest
             FROM provider_admission_policies
@@ -2367,10 +2666,12 @@ __all__ = [
     "ProviderAdmissionKernel",
     "ProviderAdmissionPermit",
     "ProviderAdmissionPolicy",
+    "ProviderAdmissionPolicyTransitionBinding",
     "ProviderAdmissionRecord",
     "ProviderAdmissionRequest",
     "ProviderAdmissionStatus",
     "ProviderAdmissionTargetBinding",
     "read_provider_admission_status",
     "glm_provider_admission_policy",
+    "glm_provider_admission_policy_v1",
 ]
