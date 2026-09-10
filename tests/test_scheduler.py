@@ -137,7 +137,7 @@ class PlanQueueTests(unittest.TestCase):
             finally:
                 connection.close()
 
-        self.assertEqual(version, 7)
+        self.assertEqual(version, 8)
         self.assertEqual(row, ("legacy-member", "queued", None))
 
     def test_global_tier_status_distinguishes_legacy_and_bound_members(self) -> None:

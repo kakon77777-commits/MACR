@@ -231,3 +231,23 @@ class LegacyOutputPolicyIncompatibleError(MacrError):
 
 class LegacyFixedWorkerTopologyIncompatibleError(MacrError):
     """Historical fixed-worker T1 evidence cannot satisfy dynamic dispatch."""
+
+
+class ProviderAdmissionError(MacrError):
+    """Provider-capacity admission cannot safely proceed."""
+
+
+class ProviderAdmissionBusyError(ProviderAdmissionError):
+    """Provider capacity is temporarily unavailable before dispatch."""
+
+
+class ProviderAdmissionReconciliationError(ProviderAdmissionError):
+    """Ambiguous provider capacity requires explicit reconciliation."""
+
+
+class ProviderAdmissionConflict(ProviderAdmissionError):
+    """Provider admission state or identity violates an invariant."""
+
+
+class ProviderAdmissionRequiredError(ProviderAdmissionError):
+    """A provider transport was reached without a valid one-use permit."""

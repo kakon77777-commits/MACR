@@ -411,6 +411,12 @@ class RuntimeDatabase:
                         )),
                         grant_sequence INTEGER NOT NULL
                             CHECK(grant_sequence >= 0),
+                        last_granted_lane TEXT CHECK(
+                            last_granted_lane IS NULL OR
+                            last_granted_lane IN (
+                                'interactive', 'routine', 'bulk'
+                            )
+                        ),
                         last_signal TEXT,
                         updated_at TEXT NOT NULL
                     )""",

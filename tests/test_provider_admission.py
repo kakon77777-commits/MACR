@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import sqlite3
 import unittest
+import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
-from macr_runtime.errors import DispatchAuthorizationError
+from macr_runtime.errors import (
+    DispatchAuthorizationError,
+    ProviderAdmissionBusyError,
+    ProviderAdmissionConflict,
+    ProviderAdmissionReconciliationError,
+)
 from macr_runtime.provider_admission import (
     AdmissionLane,
     ProjectAdmissionBinding,
+    ProviderAdmissionKernel,
     ProviderAdmissionPolicy,
+    ProviderAdmissionRequest,
     glm_provider_admission_policy,
 )
 from macr_runtime.runtime_db import RuntimeDatabase
@@ -231,6 +239,307 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
             }
             <= request_columns
         )
+
+
+class ProviderAdmissionKernelTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.now = datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc)
+        self.clock = Clock(self.now)
+        self.project_a = ProjectAdmissionBinding(
+            "project-a",
+            1,
+            "operator_asserted",
+        )
+        self.project_b = ProjectAdmissionBinding(
+            "project-b",
+            1,
+            "operator_asserted",
+        )
+
+    def _authority(
+        self,
+        store: DispatchAuthorityStore,
+        projects: tuple[ProjectAdmissionBinding, ...],
+    ):
+        policy = glm_provider_admission_policy()
+        return store.issue(
+            source_kind="operator_test",
+            source_id=str(uuid.uuid4()),
+            scope=AuthorityScope(
+                providers=(policy.provider_id,),
+                planes=("delegation",),
+                task_types=("delegated_routine",),
+                provider_tier_binding_digests=("a" * 64,),
+                project_binding_digests=tuple(
+                    item.binding_digest for item in projects
+                ),
+                admission_lanes=tuple(item.value for item in AdmissionLane),
+                provider_admission_policy_digests=(policy.policy_digest,),
+                scope_contract_version=3,
+            ),
+            expires_at=(self.clock.value + timedelta(hours=1)).isoformat(),
+        )
+
+    def _request(
+        self,
+        authority,
+        project: ProjectAdmissionBinding,
+        lane: AdmissionLane,
+        *,
+        run_id: str | None = None,
+        request_id: str | None = None,
+    ) -> ProviderAdmissionRequest:
+        return ProviderAdmissionRequest(
+            request_id=request_id or str(uuid.uuid4()),
+            provider_id="glm_flash_worker",
+            project=project,
+            lane=lane,
+            run_id=run_id or str(uuid.uuid4()),
+            authorization=authority,
+            plane="delegation",
+            task_type="delegated_routine",
+            task_digest="b" * 64,
+            member_digest="c" * 64,
+            batch_id=None,
+            provider_tier_binding_digest="a" * 64,
+        )
+
+    def test_target_one_is_global_across_projects_and_busy_is_nonterminal(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            first = kernel.try_admit(
+                self._request(reference, self.project_a, AdmissionLane.BULK),
+                ttl_seconds=60,
+            )
+            second_request = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.ROUTINE,
+            )
+
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(second_request, ttl_seconds=60)
+            status = kernel.status("glm_flash_worker")
+
+        self.assertEqual(first.capacity_unit, 1)
+        self.assertEqual(status.effective_target, 1)
+        self.assertEqual(status.counts["granted"], 1)
+        self.assertEqual(status.counts["waiting"], 1)
+        self.assertEqual(status.counts["dispatched"], 0)
+
+    def test_waiting_request_can_gain_released_slot_without_new_identity(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            first = kernel.try_admit(
+                self._request(reference, self.project_a, AdmissionLane.BULK),
+                ttl_seconds=60,
+            )
+            waiting = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.INTERACTIVE,
+            )
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(waiting, ttl_seconds=60)
+
+            kernel.cancel_before_transport(first)
+            granted = kernel.try_admit(waiting, ttl_seconds=60)
+
+        self.assertEqual(granted.request_id, waiting.request_id)
+        self.assertEqual(granted.project_binding_digest, self.project_b.binding_digest)
+
+    def test_interactive_gets_next_slot_then_older_bulk_makes_progress(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            holder = kernel.try_admit(
+                self._request(reference, self.project_a, AdmissionLane.ROUTINE),
+                ttl_seconds=60,
+            )
+            bulk = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.BULK,
+            )
+            interactive = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.INTERACTIVE,
+            )
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(bulk, ttl_seconds=60)
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(interactive, ttl_seconds=60)
+
+            kernel.cancel_before_transport(holder)
+            with self.assertRaisesRegex(ProviderAdmissionBusyError, "fair turn"):
+                kernel.try_admit(bulk, ttl_seconds=60)
+            interactive_permit = kernel.try_admit(interactive, ttl_seconds=60)
+            kernel.cancel_before_transport(interactive_permit)
+            bulk_permit = kernel.try_admit(bulk, ttl_seconds=60)
+
+        self.assertEqual(bulk_permit.request_id, bulk.request_id)
+
+    def test_request_id_cannot_be_replayed_with_changed_project(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            original = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            permit = kernel.try_admit(original, ttl_seconds=60)
+            changed = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.ROUTINE,
+                request_id=original.request_id,
+                run_id=original.run_id,
+            )
+
+            with self.assertRaisesRegex(ProviderAdmissionConflict, "identity"):
+                kernel.try_admit(changed, ttl_seconds=60)
+            kernel.cancel_before_transport(permit)
+
+    def test_permit_is_one_use_at_transport_boundary(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(authorities, (self.project_a,))
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            permit = kernel.try_admit(request, ttl_seconds=60)
+
+            kernel.begin_transport(permit, request)
+            with self.assertRaises(ProviderAdmissionConflict):
+                kernel.begin_transport(permit, request)
+            record = kernel.read_request(permit.request_id)
+
+        self.assertEqual(record.state, "dispatched")
+
+    def test_known_terminal_releases_capacity_but_unknown_requires_reconciliation(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            known_request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            known = kernel.try_admit(known_request, ttl_seconds=60)
+            kernel.begin_transport(known, known_request)
+            kernel.finish(
+                known,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=200,
+                terminal_persisted=True,
+                terminal_evidence_digest="d" * 64,
+            )
+            unknown_request = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.BULK,
+            )
+            unknown = kernel.try_admit(unknown_request, ttl_seconds=60)
+            kernel.begin_transport(unknown, unknown_request)
+            kernel.finish(
+                unknown,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="e" * 64,
+            )
+
+            with self.assertRaises(ProviderAdmissionReconciliationError):
+                kernel.try_admit(
+                    self._request(
+                        reference,
+                        self.project_a,
+                        AdmissionLane.INTERACTIVE,
+                    ),
+                    ttl_seconds=60,
+                )
+            status = kernel.status("glm_flash_worker")
+            known_record = kernel.read_request(known.request_id)
+            unknown_record = kernel.read_request(unknown.request_id)
+
+        self.assertEqual(known_record.state, "completed")
+        self.assertEqual(unknown_record.state, "reconciliation_required")
+        self.assertEqual(status.counts["reconciliation_required"], 1)
+        self.assertEqual(status.circuit_state, "open")
+
+    def test_expired_waiting_cancels_but_expired_grant_never_auto_releases(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            first_request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.BULK,
+            )
+            first = kernel.try_admit(first_request, ttl_seconds=2)
+            waiting = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.ROUTINE,
+            )
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(waiting, ttl_seconds=1)
+
+            self.clock.value += timedelta(seconds=3)
+            with self.assertRaises(ProviderAdmissionReconciliationError):
+                kernel.try_admit(
+                    self._request(
+                        reference,
+                        self.project_b,
+                        AdmissionLane.INTERACTIVE,
+                    ),
+                    ttl_seconds=60,
+                )
+            waiting_record = kernel.read_request(waiting.request_id)
+            first_record = kernel.read_request(first.request_id)
+
+        self.assertEqual(waiting_record.state, "cancelled")
+        self.assertEqual(first_record.state, "reconciliation_required")
 
 
 if __name__ == "__main__":
