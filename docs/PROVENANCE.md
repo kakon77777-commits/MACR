@@ -637,3 +637,33 @@ candidate performed no production credential read, real provider call,
 migration, target activation, retry, fallback, release, or deployment. Full
 details are in
 `docs/checkpoints/MACR-v0.7.0a0-provider-admission-scalable-targets-2026-09-10.md`.
+
+### Shared-state discovery correction and revision-2 activation
+
+A later read-only check disproved the preceding claim that the shared runtime
+remained schema 7. Another MACR path had already initialized schema 8 with
+built-in admission policy revision 1 at
+`2026-09-10T11:03:28.936933+00:00`. Readback eventually showed 43 completed
+requests under target 1, with no reconciliation. No actor is attributed from
+timing. The earlier schema-7 statement is retained as superseded error evidence.
+
+The compatibility/forward-transition repair was merged and published at exact
+`main` commit `493046f020672f627c1ef710395efaac0ca6b853` / tree
+`82c6b8300adc4c46a1cf93c7c32dd99c680900ad`. On that clean subject,
+`verify-v06.ps1` passed 889 inherited and 207 focused tests with five quiet
+census samples and summary digest
+`3e587875db234b88bd1edaf71206f3636317bc5c6429933e8e6792a59b789281`;
+Phase C passed with wheel SHA
+`6534616caf1e103ced4a74af3decb14147798daf4c390fb68274e756c6dcb3c8`.
+
+After SQLite backup and two separate five-sample quiet checks, Neo's capacity
+direction authorized an exact built-in revision-1 to revision-2 forward
+transition at target 8. Authority
+`aeabf3ec2ee8207ebbe6e72e5b427e1bce89c395cc9a44e92fb761882ebd99b6`
+was consumed once. Active state is policy digest
+`b6688485aec5ea1c4845d650ab1fc162813540f2f644db509ae374f50a0bd3c6`,
+effective/review/hard `8/16/32`, per-project cap 8, circuit closed, control
+revision 45. All unrelated operational digests remained equal. No production
+credential or provider call was used. Exact backup, pre/post evidence and
+recovery are recorded in
+`docs/checkpoints/MACR-v0.7.0a0-provider-admission-policy-v2-activation-2026-09-10.md`.

@@ -4,6 +4,12 @@ Date: 2026-09-10
 
 Status: offline implementation candidate; shared runtime and live provider unchanged
 
+> **Superseded observation:** a later read-only check found that another MACR
+> path had already initialized shared schema 8 / built-in policy revision 1 and
+> completed 43 admitted calls. The earlier schema-7 claim below was wrong. The
+> corrected evidence and authorized revision-2/target-8 transition are recorded
+> in `MACR-v0.7.0a0-provider-admission-policy-v2-activation-2026-09-10.md`.
+
 ## Exact subject
 
 ```text
@@ -79,10 +85,10 @@ exact subject above the Twin returned `CONCUR`: stale target activation raised
 remained 1, circuit-authority revocation also failed without projection drift,
 and the 16-process result was exactly 8 grants / 8 BUSY.
 
-The four full-machine census tests and the composite v0.6/Phase-C gates remain
-pending a naturally quiet window. This checkpoint does not claim those gates
-passed. It does claim behavioral, structural, and discriminative closure for
-the scalable capacity slice under isolated D-drive state and fake transports.
+At this checkpoint the four full-machine census tests and composite gates were
+pending a naturally quiet window. A later exact clean subject passed both full
+gates before activation; see the successor activation receipt. This historical
+checkpoint does not retroactively claim those later results.
 
 ## Authority boundary
 
