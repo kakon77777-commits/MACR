@@ -1,6 +1,6 @@
 # MACR v0.7.0a0 Provider Admission Kernel Implementation Plan
 
-Status: active implementation plan
+Status: implementation candidate; final exact-head gates and Twin closure pending
 
 Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel-design.md`
 
@@ -10,7 +10,8 @@ Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel
   and status contracts.
 - Extend dispatch authority scope to v3 project/lane binding while preserving
   v1/v2 parsing and explicit legacy refusal.
-- Add runtime schema 8 tables and additive migration tests.
+- Add runtime schema 8 tables, immutable control-transition receipts and an
+  independently captured main/schema-7 migration fixture.
 - RED/GREEN: validation, no-unlimited sentinels, exact digests, schema-7 replay,
   corrupt/partial state rejection.
 
@@ -29,6 +30,7 @@ Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel
 - Add kernel to `RuntimeServices` and every registry constructed for runtime.
 - Make `MacrRuntime` return/raise typed nonterminal BUSY before provider work.
 - Require GLM adapter permit validation immediately before key/transport.
+- Reject duck-typed admission shims and providers bound to another kernel.
 - RED/GREEN: ordinary invoke and direct-adapter bypass, key/transport sentinels,
   terminal/reconciliation lifecycle, non-GLM compatibility.
 
@@ -40,12 +42,15 @@ Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel
 - Bind host grant and T0 execution to the same admission identity.
 - RED/GREEN: worker_count greater than target, simultaneous dispatchers,
   peek/claim race, legacy staged bundle, forged host/project/lane.
+- Return pre-dispatch runtime refusals to `queued/attempts=0` without leaking
+  the already granted provider permit.
 
 ## Slice 5 — operator surfaces and recovery
 
 - Add read-only `admission-status` and bounded nonterminal CLI output.
 - Add explicit governed reconciliation/target-transition APIs; do not add a
   self-authorizing capacity CLI.
+- Bind one-use half-open authority to one exact probe request digest.
 - Update PowerShell wrappers with project/lane and bounded wait options while
   keeping provider calls opt-in.
 - RED/GREEN: privacy sentinels, absent-store read, exact resolution authority,
@@ -59,4 +64,3 @@ Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel
 - Record exact commit/tree, counts, digests, known limitations and closure
   vector. No shared runtime migration, provider call, merge, release or
   deployment without a separate operator decision.
-

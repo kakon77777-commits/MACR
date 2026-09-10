@@ -82,14 +82,17 @@ semantic schema             1
 ```
 
 Runtime schema 7 adds a nullable provider-tier binding to queue members. Schema
-8 additively adds provider-admission policy/state/project/request tables and
-nullable project/lane/policy bindings on queue batches. Existing schema-4 T1
+8 additively adds provider-admission policy/state/project/request tables,
+append-only target/circuit transition receipts, and nullable
+project/lane/policy bindings on queue batches. Existing schema-4 T1
 manifest bytes and digests are not rewritten; an existing staged batch without
 the separate admission binding is `legacy_pre_provider_admission` and cannot
 dispatch. Admission rows are content-free and keep unknown or crashed
 transports in explicit reconciliation. Existing batch-authority bodies,
 digest-only target claims, events, runs and fenced target-path leases remain
-intact. The separate future `runtime\agent.sqlite3` remains the Agent lifecycle
+intact. Migration coverage loads an independently captured complete schema-7
+fixture from `main@f806fdb` before applying schema 8; it does not synthesize an
+8→7 downgrade. The separate future `runtime\agent.sqlite3` remains the Agent lifecycle
 and semantic database; provider admission does not begin Phase D. Raw task
 bodies, answers and target paths remain absent from runtime/accounting
 databases.

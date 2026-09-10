@@ -26,6 +26,8 @@ from .event_store import SqliteEventStore
 from .execution import (
     DispatchContext,
     ProviderExecution,
+    ProviderState,
+    ProviderUsage,
     RawProviderObservation,
     ReturnContractState,
 )
@@ -220,6 +222,25 @@ def _failed_provider_observation(
     raw = diagnostic_method() if callable(diagnostic_method) else {}
     diagnostic = raw if isinstance(raw, Mapping) else {}
     try:
+        if diagnostic.get("network_attempted") is False:
+            return RawProviderObservation(
+                provider_id=provider_id,
+                model=None,
+                response_id=None,
+                finish_reason=None,
+                usage=ProviderUsage(None, None, None, None),
+                currency_cost_usd=0.0,
+                cost_kind="zero_local",
+                pricing_basis_version="macr-pre-network-v1",
+                duration_ms=duration_ms,
+                answer_bytes=None,
+                provider_state=ProviderState.MALFORMED,
+                network_attempted=False,
+                response_received=False,
+                provider_http_status=None,
+                provider_error_code=None,
+                transport_stage=diagnostic.get("transport_stage"),
+            )
         return RawProviderObservation.empty(
             provider_id,
             duration_ms=duration_ms,
@@ -310,6 +331,40 @@ class MacrRuntime:
         self.services = services
 
     def invoke(
+        self,
+        provider_id: str,
+        task: TaskContract,
+        context: DispatchContext,
+        *,
+        provider_admission_permit: ProviderAdmissionPermit | None = None,
+        provider_admission_request: ProviderAdmissionRequest | None = None,
+    ) -> ProviderResult:
+        try:
+            return self._invoke_owned(
+                provider_id,
+                task,
+                context,
+                provider_admission_permit=provider_admission_permit,
+                provider_admission_request=provider_admission_request,
+            )
+        finally:
+            # T1 can reserve provider capacity before it claims a queue member.
+            # Any refusal above the dispatch lease boundary must therefore give
+            # the still-unused grant back.  The inner lifecycle owns grants once
+            # transport starts; this outer guard exists specifically so early
+            # validation returns and exceptions cannot strand capacity.
+            if provider_admission_permit is not None:
+                admission = self.services.provider_admission
+                if admission is not None:
+                    record = admission.read_request(
+                        provider_admission_permit.request_id
+                    )
+                    if record.state == "granted":
+                        admission.cancel_before_transport(
+                            provider_admission_permit
+                        )
+
+    def _invoke_owned(
         self,
         provider_id: str,
         task: TaskContract,
@@ -410,7 +465,9 @@ class MacrRuntime:
         )
         provider_admission = self.services.provider_admission
         if requires_provider_admission and (
-            provider_admission is None
+            not isinstance(provider_admission, ProviderAdmissionKernel)
+            or getattr(provider, "admission_guard", None)
+            is not provider_admission
             or context.project_binding_digest is None
             or context.admission_lane is None
             or context.provider_admission_policy_digest

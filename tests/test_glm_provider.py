@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import tempfile
 import unittest
 import uuid
+import weakref
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from macr_runtime.authority import AuthorityScope
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import (
     DelegationClass,
@@ -33,6 +38,7 @@ from macr_runtime.provider_admission import (
     AdmissionLane,
     ProjectAdmissionBinding,
     ProviderAdmissionPermit,
+    ProviderAdmissionKernel,
     ProviderAdmissionRequest,
     glm_provider_admission_policy,
 )
@@ -47,7 +53,7 @@ from macr_runtime.provider_capability import (
 )
 from macr_runtime.token_policy import ModelTokenPolicyResolver, t1_glm_live_policy
 from macr_runtime.runtime import task_contract_digest
-from tests.support import d_drive_tempdir
+from tests.support import DEFAULT_TEST_ROOT, d_drive_tempdir
 
 
 class FakeTransport:
@@ -102,21 +108,21 @@ class StaticKeySource:
         return None
 
 
-class _UnitAdmissionGuard:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def begin_transport(self, permit, request) -> None:
-        if not isinstance(permit, ProviderAdmissionPermit):
-            raise AssertionError("unit permit is invalid")
-        if not isinstance(request, ProviderAdmissionRequest):
-            raise AssertionError("unit request is invalid")
-        self.calls += 1
-
-
 class _UnitAdmittedProvider:
-    def __init__(self, provider: _RawGlmFlashWorkerProvider) -> None:
+    def __init__(
+        self,
+        provider: _RawGlmFlashWorkerProvider,
+        kernel: ProviderAdmissionKernel,
+        test_root: Path,
+    ) -> None:
         self._provider = provider
+        self._kernel = kernel
+        self._cleanup = weakref.finalize(
+            self,
+            shutil.rmtree,
+            test_root,
+            ignore_errors=True,
+        )
 
     def __getattr__(self, name):
         return getattr(self._provider, name)
@@ -130,13 +136,29 @@ class _UnitAdmittedProvider:
             1,
             "test_harness",
         )
-        authorization = AuthorizationReference(
+        authorization = self._kernel.authorities.issue(
             source_kind="test_harness",
             source_id=request_id,
-            digest="d" * 64,
-            revision=1,
-            epoch=0,
-            scope="{}",
+            scope=AuthorityScope(
+                providers=(self._provider.provider_id,),
+                planes=("delegation",),
+                task_types=(task.task_type,),
+                member_digests=(
+                    (task.delegation_approval_sha256,)
+                    if task.delegation_approval_sha256 is not None
+                    else ()
+                ),
+                provider_tier_binding_digests=(
+                    self._provider.capability_binding.binding_digest,
+                ),
+                project_binding_digests=(project.binding_digest,),
+                admission_lanes=(AdmissionLane.ROUTINE.value,),
+                provider_admission_policy_digests=(
+                    self._kernel.policy.policy_digest,
+                ),
+                scope_contract_version=3,
+            ),
+            expires_at=(now + timedelta(minutes=10)).isoformat(),
         )
         policy = glm_provider_admission_policy()
         request = ProviderAdmissionRequest(
@@ -155,47 +177,76 @@ class _UnitAdmittedProvider:
                 self._provider.capability_binding.binding_digest
             ),
         )
-        permit = ProviderAdmissionPermit(
-            request_id=request_id,
-            provider_id=self._provider.provider_id,
-            project_binding_digest=project.binding_digest,
-            admission_lane=AdmissionLane.ROUTINE.value,
-            run_id=run_id,
-            authority_digest=authorization.digest,
-            authority_epoch=authorization.epoch,
-            task_digest=request.task_digest,
-            member_digest=request.member_digest,
-            provider_tier_binding_digest=(
-                request.provider_tier_binding_digest
-            ),
-            policy_digest=policy.policy_digest,
-            capacity_unit=1,
-            fencing_token=1,
-            acquired_at=now.isoformat(),
-            expires_at=(now + timedelta(minutes=10)).isoformat(),
+        permit = self._kernel.try_admit(
+            request,
+            ttl_seconds=600,
         )
         return permit, request
 
-    def invoke(self, task: TaskContract):
-        permit, request = self._admission(task)
-        return self._provider.invoke(
-            task,
-            admission_permit=permit,
-            admission_request=request,
+    def _finish(self, permit, execution) -> None:
+        observation = execution.observation
+        self._kernel.finish(
+            permit,
+            network_attempted=observation.network_attempted,
+            response_received=observation.response_received,
+            provider_http_status=observation.provider_http_status,
+            terminal_persisted=True,
+            terminal_evidence_digest=hashlib.sha256(
+                f"unit:{permit.request_id}".encode("ascii")
+            ).hexdigest(),
         )
 
-    def invoke_observed(self, task: TaskContract):
+    def _invoke_observed(self, task: TaskContract):
         permit, request = self._admission(task)
-        return self._provider.invoke_observed(
-            task,
-            admission_permit=permit,
-            admission_request=request,
-        )
+        try:
+            execution = self._provider.invoke_observed(
+                task,
+                admission_permit=permit,
+                admission_request=request,
+            )
+        except Exception as exc:
+            record = self._kernel.read_request(permit.request_id)
+            if record.state == "granted":
+                self._kernel.cancel_before_transport(permit)
+            elif record.state == "dispatched":
+                diagnostic_method = getattr(exc, "safe_diagnostic", None)
+                diagnostic = (
+                    diagnostic_method()
+                    if callable(diagnostic_method)
+                    else {}
+                )
+                self._kernel.finish(
+                    permit,
+                    network_attempted=diagnostic.get("network_attempted"),
+                    response_received=diagnostic.get("response_received"),
+                    provider_http_status=diagnostic.get("provider_http_status"),
+                    terminal_persisted=True,
+                    terminal_evidence_digest=hashlib.sha256(
+                        f"unit-error:{permit.request_id}".encode("ascii")
+                    ).hexdigest(),
+                )
+            raise
+        self._finish(permit, execution)
+        return execution
+
+    def invoke(self, task: TaskContract):
+        return self._invoke_observed(task).result
+
+    def invoke_observed(self, task: TaskContract):
+        return self._invoke_observed(task)
 
 
 def _GlmFlashWorkerProvider(*args, **kwargs):
-    kwargs.setdefault("admission_guard", _UnitAdmissionGuard())
-    return _UnitAdmittedProvider(_RawGlmFlashWorkerProvider(*args, **kwargs))
+    root = Path(os.environ.get("MACR_TEST_TMP", str(DEFAULT_TEST_ROOT)))
+    root.mkdir(parents=True, exist_ok=True)
+    test_root = Path(tempfile.mkdtemp(prefix="glm-unit-", dir=root))
+    kernel = ProviderAdmissionKernel(test_root / "runtime" / "dispatch.sqlite3")
+    kwargs["admission_guard"] = kernel
+    return _UnitAdmittedProvider(
+        _RawGlmFlashWorkerProvider(*args, **kwargs),
+        kernel,
+        test_root,
+    )
 
 
 def GlmFlashWorkerProvider(*args, **kwargs):

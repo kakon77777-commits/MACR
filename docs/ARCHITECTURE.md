@@ -96,8 +96,11 @@ immediately before key/transport access. Effective target starts at 1,
 candidate target is 2 and revision-1 hard maximum is 8. Above-2 capacity and
 automatic promotion remain NotMeasured. BUSY is nonterminal; ambiguous or
 crashed transport becomes durable provider reconciliation and is never freed
-by TTL alone. This gate is separate from Phase D observation and Phase E
-semantic action admission.
+by TTL alone. Governed target/circuit transitions form an append-only digest
+chain matched to the active projection. Half-open consumes one exact authority
+and only its bound request digest may probe; pre-network failure reopens it.
+This gate is separate from Phase D observation and Phase E semantic action
+admission.
 
 Differential manifests apply one exact probe pack and verifier graph to at least three qualified route candidates. Public comparison rows contain blinded candidate IDs, verifier counts, evidence digests, and costs—never model labels. `probe-plan` and `probe-replay` are manifest/replay commands and perform no provider execution.
 

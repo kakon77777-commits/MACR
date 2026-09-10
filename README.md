@@ -304,7 +304,10 @@ automatic promotion, refill rates and provider-safe concurrency remain
 `NotMeasured`. Project/lane identity is authority-bound. Interactive work gets
 next-slot priority but no permanently idle reserved slot. Unknown network
 outcomes and expired dispatched permits remain capacity-consuming
-`reconciliation_required` evidence and never auto-release or retry.
+`reconciliation_required` evidence and never auto-release or retry. Target and
+circuit changes append immutable receipts whose latest digest must match the
+active projection. Half-open consumes one exact authority for one exact request
+digest; a local pre-network failure reopens rather than closing the circuit.
 
 These commands are implemented, but the T1 route itself is not live-accepted and no exact live T1 manifest is implied by repository state. The separate sequential GLM CLI route has live observations; those do not activate T1 authority.
 

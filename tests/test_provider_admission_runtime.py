@@ -49,6 +49,11 @@ class NoResponseTransport(FakeTransport):
         )
 
 
+class NoOpAdmissionGuard:
+    def begin_transport(self, permit, request):
+        del permit, request
+
+
 class ProviderAdmissionRuntimeTests(unittest.TestCase):
     def test_known_local_approval_failure_releases_capacity_without_transport(self) -> None:
         with d_drive_tempdir() as temp:
@@ -82,6 +87,7 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
                 services,
             ).invoke(provider.provider_id, task, context)
             status = kernel.status(provider.provider_id)
+            accounting = services.accounting.read_invocation(context.run_id)
 
         self.assertEqual(result.status.value, "candidate_failure")
         self.assertEqual(key_source.calls, 1)
@@ -89,6 +95,8 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
         self.assertEqual(status.counts["completed"], 1)
         self.assertEqual(status.counts["reconciliation_required"], 0)
         self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(accounting["billing_state"], "zero_local")
+        self.assertEqual(accounting["currency_cost_usd"], 0.0)
 
     def _context_and_reference(
         self,
@@ -248,6 +256,70 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
         self.assertEqual(events, ())
         self.assertIsNone(accounting)
 
+    def test_pregranted_permit_is_cancelled_on_early_token_refusal(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            kernel = ProviderAdmissionKernel(services.events.path)
+            services = replace(services, provider_admission=kernel)
+            transport = FakeTransport(success_document())
+            key_source = CountingKeySource()
+            provider = self._provider(kernel, transport, key_source)
+            base = delegated_task()
+            task = replace(
+                base,
+                constraints=replace(
+                    base.constraints,
+                    max_output_tokens=4_096,
+                ),
+            )
+            project = ProjectAdmissionBinding(
+                "project-a",
+                1,
+                "operator_asserted",
+            )
+            context, reference = self._context_and_reference(
+                services,
+                task,
+                project,
+                AdmissionLane.ROUTINE,
+            )
+            request = ProviderAdmissionRequest(
+                request_id=str(uuid.uuid4()),
+                provider_id=provider.provider_id,
+                project_binding_digest=project.binding_digest,
+                lane=AdmissionLane.ROUTINE,
+                run_id=context.run_id,
+                authorization=reference,
+                plane=context.plane.value,
+                task_type=task.task_type,
+                task_digest=task_contract_digest(task),
+                member_digest=task.delegation_approval_sha256,
+                batch_id=None,
+                provider_tier_binding_digest=(
+                    context.provider_tier_binding_digest
+                ),
+            )
+            permit = kernel.try_admit(request, ttl_seconds=60)
+
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(
+                provider.provider_id,
+                task,
+                context,
+                provider_admission_permit=permit,
+                provider_admission_request=request,
+            )
+            record = kernel.read_request(request.request_id)
+            status = kernel.status(provider.provider_id)
+
+        self.assertEqual(result.failure_stage, "token_policy")
+        self.assertEqual(record.state, "cancelled")
+        self.assertEqual(status.counts["granted"], 0)
+        self.assertEqual(key_source.calls, 0)
+        self.assertEqual(transport.posts, [])
+
     def test_no_response_terminal_keeps_capacity_in_reconciliation(self) -> None:
         with d_drive_tempdir() as temp:
             services = build_test_services(temp)
@@ -293,6 +365,94 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
             with self.assertRaises(ProviderAdmissionRequiredError):
                 provider.invoke(delegated_task())
 
+        self.assertEqual(key_source.calls, 0)
+        self.assertEqual(transport.posts, [])
+
+    def test_structural_guard_shim_cannot_bypass_shared_kernel(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            kernel = ProviderAdmissionKernel(services.events.path)
+            transport = FakeTransport(success_document())
+            key_source = CountingKeySource()
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=transport,
+                key_source=key_source,
+                approval_store=AllowingApprovalStore(),
+                admission_guard=NoOpAdmissionGuard(),
+            )
+            task = delegated_task()
+            project = ProjectAdmissionBinding(
+                "project-a",
+                1,
+                "operator_asserted",
+            )
+            services = replace(services, provider_admission=kernel)
+            context, reference = self._context_and_reference(
+                services,
+                task,
+                project,
+                AdmissionLane.ROUTINE,
+            )
+            request = ProviderAdmissionRequest(
+                request_id=str(uuid.uuid4()),
+                provider_id=provider.provider_id,
+                project_binding_digest=project.binding_digest,
+                lane=AdmissionLane.ROUTINE,
+                run_id=context.run_id,
+                authorization=reference,
+                plane=context.plane.value,
+                task_type=task.task_type,
+                task_digest=task_contract_digest(task),
+                member_digest=task.delegation_approval_sha256,
+                batch_id=None,
+                provider_tier_binding_digest=(
+                    context.provider_tier_binding_digest
+                ),
+            )
+            permit = kernel.try_admit(request, ttl_seconds=60)
+
+            with self.assertRaises(ProviderAdmissionRequiredError):
+                provider.invoke(
+                    task,
+                    admission_permit=permit,
+                    admission_request=request,
+                )
+            kernel.cancel_before_transport(permit)
+
+        self.assertEqual(key_source.calls, 0)
+        self.assertEqual(transport.posts, [])
+
+    def test_runtime_rejects_provider_bound_to_another_real_kernel(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            shared = ProviderAdmissionKernel(services.events.path)
+            other = ProviderAdmissionKernel(
+                temp / "other-runtime" / "dispatch.sqlite3"
+            )
+            services = replace(services, provider_admission=shared)
+            transport = FakeTransport(success_document())
+            key_source = CountingKeySource()
+            provider = self._provider(other, transport, key_source)
+            task = delegated_task()
+            project = ProjectAdmissionBinding(
+                "project-a",
+                1,
+                "operator_asserted",
+            )
+            context, _ = self._context_and_reference(
+                services,
+                task,
+                project,
+                AdmissionLane.ROUTINE,
+            )
+
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+
+        self.assertEqual(result.failure_stage, "admission")
         self.assertEqual(key_source.calls, 0)
         self.assertEqual(transport.posts, [])
 

@@ -46,6 +46,7 @@ from ..provider_capability import (
     glm_standard_policy,
 )
 from ..provider_admission import (
+    ProviderAdmissionKernel,
     ProviderAdmissionPermit,
     ProviderAdmissionRequest,
 )
@@ -397,7 +398,7 @@ class GlmFlashWorkerProvider(BaseProvider):
         token_policy: ModelTokenPolicy | None = None,
         capability_binding: ProviderTierBinding | None = None,
         capability_policy: ProviderCapabilityPolicy | None = None,
-        admission_guard: Any | None = None,
+        admission_guard: ProviderAdmissionKernel | None = None,
     ) -> None:
         if config.kind != "zai_glm_worker":
             raise ConfigurationError(
@@ -831,7 +832,8 @@ class GlmFlashWorkerProvider(BaseProvider):
         prepared = self._validate_approval_prepared(task)
         begin_transport = getattr(self.admission_guard, "begin_transport", None)
         if (
-            not callable(begin_transport)
+            not isinstance(self.admission_guard, ProviderAdmissionKernel)
+            or not callable(begin_transport)
             or not isinstance(admission_permit, ProviderAdmissionPermit)
             or not isinstance(admission_request, ProviderAdmissionRequest)
         ):

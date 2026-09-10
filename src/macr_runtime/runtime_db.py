@@ -417,9 +417,43 @@ class RuntimeDatabase:
                                 'interactive', 'routine', 'bulk'
                             )
                         ),
+                        half_open_probe_request_digest TEXT,
+                        control_revision INTEGER NOT NULL
+                            CHECK(control_revision >= 1),
+                        control_digest TEXT NOT NULL,
                         last_signal TEXT,
                         updated_at TEXT NOT NULL
                     )""",
+                    """CREATE TABLE IF NOT EXISTS provider_admission_transitions (
+                        transition_id TEXT PRIMARY KEY,
+                        provider_id TEXT NOT NULL,
+                        control_revision INTEGER NOT NULL
+                            CHECK(control_revision >= 1),
+                        prior_control_digest TEXT NOT NULL,
+                        transition_kind TEXT NOT NULL,
+                        authority_digest TEXT,
+                        binding_digest TEXT,
+                        request_id TEXT,
+                        evidence_digest TEXT,
+                        body_json TEXT NOT NULL,
+                        body_sha256 TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL,
+                        UNIQUE(provider_id, control_revision)
+                    )""",
+                    """CREATE TRIGGER IF NOT EXISTS
+                    provider_admission_transitions_no_update
+                    BEFORE UPDATE ON provider_admission_transitions
+                    BEGIN
+                        SELECT RAISE(ABORT,
+                            'provider admission transitions are append-only');
+                    END""",
+                    """CREATE TRIGGER IF NOT EXISTS
+                    provider_admission_transitions_no_delete
+                    BEFORE DELETE ON provider_admission_transitions
+                    BEGIN
+                        SELECT RAISE(ABORT,
+                            'provider admission transitions are append-only');
+                    END""",
                     """CREATE TABLE IF NOT EXISTS provider_admission_projects (
                         provider_id TEXT NOT NULL,
                         project_binding_digest TEXT NOT NULL,

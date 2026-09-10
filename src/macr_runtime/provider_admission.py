@@ -26,6 +26,7 @@ from .runtime_db import RuntimeDatabase
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_PROVIDER_CAPACITY = 8
+_ZERO_DIGEST = "0" * 64
 
 
 def _utc_now() -> datetime:
@@ -88,6 +89,106 @@ def _aware(value: str) -> datetime:
             "provider admission timestamp is invalid"
         )
     return parsed.astimezone(timezone.utc)
+
+
+def _validated_control_state(
+    connection: sqlite3.Connection,
+    policy: "ProviderAdmissionPolicy",
+) -> sqlite3.Row:
+    """Verify the active projection against its immutable latest receipt."""
+
+    state = connection.execute(
+        "SELECT * FROM provider_admission_state WHERE provider_id=?",
+        (policy.provider_id,),
+    ).fetchone()
+    if (
+        state is None
+        or state["policy_digest"] != policy.policy_digest
+        or not 1 <= state["effective_target"] <= policy.candidate_target
+        or state["control_revision"] < 1
+        or not _SHA256.fullmatch(state["control_digest"] or "")
+        or (
+            state["circuit_state"] == "half_open"
+            and not _SHA256.fullmatch(
+                state["half_open_probe_request_digest"] or ""
+            )
+        )
+        or (
+            state["circuit_state"] != "half_open"
+            and state["half_open_probe_request_digest"] is not None
+        )
+    ):
+        raise ProviderAdmissionConflict(
+            "provider admission control state is invalid"
+        )
+    transition = connection.execute(
+        """SELECT * FROM provider_admission_transitions
+        WHERE provider_id=? AND control_revision=?""",
+        (policy.provider_id, state["control_revision"]),
+    ).fetchone()
+    bounds = connection.execute(
+        """SELECT COUNT(*) AS count, MIN(control_revision) AS minimum,
+                  MAX(control_revision) AS maximum
+        FROM provider_admission_transitions WHERE provider_id=?""",
+        (policy.provider_id,),
+    ).fetchone()
+    if (
+        transition is None
+        or bounds["count"] != state["control_revision"]
+        or bounds["minimum"] != 1
+        or bounds["maximum"] != state["control_revision"]
+    ):
+        raise ProviderAdmissionConflict(
+            "provider admission control receipt sequence is invalid"
+        )
+    body_sha256 = hashlib.sha256(
+        transition["body_json"].encode("utf-8")
+    ).hexdigest()
+    try:
+        body = json.loads(transition["body_json"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ProviderAdmissionConflict(
+            "provider admission control receipt is invalid"
+        ) from exc
+    expected = {
+        "schema": "provider_admission_control_transition_v1",
+        "provider_id": policy.provider_id,
+        "policy_digest": policy.policy_digest,
+        "control_revision": state["control_revision"],
+        "prior_control_digest": transition["prior_control_digest"],
+        "transition_kind": transition["transition_kind"],
+        "effective_target": state["effective_target"],
+        "circuit_state": state["circuit_state"],
+        "half_open_probe_request_digest": (
+            state["half_open_probe_request_digest"]
+        ),
+        "last_signal": state["last_signal"],
+        "authority_digest": transition["authority_digest"],
+        "binding_digest": transition["binding_digest"],
+        "request_id": transition["request_id"],
+        "evidence_digest": transition["evidence_digest"],
+        "created_at": transition["created_at"],
+    }
+    previous = None
+    if state["control_revision"] > 1:
+        previous = connection.execute(
+            """SELECT body_sha256 FROM provider_admission_transitions
+            WHERE provider_id=? AND control_revision=?""",
+            (policy.provider_id, state["control_revision"] - 1),
+        ).fetchone()
+    expected_prior = (
+        _ZERO_DIGEST if previous is None else previous["body_sha256"]
+    )
+    if (
+        body != expected
+        or body_sha256 != transition["body_sha256"]
+        or body_sha256 != state["control_digest"]
+        or transition["prior_control_digest"] != expected_prior
+    ):
+        raise ProviderAdmissionConflict(
+            "provider admission control projection does not match receipt"
+        )
+    return state
 
 
 class AdmissionLane(str, Enum):
@@ -317,6 +418,7 @@ class ProviderAdmissionCircuitBinding:
     from_state: str
     to_state: str
     policy_revision: int
+    probe_request_digest: str
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -342,6 +444,14 @@ class ProviderAdmissionCircuitBinding:
                 maximum=1_000_000,
             ),
         )
+        object.__setattr__(
+            self,
+            "probe_request_digest",
+            _digest(
+                "probe_request_digest",
+                self.probe_request_digest,
+            ),
+        )
 
     @classmethod
     def create(
@@ -350,6 +460,7 @@ class ProviderAdmissionCircuitBinding:
         *,
         from_state: str,
         to_state: str,
+        probe_request_digest: str,
     ) -> "ProviderAdmissionCircuitBinding":
         if not isinstance(policy, ProviderAdmissionPolicy):
             raise ValueError("policy must be a ProviderAdmissionPolicy")
@@ -359,6 +470,7 @@ class ProviderAdmissionCircuitBinding:
             from_state=from_state,
             to_state=to_state,
             policy_revision=policy.revision,
+            probe_request_digest=probe_request_digest,
         )
 
     @property
@@ -372,6 +484,7 @@ class ProviderAdmissionCircuitBinding:
             "from_state": self.from_state,
             "to_state": self.to_state,
             "policy_revision": self.policy_revision,
+            "probe_request_digest": self.probe_request_digest,
         }
 
 
@@ -443,6 +556,29 @@ class ProviderAdmissionRequest:
                 self.provider_tier_binding_digest,
             ),
         )
+
+    @property
+    def binding_digest(self) -> str:
+        return sha256_id("provider_admission_request_v1", self.to_dict())
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "request_id": self.request_id,
+            "provider_id": self.provider_id,
+            "project_binding_digest": self.project_binding_digest,
+            "lane": self.lane.value,
+            "run_id": self.run_id,
+            "authorization_digest": self.authorization.digest,
+            "authorization_epoch": self.authorization.epoch,
+            "plane": self.plane,
+            "task_type": self.task_type,
+            "task_digest": self.task_digest,
+            "member_digest": self.member_digest,
+            "batch_id": self.batch_id,
+            "provider_tier_binding_digest": (
+                self.provider_tier_binding_digest
+            ),
+        }
 
 
 @dataclass(frozen=True)
@@ -576,6 +712,165 @@ class ProviderAdmissionKernel:
             raise ValueError("provider admission clock must be timezone-aware")
         return value.astimezone(timezone.utc)
 
+    @staticmethod
+    def _consume_activation_authority(
+        connection: sqlite3.Connection,
+        reference: AuthorizationReference,
+        now: str,
+    ) -> None:
+        changed = connection.execute(
+            """UPDATE dispatch_authorities SET revoked_at=?
+            WHERE source_kind=? AND source_id=? AND revision=? AND epoch=?
+              AND body_sha256=? AND revoked_at IS NULL""",
+            (
+                now,
+                reference.source_kind,
+                reference.source_id,
+                reference.revision,
+                reference.epoch,
+                reference.digest,
+            ),
+        ).rowcount
+        if changed != 1:
+            raise ProviderAdmissionConflict(
+                "provider admission activation authority was already consumed"
+            )
+
+    def _append_control_transition(
+        self,
+        connection: sqlite3.Connection,
+        state: sqlite3.Row | None,
+        *,
+        transition_kind: str,
+        effective_target: int,
+        circuit_state: str,
+        half_open_probe_request_digest: str | None,
+        last_signal: str,
+        now: str,
+        authority_digest: str | None = None,
+        binding_digest: str | None = None,
+        request_id: str | None = None,
+        evidence_digest: str | None = None,
+    ) -> sqlite3.Row:
+        kind = _identifier("transition_kind", transition_kind)
+        signal = _identifier("last_signal", last_signal)
+        if effective_target not in {
+            self.policy.effective_target,
+            self.policy.candidate_target,
+        }:
+            raise ProviderAdmissionConflict(
+                "provider admission transition target is invalid"
+            )
+        if circuit_state not in {"closed", "open", "half_open"}:
+            raise ProviderAdmissionConflict(
+                "provider admission transition circuit is invalid"
+            )
+        probe_digest = _optional_digest(
+            "half_open_probe_request_digest",
+            half_open_probe_request_digest,
+        )
+        if (circuit_state == "half_open") != (probe_digest is not None):
+            raise ProviderAdmissionConflict(
+                "half-open control state requires one exact probe"
+            )
+        authority = _optional_digest("authority_digest", authority_digest)
+        binding = _optional_digest("binding_digest", binding_digest)
+        evidence = _optional_digest("evidence_digest", evidence_digest)
+        normalized_request = (
+            _uuid4("request_id", request_id)
+            if request_id is not None
+            else None
+        )
+        revision = 1 if state is None else state["control_revision"] + 1
+        prior_digest = _ZERO_DIGEST if state is None else state["control_digest"]
+        document = {
+            "schema": "provider_admission_control_transition_v1",
+            "provider_id": self.policy.provider_id,
+            "policy_digest": self.policy.policy_digest,
+            "control_revision": revision,
+            "prior_control_digest": prior_digest,
+            "transition_kind": kind,
+            "effective_target": effective_target,
+            "circuit_state": circuit_state,
+            "half_open_probe_request_digest": probe_digest,
+            "last_signal": signal,
+            "authority_digest": authority,
+            "binding_digest": binding,
+            "request_id": normalized_request,
+            "evidence_digest": evidence,
+            "created_at": now,
+        }
+        body_json = canonical_json_bytes(document).decode("utf-8")
+        body_sha256 = hashlib.sha256(body_json.encode("utf-8")).hexdigest()
+        connection.execute(
+            """INSERT INTO provider_admission_transitions(
+                transition_id, provider_id, control_revision,
+                prior_control_digest, transition_kind, authority_digest,
+                binding_digest, request_id, evidence_digest, body_json,
+                body_sha256, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(uuid.uuid4()),
+                self.policy.provider_id,
+                revision,
+                prior_digest,
+                kind,
+                authority,
+                binding,
+                normalized_request,
+                evidence,
+                body_json,
+                body_sha256,
+                now,
+            ),
+        )
+        if state is None:
+            connection.execute(
+                """INSERT INTO provider_admission_state(
+                    provider_id, policy_digest, effective_target,
+                    circuit_state, grant_sequence, last_granted_lane,
+                    half_open_probe_request_digest, control_revision,
+                    control_digest, last_signal, updated_at
+                ) VALUES (?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)""",
+                (
+                    self.policy.provider_id,
+                    self.policy.policy_digest,
+                    effective_target,
+                    circuit_state,
+                    probe_digest,
+                    revision,
+                    body_sha256,
+                    signal,
+                    now,
+                ),
+            )
+        else:
+            changed = connection.execute(
+                """UPDATE provider_admission_state
+                SET effective_target=?, circuit_state=?,
+                    half_open_probe_request_digest=?, control_revision=?,
+                    control_digest=?, last_signal=?, updated_at=?
+                WHERE provider_id=? AND control_revision=?
+                  AND control_digest=?""",
+                (
+                    effective_target,
+                    circuit_state,
+                    probe_digest,
+                    revision,
+                    body_sha256,
+                    signal,
+                    now,
+                    self.policy.provider_id,
+                    state["control_revision"],
+                    state["control_digest"],
+                ),
+            ).rowcount
+            if changed != 1:
+                raise ProviderAdmissionConflict(
+                    "provider admission control projection changed concurrently"
+                )
+        return _validated_control_state(connection, self.policy)
+
     def _install_policy(self) -> None:
         body = canonical_json_bytes(self.policy.to_dict()).decode("utf-8")
         body_sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -617,28 +912,18 @@ class ProviderAdmissionKernel:
                 (self.policy.provider_id,),
             ).fetchone()
             if state is None:
-                connection.execute(
-                    """INSERT INTO provider_admission_state(
-                        provider_id, policy_digest, effective_target,
-                        circuit_state, grant_sequence, last_granted_lane,
-                        last_signal, updated_at
-                    ) VALUES (?, ?, ?, 'closed', 0, NULL, NULL, ?)""",
-                    (
-                        self.policy.provider_id,
-                        self.policy.policy_digest,
-                        self.policy.effective_target,
-                        now,
-                    ),
+                self._append_control_transition(
+                    connection,
+                    None,
+                    transition_kind="genesis",
+                    effective_target=self.policy.effective_target,
+                    circuit_state="closed",
+                    half_open_probe_request_digest=None,
+                    last_signal="policy_installed",
+                    now=now,
                 )
-            elif (
-                state["policy_digest"] != self.policy.policy_digest
-                or not 1
-                <= state["effective_target"]
-                <= self.policy.candidate_target
-            ):
-                raise ProviderAdmissionConflict(
-                    "provider admission active policy is invalid"
-                )
+            else:
+                _validated_control_state(connection, self.policy)
             connection.commit()
         except Exception:
             connection.rollback()
@@ -679,17 +964,14 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            state = connection.execute(
-                "SELECT * FROM provider_admission_state WHERE provider_id=?",
-                (self.policy.provider_id,),
-            ).fetchone()
-            if (
-                state is None
-                or state["policy_digest"] != self.policy.policy_digest
-                or state["circuit_state"] != "closed"
-            ):
+            state = _validated_control_state(connection, self.policy)
+            if state["circuit_state"] != "closed":
                 raise ProviderAdmissionConflict(
                     "provider admission target cannot change in current state"
+                )
+            if state["effective_target"] == target.target:
+                raise ProviderAdmissionConflict(
+                    "provider admission target is already active"
                 )
             active_or_waiting = connection.execute(
                 """SELECT COUNT(*) FROM provider_admission_requests
@@ -702,11 +984,18 @@ class ProviderAdmissionKernel:
                 raise ProviderAdmissionConflict(
                     "provider admission target requires an idle provider"
                 )
-            connection.execute(
-                """UPDATE provider_admission_state
-                SET effective_target=?, last_signal='target_activated',
-                    updated_at=? WHERE provider_id=?""",
-                (target.target, now, self.policy.provider_id),
+            self._consume_activation_authority(connection, reference, now)
+            self._append_control_transition(
+                connection,
+                state,
+                transition_kind="target_activated",
+                effective_target=target.target,
+                circuit_state="closed",
+                half_open_probe_request_digest=None,
+                last_signal="target_activated",
+                now=now,
+                authority_digest=reference.digest,
+                binding_digest=target.binding_digest,
             )
             connection.commit()
         except Exception:
@@ -744,10 +1033,7 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            state = connection.execute(
-                "SELECT * FROM provider_admission_state WHERE provider_id=?",
-                (self.policy.provider_id,),
-            ).fetchone()
+            state = _validated_control_state(connection, self.policy)
             unresolved = connection.execute(
                 """SELECT COUNT(*) FROM provider_admission_requests
                 WHERE provider_id=? AND state='reconciliation_required'""",
@@ -761,20 +1047,27 @@ class ProviderAdmissionKernel:
                 (self.policy.provider_id,),
             ).fetchone()[0]
             if (
-                state is None
-                or state["policy_digest"] != self.policy.policy_digest
-                or state["circuit_state"] != binding.from_state
+                state["circuit_state"] != binding.from_state
                 or unresolved
                 or active_or_waiting
             ):
                 raise ProviderAdmissionConflict(
                     "provider admission circuit cannot enter half-open"
                 )
-            connection.execute(
-                """UPDATE provider_admission_state
-                SET circuit_state='half_open', last_signal='half_open_authorized',
-                    updated_at=? WHERE provider_id=?""",
-                (now, self.policy.provider_id),
+            self._consume_activation_authority(connection, reference, now)
+            self._append_control_transition(
+                connection,
+                state,
+                transition_kind="half_open_activated",
+                effective_target=state["effective_target"],
+                circuit_state="half_open",
+                half_open_probe_request_digest=(
+                    binding.probe_request_digest
+                ),
+                last_signal="half_open_authorized",
+                now=now,
+                authority_digest=reference.digest,
+                binding_digest=binding.binding_digest,
             )
             connection.commit()
         except Exception:
@@ -865,6 +1158,8 @@ class ProviderAdmissionKernel:
         connection: sqlite3.Connection,
         now: datetime,
     ) -> None:
+        state = _validated_control_state(connection, self.policy)
+        expired_active_request_id: str | None = None
         rows = connection.execute(
             """SELECT * FROM provider_admission_requests
             WHERE provider_id = ?
@@ -889,12 +1184,19 @@ class ProviderAdmissionKernel:
                   AND state IN ('granted', 'dispatched')""",
                 (now.isoformat(), row["request_id"]),
             )
-            connection.execute(
-                """UPDATE provider_admission_state
-                SET circuit_state='open', last_signal='permit_expired',
-                    updated_at=?
-                WHERE provider_id=?""",
-                (now.isoformat(), row["provider_id"]),
+            if expired_active_request_id is None:
+                expired_active_request_id = row["request_id"]
+        if expired_active_request_id is not None:
+            self._append_control_transition(
+                connection,
+                state,
+                transition_kind="permit_expired",
+                effective_target=state["effective_target"],
+                circuit_state="open",
+                half_open_probe_request_digest=None,
+                last_signal="permit_expired",
+                now=now.isoformat(),
+                request_id=expired_active_request_id,
             )
 
     def _selected_waiting(
@@ -978,24 +1280,20 @@ class ProviderAdmissionKernel:
         try:
             connection.execute("BEGIN IMMEDIATE")
             self._expire(connection, now)
-            state = connection.execute(
-                "SELECT * FROM provider_admission_state WHERE provider_id=?",
-                (request.provider_id,),
-            ).fetchone()
-            if (
-                state is None
-                or state["policy_digest"] != self.policy.policy_digest
-                or not 1
-                <= state["effective_target"]
-                <= self.policy.candidate_target
-            ):
-                raise ProviderAdmissionConflict(
-                    "provider admission state is unavailable"
-                )
+            state = _validated_control_state(connection, self.policy)
             if state["circuit_state"] not in {"closed", "half_open"}:
                 connection.commit()
                 raise ProviderAdmissionReconciliationError(
                     "provider admission circuit requires reconciliation"
+                )
+            if (
+                state["circuit_state"] == "half_open"
+                and request.binding_digest
+                != state["half_open_probe_request_digest"]
+            ):
+                connection.commit()
+                raise ProviderAdmissionReconciliationError(
+                    "provider admission half-open slot is bound to another probe"
                 )
             unresolved = connection.execute(
                 """SELECT COUNT(*) FROM provider_admission_requests
@@ -1177,6 +1475,7 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            _validated_control_state(connection, self.policy)
             row = self._require_permit_row(connection, permit)
             if row["state"] != "granted":
                 raise ProviderAdmissionConflict(
@@ -1244,6 +1543,7 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            state = _validated_control_state(connection, self.policy)
             row = self._require_permit_row(connection, permit)
             if not self._row_matches_request(
                 row,
@@ -1256,6 +1556,14 @@ class ProviderAdmissionKernel:
             if row["state"] != "granted":
                 raise ProviderAdmissionConflict(
                     "provider admission permit is not a fresh grant"
+                )
+            if (
+                state["circuit_state"] == "half_open"
+                and request.binding_digest
+                != state["half_open_probe_request_digest"]
+            ):
+                raise ProviderAdmissionConflict(
+                    "provider admission permit is not the authorized probe"
                 )
             connection.execute(
                 """UPDATE provider_admission_requests
@@ -1308,6 +1616,7 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            state = _validated_control_state(connection, self.policy)
             row = self._require_permit_row(connection, permit)
             if row["state"] != "dispatched":
                 raise ProviderAdmissionConflict(
@@ -1319,19 +1628,28 @@ class ProviderAdmissionKernel:
                 signal = "unknown_after_dispatch"
             else:
                 request_state = "completed"
-                circuit_state = (
-                    "open"
-                    if provider_http_status == 429
+                provider_pressure = (
+                    provider_http_status == 429
                     or (
                         provider_http_status is not None
                         and 500 <= provider_http_status <= 599
                     )
-                    else "closed"
                 )
+                circuit_state = "open" if provider_pressure else "closed"
+                if (
+                    state["circuit_state"] == "half_open"
+                    and network_attempted is False
+                ):
+                    # A local failure does not prove provider recovery.
+                    circuit_state = "open"
                 signal = (
                     f"http_{provider_http_status}"
                     if provider_http_status is not None
-                    else "known_pre_network_terminal"
+                    else (
+                        "known_pre_network_terminal"
+                        if network_attempted is False
+                        else "response_received"
+                    )
                 )
                 self._decrement_project(connection, row, now)
             connection.execute(
@@ -1340,11 +1658,35 @@ class ProviderAdmissionKernel:
                 WHERE request_id=?""",
                 (request_state, now, evidence, permit.request_id),
             )
-            connection.execute(
-                """UPDATE provider_admission_state
-                SET circuit_state=?, last_signal=?, updated_at=?
-                WHERE provider_id=?""",
-                (circuit_state, signal, now, permit.provider_id),
+            transition_kind = (
+                "unknown_after_dispatch"
+                if ambiguous
+                else (
+                    "half_open_succeeded"
+                    if state["circuit_state"] == "half_open"
+                    and circuit_state == "closed"
+                    else (
+                        "half_open_failed"
+                        if state["circuit_state"] == "half_open"
+                        else (
+                            "circuit_opened"
+                            if circuit_state == "open"
+                            else "terminal_observed"
+                        )
+                    )
+                )
+            )
+            self._append_control_transition(
+                connection,
+                state,
+                transition_kind=transition_kind,
+                effective_target=state["effective_target"],
+                circuit_state=circuit_state,
+                half_open_probe_request_digest=None,
+                last_signal=signal,
+                now=now,
+                request_id=permit.request_id,
+                evidence_digest=evidence,
             )
             connection.commit()
         except Exception:
@@ -1430,6 +1772,7 @@ class ProviderAdmissionKernel:
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            state = _validated_control_state(connection, self.policy)
             row = connection.execute(
                 """SELECT * FROM provider_admission_requests
                 WHERE request_id=?""",
@@ -1451,15 +1794,17 @@ class ProviderAdmissionKernel:
                 WHERE provider_id=? AND state='reconciliation_required'""",
                 (row["provider_id"],),
             ).fetchone()[0]
-            connection.execute(
-                """UPDATE provider_admission_state
-                SET circuit_state=?, last_signal='reconciled', updated_at=?
-                WHERE provider_id=?""",
-                (
-                    "open" if remaining else "closed",
-                    now,
-                    row["provider_id"],
-                ),
+            self._append_control_transition(
+                connection,
+                state,
+                transition_kind="reconciliation_resolved",
+                effective_target=state["effective_target"],
+                circuit_state="open" if remaining else "closed",
+                half_open_probe_request_digest=None,
+                last_signal="reconciled",
+                now=now,
+                request_id=request,
+                evidence_digest=evidence,
             )
             connection.commit()
         except Exception:
@@ -1477,10 +1822,7 @@ class ProviderAdmissionKernel:
             )
         connection = self.database.connect()
         try:
-            state = connection.execute(
-                "SELECT * FROM provider_admission_state WHERE provider_id=?",
-                (provider,),
-            ).fetchone()
+            state = _validated_control_state(connection, self.policy)
             rows = connection.execute(
                 """SELECT state, COUNT(*) AS count
                 FROM provider_admission_requests WHERE provider_id=?
@@ -1524,16 +1866,6 @@ class ProviderAdmissionKernel:
             )
         finally:
             connection.close()
-        if (
-            state is None
-            or state["policy_digest"] != self.policy.policy_digest
-            or not 1
-            <= state["effective_target"]
-            <= self.policy.candidate_target
-        ):
-            raise ProviderAdmissionConflict(
-                "provider admission status is unavailable"
-            )
         counts = {
             name: 0
             for name in (
@@ -1670,20 +2002,7 @@ def read_provider_admission_status(
             raise ProviderAdmissionConflict(
                 "provider admission policy is invalid"
             )
-        state = connection.execute(
-            "SELECT * FROM provider_admission_state WHERE provider_id=?",
-            (provider,),
-        ).fetchone()
-        if (
-            state is None
-            or state["policy_digest"] != policy.policy_digest
-            or not 1
-            <= state["effective_target"]
-            <= policy.candidate_target
-        ):
-            raise ProviderAdmissionConflict(
-                "provider admission state is unavailable"
-            )
+        state = _validated_control_state(connection, policy)
         rows = connection.execute(
             """SELECT state, COUNT(*) AS count
             FROM provider_admission_requests WHERE provider_id=?

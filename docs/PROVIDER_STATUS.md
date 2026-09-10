@@ -109,7 +109,10 @@ lane bindings live in authority scope v3 rather than task text. A saturated
 request is BUSY before dispatch/accounting/key access. A no-response or
 incomplete terminal consumes a reconciliation slot and opens the provider
 circuit until exact evidence-bound resolution. `admission-status` is read-only
-and content-free.
+and content-free. Active target/circuit state must match its append-only receipt
+chain. Half-open consumes a one-use authority bound to one exact request digest;
+another request cannot borrow the probe and a pre-network failure reopens the
+circuit.
 
 ## Claude boundary
 

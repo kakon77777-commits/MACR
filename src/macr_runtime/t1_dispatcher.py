@@ -837,12 +837,10 @@ class T1Dispatcher:
         evidence = self._runtime_evidence(run_id, failure_type=failure_type)
         if not evidence["dispatched"]:
             digest = str(evidence["terminal_evidence_digest"])
-            record = self.queue.fail(
+            record = self.queue.release_before_dispatch(
                 claim.member_id,
                 claim.dispatcher_id,
                 claim.fencing_token,
-                terminal_evidence_digest=digest,
-                observed_cost_usd=0.0,
             )
             return T1DispatchResult(
                 manifest_digest=manifest.manifest_digest,

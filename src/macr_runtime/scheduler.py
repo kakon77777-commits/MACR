@@ -849,6 +849,76 @@ class PlanQueue:
             attempts=row["attempts"],
         )
 
+    def release_before_dispatch(
+        self,
+        member_id: str,
+        dispatcher_id: str,
+        fencing_token: int,
+    ) -> QueueMemberRecord:
+        """Return an unused claim to the queue without consuming its attempt."""
+
+        member = _digest("member_id", member_id)
+        dispatcher = _identifier("dispatcher_id", dispatcher_id)
+        if (
+            isinstance(fencing_token, bool)
+            or not isinstance(fencing_token, int)
+            or fencing_token < 1
+        ):
+            raise ValueError("fencing_token must be positive integer")
+        now = self._current_time()
+        connection = self.database.connect()
+        expired = False
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM plan_queue_members WHERE member_id = ?",
+                (member,),
+            ).fetchone()
+            if row is None:
+                raise DispatchLeaseError("queue member does not exist")
+            if row["state"] != QueueMemberState.CLAIMED.value:
+                raise DispatchLeaseError("queue member is not claimed")
+            if (
+                row["lease_holder"] != dispatcher
+                or row["fencing_token"] != fencing_token
+            ):
+                raise DispatchLeaseError(
+                    "queue lease holder or fencing token is invalid"
+                )
+            if _aware(row["lease_expires_at"]) <= now:
+                connection.execute(
+                    """UPDATE plan_queue_members
+                    SET state='reconciliation_required', terminal_at=?
+                    WHERE member_id=? AND state='claimed'""",
+                    (now.isoformat(), member),
+                )
+                expired = True
+            else:
+                changed = connection.execute(
+                    """UPDATE plan_queue_members
+                    SET state='queued', lease_holder=NULL,
+                        fencing_token=NULL, lease_expires_at=NULL,
+                        attempts=0
+                    WHERE member_id=? AND state='claimed'
+                      AND lease_holder=? AND fencing_token=?""",
+                    (member, dispatcher, fencing_token),
+                ).rowcount
+                if changed != 1:
+                    raise DispatchLeaseError(
+                        "queue member release lost atomic ownership"
+                    )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        if expired:
+            raise DispatchLeaseError(
+                "expired queue lease requires reconciliation"
+            )
+        return self.read_member(member)
+
     def _terminal(
         self,
         state: QueueMemberState,
