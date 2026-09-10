@@ -171,7 +171,7 @@ class ProviderAdmissionMultiprocessTests(unittest.TestCase):
         self.assertEqual(status.counts["granted"], 2)
         self.assertEqual(status.effective_target, 2)
 
-    def test_default_eight_grants_eight_distinct_projects(self) -> None:
+    def test_sixteen_processes_receive_exactly_eight_default_grants(self) -> None:
         with d_drive_tempdir() as temp:
             database = temp / "runtime" / "dispatch.sqlite3"
             policy = glm_provider_admission_policy()
@@ -182,7 +182,7 @@ class ProviderAdmissionMultiprocessTests(unittest.TestCase):
                     1,
                     "operator_asserted",
                 )
-                for index in range(8)
+                for index in range(16)
             )
             authorities = DispatchAuthorityStore(database)
             reference = authorities.issue(
@@ -259,10 +259,10 @@ class ProviderAdmissionMultiprocessTests(unittest.TestCase):
         }
         self.assertEqual(
             outcome_counts,
-            {"granted": 8, "busy": 0, "error": 0, "start_timeout": 0},
+            {"granted": 8, "busy": 8, "error": 0, "start_timeout": 0},
         )
         self.assertEqual(status.counts["granted"], 8)
-        self.assertEqual(status.counts["waiting"], 0)
+        self.assertEqual(status.counts["waiting"], 8)
         self.assertEqual(status.effective_target, 8)
 
 

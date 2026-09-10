@@ -56,11 +56,14 @@ can install revision 2 directly.
 
 - policy contract accepts `8/16/32/8` and rejects values outside 1–32;
 - exact target transitions succeed at representative values 1, 7, 16, 24, 32;
-- eight synchronized distinct projects receive exactly eight default grants;
+- sixteen synchronized distinct projects receive exactly eight default grants
+  and eight BUSY results;
 - an exact downgrade to target 2 still permits only two grants;
 - per-project cap, fairness, BUSY, receipt, circuit, expiry, and transport-edge
   attacks remain green;
 - legacy revision-1 state cannot be silently upgraded;
+- target and half-open activation revalidate authority inside the same write
+  lock that consumes it, closing epoch/revocation races;
 - full repository, v0.6 compatibility, and Phase-C gates remain offline.
 
 This addendum authorizes no shared-runtime migration, provider call, target

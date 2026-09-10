@@ -6,6 +6,7 @@ import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.errors import (
@@ -530,6 +531,148 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
 
 
 class ProviderAdmissionKernelTests(unittest.TestCase):
+    def test_target_activation_revalidates_epoch_under_write_lock(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            target = ProviderAdmissionTargetBinding.create(
+                kernel.policy,
+                target=32,
+            )
+            reference = authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="stale-target-thirty-two",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_capacity_target",),
+                    provider_admission_target_digests=(
+                        target.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            original_verify = kernel.authorities.verify
+
+            def verify_then_supersede(*args, **kwargs):
+                result = original_verify(*args, **kwargs)
+                kernel.authorities.advance_epoch(
+                    reason_digest="d" * 64,
+                    state="open",
+                )
+                return result
+
+            with patch.object(
+                kernel.authorities,
+                "verify",
+                side_effect=verify_then_supersede,
+            ):
+                with self.assertRaisesRegex(
+                    DispatchAuthorizationError,
+                    "stale epoch",
+                ):
+                    kernel.activate_target(target, reference)
+            status = kernel.status(kernel.policy.provider_id)
+            connection = sqlite3.connect(path)
+            try:
+                transitions = connection.execute(
+                    "SELECT COUNT(*) FROM provider_admission_transitions"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertEqual(status.effective_target, 8)
+        self.assertEqual(transitions, 1)
+
+    def test_half_open_activation_revalidates_authority_under_write_lock(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            dispatch_reference = self._authority(
+                authorities,
+                (self.project_a,),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            opening_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            opening = kernel.try_admit(opening_request, ttl_seconds=60)
+            kernel.begin_transport(opening, opening_request)
+            kernel.finish(
+                opening,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="a" * 64,
+            )
+            probe_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.INTERACTIVE,
+            )
+            binding = ProviderAdmissionCircuitBinding.create(
+                kernel.policy,
+                from_state="open",
+                to_state="half_open",
+                probe_request_digest=probe_request.binding_digest,
+            )
+            circuit_reference = authorities.issue(
+                source_kind="operator_circuit_authority",
+                source_id="revoked-half-open",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_circuit_activation",),
+                    task_types=("provider_circuit_half_open",),
+                    provider_admission_circuit_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            original_verify = kernel.authorities.verify
+
+            def verify_then_revoke(reference_arg, *args, **kwargs):
+                result = original_verify(reference_arg, *args, **kwargs)
+                if reference_arg == circuit_reference:
+                    authorities.revoke(circuit_reference)
+                return result
+
+            with patch.object(
+                kernel.authorities,
+                "verify",
+                side_effect=verify_then_revoke,
+            ):
+                with self.assertRaisesRegex(
+                    DispatchAuthorizationError,
+                    "revoked",
+                ):
+                    kernel.activate_half_open(
+                        binding,
+                        circuit_reference,
+                        probe_request,
+                    )
+            status = kernel.status(kernel.policy.provider_id)
+            connection = sqlite3.connect(path)
+            try:
+                transitions = connection.execute(
+                    "SELECT COUNT(*) FROM provider_admission_transitions"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(transitions, 2)
+
     def test_operator_can_activate_any_target_through_hard_max(self) -> None:
         for selected_target in (1, 7, 16, 24, 32):
             with self.subTest(target=selected_target), d_drive_tempdir() as temp:

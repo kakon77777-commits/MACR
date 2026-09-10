@@ -1097,6 +1097,14 @@ class ProviderAdmissionKernel:
         try:
             connection.execute("BEGIN IMMEDIATE")
             state = self._validated_state(connection)
+            self.authorities.verify_in_transaction(
+                connection,
+                reference,
+                provider_id=self.policy.provider_id,
+                plane="provider_capacity_activation",
+                task_type="provider_capacity_target",
+                provider_admission_target_digest=target.binding_digest,
+            )
             if state["circuit_state"] != "closed":
                 raise ProviderAdmissionConflict(
                     "provider admission target cannot change in current state"
@@ -1178,6 +1186,14 @@ class ProviderAdmissionKernel:
             connection.execute("BEGIN IMMEDIATE")
             state = self._validated_state(connection)
             self._verify_authority_locked(connection, probe_request)
+            self.authorities.verify_in_transaction(
+                connection,
+                reference,
+                provider_id=self.policy.provider_id,
+                plane="provider_circuit_activation",
+                task_type="provider_circuit_half_open",
+                provider_admission_circuit_digest=binding.binding_digest,
+            )
             unresolved = connection.execute(
                 """SELECT COUNT(*) FROM provider_admission_requests
                 WHERE provider_id=? AND state='reconciliation_required'""",
