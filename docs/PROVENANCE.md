@@ -602,3 +602,12 @@ provider/network call, paid/local generation, shared-state migration, target-2
 activation, merge, tag, push, release, deployment, or adoption occurred. Exact
 evidence and retained limits are recorded in
 `docs/checkpoints/MACR-v0.7.0a0-provider-admission-kernel-2026-09-10.md`.
+
+Later on 2026-09-10 Neo explicitly authorized update and merge while deferring
+the target-2 bounded live probe. Canonical `main` and `origin/main`
+fast-forwarded from `f806fdb0069fcaad28ec1d20f7fa0fc85e8b405e` to the exact
+reviewed subject `cc6a42f1fc1c838dcaa1cabfc96eff30b44501e1` / tree
+`aff03936ef2db85380a341382168ae4d424743e1`. Post-merge v0.6 and Phase-C gates
+both passed on that exact subject with network/provider false. The shared
+runtime remained schema 7 and target 2 remained unactivated. The pre-existing
+untracked route request and Grok wrapper were preserved.

@@ -2,7 +2,7 @@
 
 Date: 2026-09-10
 
-Status: offline implementation candidate; not merged, released, deployed, migrated, or live-activated
+Status: merged and published to `main`; not released, deployed, migrated, or live-activated
 
 ## Exact implementation subject
 
@@ -104,3 +104,25 @@ for the offline Provider Admission Kernel slice only.
   required.
 - Shared runtime schema migration and live target activation require separate
   operator decisions after exact preflight and quiescence checks.
+
+## Authorized merge and publication outcome
+
+Later on 2026-09-10, Neo explicitly authorized update and merge while deferring
+the target-2 bounded live probe. Canonical `main` fast-forwarded from
+`f806fdb0069fcaad28ec1d20f7fa0fc85e8b405e` to the exact reviewed implementation
+and documentation subject `cc6a42f1fc1c838dcaa1cabfc96eff30b44501e1` /
+tree `aff03936ef2db85380a341382168ae4d424743e1`.
+
+Post-merge verification on that exact clean subject passed `verify-v06.ps1`
+with 880 inherited tests, two platform skips, 198 focused tests, summary digest
+`0341aeaffec50ddf19244cf9ce94cb082c1f1a2a2927466452d024a788ee8fc5`, five
+T1 complete-path processes, 32 SQLite bootstrap processes, and five quiet
+census samples. The Phase-C gate passed 98 focused tests with wheel SHA
+`f7f31d953e1235c898c8486bb59ff1f6937930cb099043b2f524155b620afa9d`.
+Both reported network/provider false and Phase D false.
+
+`origin/main` was then fast-forwarded to the same commit. The existing untracked
+`REQUEST_FOR_CODEX_T1_LIVE_ROUTE.md` and `scripts/invoke-grok.ps1` remained
+untouched. The shared runtime remained schema 7; no production credential,
+real provider call, runtime migration, target-2 activation, tag, release, or
+deployment occurred.
