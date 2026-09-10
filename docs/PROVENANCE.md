@@ -611,3 +611,29 @@ reviewed subject `cc6a42f1fc1c838dcaa1cabfc96eff30b44501e1` / tree
 both passed on that exact subject with network/provider false. The shared
 runtime remained schema 7 and target 2 remained unactivated. The pre-existing
 untracked route request and Grok wrapper were preserved.
+
+## v0.7.0a0 scalable Provider Admission targets
+
+Later on 2026-09-10 Neo explicitly rejected target 2 as a standing product
+ceiling because many projects and conversations use GLM concurrently. The
+offline revision-2 implementation subject is
+`e55f1a4ccc8fe8be0020da6b807d62a59a4a778b` / tree
+`4e67225937c1a7ac55c6052a61e1296d350808f0`.
+
+Revision 2 starts at effective target 8, records 16 as a review marker, sets a
+finite hard maximum 32 and per-project cap 8, and accepts any exact
+authority-selected integer target from 1 through 32. A Twin-reproduced epoch
+race caused both target and circuit activation to gain lock-local authority
+revalidation before authority consumption and receipt append. Revision-1
+state cannot silently gain the new capacity.
+
+The exact candidate passed 874 non-global-census tests with two platform skips,
+six non-census multiprocess tests, 58 focused admission/runtime/T1 tests, and a
+16-process exact 8-grant/8-BUSY control. Four global census tests and the
+composite gates were explicitly deferred because read-only census observed one
+other matching MACR/GLM process. No attribution was inferred from timing and no
+external process was interrupted. The shared runtime remained schema 7; this
+candidate performed no production credential read, real provider call,
+migration, target activation, retry, fallback, release, or deployment. Full
+details are in
+`docs/checkpoints/MACR-v0.7.0a0-provider-admission-scalable-targets-2026-09-10.md`.
