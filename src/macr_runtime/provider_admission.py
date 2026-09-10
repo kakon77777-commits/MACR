@@ -311,6 +311,71 @@ class ProviderAdmissionTargetBinding:
 
 
 @dataclass(frozen=True)
+class ProviderAdmissionCircuitBinding:
+    provider_id: str
+    policy_digest: str
+    from_state: str
+    to_state: str
+    policy_revision: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "provider_id",
+            _identifier("provider_id", self.provider_id),
+        )
+        object.__setattr__(
+            self,
+            "policy_digest",
+            _digest("policy_digest", self.policy_digest),
+        )
+        if (self.from_state, self.to_state) != ("open", "half_open"):
+            raise ValueError(
+                "provider admission circuit transition is unsupported"
+            )
+        object.__setattr__(
+            self,
+            "policy_revision",
+            _positive_int(
+                "policy_revision",
+                self.policy_revision,
+                maximum=1_000_000,
+            ),
+        )
+
+    @classmethod
+    def create(
+        cls,
+        policy: ProviderAdmissionPolicy,
+        *,
+        from_state: str,
+        to_state: str,
+    ) -> "ProviderAdmissionCircuitBinding":
+        if not isinstance(policy, ProviderAdmissionPolicy):
+            raise ValueError("policy must be a ProviderAdmissionPolicy")
+        return cls(
+            provider_id=policy.provider_id,
+            policy_digest=policy.policy_digest,
+            from_state=from_state,
+            to_state=to_state,
+            policy_revision=policy.revision,
+        )
+
+    @property
+    def binding_digest(self) -> str:
+        return sha256_id("provider_admission_circuit_v1", self.to_dict())
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "provider_id": self.provider_id,
+            "policy_digest": self.policy_digest,
+            "from_state": self.from_state,
+            "to_state": self.to_state,
+            "policy_revision": self.policy_revision,
+        }
+
+
+@dataclass(frozen=True)
 class ProviderAdmissionRequest:
     request_id: str
     provider_id: str
@@ -651,6 +716,74 @@ class ProviderAdmissionKernel:
             connection.close()
         return self.status(self.policy.provider_id)
 
+    def activate_half_open(
+        self,
+        binding: ProviderAdmissionCircuitBinding,
+        reference: AuthorizationReference,
+    ) -> ProviderAdmissionStatus:
+        if not isinstance(binding, ProviderAdmissionCircuitBinding):
+            raise ValueError(
+                "binding must be a ProviderAdmissionCircuitBinding"
+            )
+        if (
+            binding.provider_id != self.policy.provider_id
+            or binding.policy_digest != self.policy.policy_digest
+            or binding.policy_revision != self.policy.revision
+        ):
+            raise ProviderAdmissionConflict(
+                "provider admission circuit binding is stale"
+            )
+        self.authorities.verify(
+            reference,
+            provider_id=self.policy.provider_id,
+            plane="provider_circuit_activation",
+            task_type="provider_circuit_half_open",
+            provider_admission_circuit_digest=binding.binding_digest,
+        )
+        now = self._current_time().isoformat()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            state = connection.execute(
+                "SELECT * FROM provider_admission_state WHERE provider_id=?",
+                (self.policy.provider_id,),
+            ).fetchone()
+            unresolved = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_requests
+                WHERE provider_id=? AND state='reconciliation_required'""",
+                (self.policy.provider_id,),
+            ).fetchone()[0]
+            active_or_waiting = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_requests
+                WHERE provider_id=? AND state IN (
+                    'waiting','granted','dispatched'
+                )""",
+                (self.policy.provider_id,),
+            ).fetchone()[0]
+            if (
+                state is None
+                or state["policy_digest"] != self.policy.policy_digest
+                or state["circuit_state"] != binding.from_state
+                or unresolved
+                or active_or_waiting
+            ):
+                raise ProviderAdmissionConflict(
+                    "provider admission circuit cannot enter half-open"
+                )
+            connection.execute(
+                """UPDATE provider_admission_state
+                SET circuit_state='half_open', last_signal='half_open_authorized',
+                    updated_at=? WHERE provider_id=?""",
+                (now, self.policy.provider_id),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.status(self.policy.provider_id)
+
     def _verify_authority(self, request: ProviderAdmissionRequest) -> None:
         self.authorities.verify(
             request.authorization,
@@ -773,7 +906,16 @@ class ProviderAdmissionKernel:
             (self.policy.provider_id,),
         ).fetchone()
         rows = connection.execute(
-            """SELECT r.*, COALESCE(p.active_units, 0) AS project_active,
+            """SELECT r.*,
+                      COALESCE((
+                          SELECT SUM(a.capacity_unit)
+                          FROM provider_admission_requests a
+                          WHERE a.provider_id=r.provider_id
+                            AND a.project_binding_digest=r.project_binding_digest
+                            AND a.state IN (
+                                'granted','dispatched','reconciliation_required'
+                            )
+                      ), 0) AS project_active,
                       COALESCE(p.last_grant_sequence, 0)
                           AS project_last_grant
             FROM provider_admission_requests r
@@ -843,11 +985,14 @@ class ProviderAdmissionKernel:
             if (
                 state is None
                 or state["policy_digest"] != self.policy.policy_digest
+                or not 1
+                <= state["effective_target"]
+                <= self.policy.candidate_target
             ):
                 raise ProviderAdmissionConflict(
                     "provider admission state is unavailable"
                 )
-            if state["circuit_state"] != "closed":
+            if state["circuit_state"] not in {"closed", "half_open"}:
                 connection.commit()
                 raise ProviderAdmissionReconciliationError(
                     "provider admission circuit requires reconciliation"
@@ -918,7 +1063,12 @@ class ProviderAdmissionKernel:
                 )""",
                 (request.provider_id,),
             ).fetchone()[0]
-            if active + 1 > state["effective_target"]:
+            effective_capacity = (
+                1
+                if state["circuit_state"] == "half_open"
+                else state["effective_target"]
+            )
+            if active + 1 > effective_capacity:
                 connection.commit()
                 raise ProviderAdmissionBusyError(
                     "provider admission capacity is busy"
@@ -1377,6 +1527,9 @@ class ProviderAdmissionKernel:
         if (
             state is None
             or state["policy_digest"] != self.policy.policy_digest
+            or not 1
+            <= state["effective_target"]
+            <= self.policy.candidate_target
         ):
             raise ProviderAdmissionConflict(
                 "provider admission status is unavailable"
@@ -1521,7 +1674,13 @@ def read_provider_admission_status(
             "SELECT * FROM provider_admission_state WHERE provider_id=?",
             (provider,),
         ).fetchone()
-        if state is None or state["policy_digest"] != policy.policy_digest:
+        if (
+            state is None
+            or state["policy_digest"] != policy.policy_digest
+            or not 1
+            <= state["effective_target"]
+            <= policy.candidate_target
+        ):
             raise ProviderAdmissionConflict(
                 "provider admission state is unavailable"
             )
@@ -1606,6 +1765,7 @@ def read_provider_admission_status(
 __all__ = [
     "AdmissionLane",
     "ProjectAdmissionBinding",
+    "ProviderAdmissionCircuitBinding",
     "ProviderAdmissionKernel",
     "ProviderAdmissionPermit",
     "ProviderAdmissionPolicy",

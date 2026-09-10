@@ -23,6 +23,9 @@ the named checkpoints remain the detailed contracts.
   calls and supports provider/time-filtered failure summaries.
 - T1 manifest schema 4 supports an operator-selected dynamic `worker_count`;
   each worker invocation still claims at most one member.
+- Runtime schema 8 adds a provider-wide Provider Admission Kernel. GLM starts
+  with effective target 1, candidate target 2 and hard ceiling 8; queued demand
+  never directly changes provider capacity.
 - The v0.7 Agent contract, state, and semantic kernels through Phase C are
   available offline.
 
@@ -123,11 +126,16 @@ T1 is configured per private schema-4 manifest:
 - cost ceilings are per member, with exact aggregate and campaign envelopes;
 - one member permits one provider attempt;
 - ambiguous dispatch blocks later claims and never auto-requeues.
+- `t1-stage --project-id ... --admission-lane ...` binds admission identity
+  outside the unchanged schema-4 manifest digest;
+- provider BUSY leaves a member queued with `attempts=0` rather than creating a
+  failed candidate or provider accounting row.
 
 Staging is offline:
 
 ```powershell
 .\scripts\macr.ps1 t1-stage .\private\t1-manifest.json `
+  --project-id my-project --admission-lane bulk `
   --dispatcher-id worker-1 --dispatcher-id worker-2 `
   --expires-in-minutes 30
 ```
@@ -148,7 +156,8 @@ live manifest, approvals, or live acceptance.
 - autonomous provider routing or acceptance;
 - live host-owned Claude/Codex identity binding;
 - Anthropic API access through a Claude subscription;
-- automatic provider retry, fallback, rate adaptation, or circuit breaker;
+- automatic provider retry, fallback, unattended target promotion, or
+  provider-specific rate adaptation beyond the explicit admission circuit;
 - live-accepted T1 campaign authority;
 - Google Veo, TTS, and Lyria execution adapters.
 

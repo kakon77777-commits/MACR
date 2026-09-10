@@ -66,6 +66,15 @@ _MODULE_EXPORTS = {
         "ProviderTierBinding", "builtin_provider_capability_policies",
         "glm_extended_text_policy", "glm_standard_policy",
     ),
+    "provider_admission": (
+        "AdmissionLane", "ProjectAdmissionBinding",
+        "ProviderAdmissionCircuitBinding", "ProviderAdmissionKernel",
+        "ProviderAdmissionPermit",
+        "ProviderAdmissionPolicy", "ProviderAdmissionRecord",
+        "ProviderAdmissionRequest", "ProviderAdmissionStatus",
+        "ProviderAdmissionTargetBinding", "glm_provider_admission_policy",
+        "read_provider_admission_status",
+    ),
     "token_policy": (
         "ModelTokenOverride", "ModelTokenPolicy", "ModelTokenPolicyResolver",
         "builtin_model_token_policies", "t1_glm_live_policy",
@@ -108,7 +117,7 @@ __all__ = [
     "ExecutionRouteSnapshot", "EvidenceImporter", "EligibilityDecision",
     "EligibleCandidate", "ExcludedCandidate", "ExclusionReason", "FallbackMode",
     "FallbackRule", "IdentityStatus", "IngestReport", "ImportMode",
-    "AcceptanceState", "AuthorizationReference", "CaptureState",
+    "AcceptanceState", "AdmissionLane", "AuthorizationReference", "CaptureState",
     "DispatchContext", "DispatchOrigin", "InteractionPlane", "ImportReport",
     "HostBindingEvidence", "HostDispatchPreparation", "HostInvocationGrant",
     "HostKind",
@@ -117,6 +126,11 @@ __all__ = [
     "ProviderCapabilityGovernance", "ProviderCapabilityPolicy",
     "ProviderCapabilityPolicyStore",
     "ProviderCapabilityResolver", "ProviderTierBinding",
+    "ProjectAdmissionBinding", "ProviderAdmissionKernel",
+    "ProviderAdmissionCircuitBinding",
+    "ProviderAdmissionPermit", "ProviderAdmissionPolicy",
+    "ProviderAdmissionRecord", "ProviderAdmissionRequest",
+    "ProviderAdmissionStatus", "ProviderAdmissionTargetBinding",
     "ModelObservatory", "ModelPassport", "ModelPassportProjector",
     "OperatorPolicyProfile", "PlanExecutionMode", "PlanExecutionResult",
     "PlanRuntime", "PlanQueue", "PlanningCandidate", "PlanningError",
@@ -137,9 +151,9 @@ __all__ = [
     "WorkspaceSpec", "aware_iso8601", "canonical_json_bytes",
     "canonical_policy_snapshot", "builtin_model_token_policies",
     "builtin_provider_capability_policies", "glm_extended_text_policy",
-    "glm_standard_policy",
+    "glm_provider_admission_policy", "glm_standard_policy",
     "inspect_t1_manifest", "load_t1_manifest", "sha256_id", "t1_glm_live_policy",
-    "wilson_lower_bound",
+    "read_provider_admission_status", "wilson_lower_bound",
 ]
 
 if set(__all__) != set(_LAZY_EXPORTS):  # pragma: no cover - import invariant

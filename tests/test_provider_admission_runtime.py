@@ -31,6 +31,7 @@ from tests.test_glm_provider import (
     AllowingApprovalStore,
     CountingKeySource,
     FakeTransport,
+    RejectingMacApprovalStore,
     delegated_task,
     glm_config,
     success_document,
@@ -49,6 +50,46 @@ class NoResponseTransport(FakeTransport):
 
 
 class ProviderAdmissionRuntimeTests(unittest.TestCase):
+    def test_known_local_approval_failure_releases_capacity_without_transport(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            kernel = ProviderAdmissionKernel(services.events.path)
+            services = replace(services, provider_admission=kernel)
+            transport = FakeTransport(success_document())
+            key_source = CountingKeySource()
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=transport,
+                key_source=key_source,
+                approval_store=RejectingMacApprovalStore(),
+                admission_guard=kernel,
+            )
+            task = delegated_task()
+            project = ProjectAdmissionBinding(
+                "project-a",
+                1,
+                "operator_asserted",
+            )
+            context, _ = self._context_and_reference(
+                services,
+                task,
+                project,
+                AdmissionLane.ROUTINE,
+            )
+
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+            status = kernel.status(provider.provider_id)
+
+        self.assertEqual(result.status.value, "candidate_failure")
+        self.assertEqual(key_source.calls, 1)
+        self.assertEqual(transport.posts, [])
+        self.assertEqual(status.counts["completed"], 1)
+        self.assertEqual(status.counts["reconciliation_required"], 0)
+        self.assertEqual(status.circuit_state, "closed")
+
     def _context_and_reference(
         self,
         services,

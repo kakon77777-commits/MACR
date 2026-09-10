@@ -11,6 +11,7 @@ from macr_runtime.event_store import SqliteEventStore
 from macr_runtime.errors import (
     DispatchAuthorizationError,
     ProviderAdmissionBusyError,
+    ProviderUnavailableError,
 )
 from macr_runtime.execution import DispatchOrigin, InteractionPlane
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
@@ -143,7 +144,58 @@ class FailingFinishEventStore(SqliteEventStore):
         raise RuntimeError("synthetic terminal persistence failure")
 
 
+class NoResponseTransport(FakeTransport):
+    def post_json(self, url, *, headers, payload, timeout_s):
+        del url, headers, payload, timeout_s
+        raise ProviderUnavailableError(
+            "synthetic no response",
+            network_attempted=True,
+            response_received=False,
+            transport_stage="connection",
+        )
+
+
 class T1DispatcherTests(unittest.TestCase):
+    def test_unknown_cost_remains_null_in_t1_reconciliation(self) -> None:
+        now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=NoResponseTransport(success_document()),
+                environ={"MACR_STATE_ROOT": str(state_root)},
+                key_source=StaticKeySource(),
+                approval_store=AllowingApprovalStore(),
+                token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
+            )
+            dispatcher = T1Dispatcher(
+                ProviderRegistry((provider,)),
+                services,
+                now=clock,
+            )
+            subject = approved_manifest(provider)
+            bundle = dispatcher.stage(
+                subject,
+                subject.authorized_dispatchers,
+                subject.expires_at,
+            )
+
+            result = dispatcher.run_one(
+                subject,
+                bundle,
+                subject.authorized_dispatchers[0],
+                DispatchOrigin("test", "process_id", "1234"),
+                allow_network=True,
+                allow_local=False,
+            )
+            record = dispatcher.queue.read_member(result.member_id)
+
+        self.assertTrue(result.reconciliation_required)
+        self.assertEqual(record.state.value, "reconciliation_required")
+        self.assertIsNone(record.observed_cost_usd)
+
     def test_provider_busy_leaves_t1_member_queued_without_attempt(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)

@@ -24,6 +24,7 @@ from macr_runtime.runtime_db import RuntimeDatabase
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.provider_capability import builtin_provider_capability_policies
 from macr_runtime.provider_capability_store import ProviderCapabilityPolicyStore
+from macr_runtime.provider_admission import glm_provider_admission_policy
 from macr_runtime.t1_manifest import T1_MANIFEST_SCHEMA_VERSION
 from macr_runtime.token_policy import (
     builtin_model_token_policies,
@@ -147,6 +148,18 @@ def main() -> int:
                 for item in builtin_provider_capability_policies()
             ],
         ),
+        "provider_admission_policy_digest": (
+            glm_provider_admission_policy().policy_digest
+        ),
+        "provider_admission_effective_target": (
+            glm_provider_admission_policy().effective_target
+        ),
+        "provider_admission_candidate_target": (
+            glm_provider_admission_policy().candidate_target
+        ),
+        "provider_admission_hard_max": (
+            glm_provider_admission_policy().hard_max
+        ),
         "t1_manifest_schema_version": T1_MANIFEST_SCHEMA_VERSION,
         "t1_live_policy_digest": t1_glm_live_policy().policy_digest,
         "schema_fingerprint": schema_fingerprint,
@@ -154,7 +167,7 @@ def main() -> int:
         "canonical_probe_pack_digest": pack.pack_digest,
         "queue_worker_counts": [1, 2, 3, 4, 8],
         "sqlite_bootstrap_processes": 32,
-        "t1_complete_path_processes": 3,
+        "t1_complete_path_processes": 5,
         "quiet_census_samples": 5,
         "network_activity": False,
         "provider_generation": False,

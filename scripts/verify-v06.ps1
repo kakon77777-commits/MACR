@@ -56,6 +56,9 @@ $targetedModules = @(
     'tests.test_billing_port',
     'tests.test_differential',
     'tests.test_event_store'
+    'tests.test_provider_admission'
+    'tests.test_provider_admission_multiprocess'
+    'tests.test_provider_admission_runtime'
 )
 python -m unittest @targetedModules -q
 if ($LASTEXITCODE) { exit $LASTEXITCODE }

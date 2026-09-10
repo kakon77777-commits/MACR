@@ -26,6 +26,7 @@ from ..errors import (
     ProviderOutputBudgetTooSmallError,
     ProviderAdmissionRequiredError,
     ProviderPolicyError,
+    ProviderPreNetworkError,
     ProviderProtocolError,
     ProviderReasoningBudgetExhaustedError,
     ProviderTaskTypeError,
@@ -512,10 +513,21 @@ class GlmFlashWorkerProvider(BaseProvider):
         self.capability_binding = selected_binding
 
     def _api_key(self) -> str:
-        value = self.key_source.load()
+        try:
+            value = self.key_source.load()
+        except ProviderUnavailableError as exc:
+            raise ProviderUnavailableError(
+                "GLM key source is unavailable before network use",
+                network_attempted=False,
+                response_received=False,
+                transport_stage="pre_network",
+            ) from exc
         if not _ZAI_KEY_SHAPE.fullmatch(value):
             raise ProviderUnavailableError(
-                f"provider {self.provider_id} credential shape is invalid"
+                f"provider {self.provider_id} credential shape is invalid",
+                network_attempted=False,
+                response_received=False,
+                transport_stage="pre_network",
             )
         return value
 
@@ -828,10 +840,13 @@ class GlmFlashWorkerProvider(BaseProvider):
             )
         begin_transport(admission_permit, admission_request)
         api_key = self._api_key()
-        self.approval_store.verify(
-            prepared["approval_sha256"],
-            signing_key=api_key,
-        )
+        try:
+            self.approval_store.verify(
+                prepared["approval_sha256"],
+                signing_key=api_key,
+            )
+        except ProviderPolicyError as exc:
+            raise ProviderPreNetworkError(str(exc)) from exc
         timeout_s = float(task.constraints.max_latency_s)
         return self.transport.post_json(
             prepared["endpoint"],

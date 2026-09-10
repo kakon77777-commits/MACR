@@ -86,6 +86,19 @@ class ProviderPolicyError(MacrError):
     """Provider use is denied by an explicit policy gate."""
 
 
+class ProviderPreNetworkError(ProviderPolicyError):
+    """A known local provider prerequisite failed before network use."""
+
+    def safe_diagnostic(self) -> dict[str, object]:
+        return {
+            "network_attempted": False,
+            "response_received": False,
+            "provider_http_status": None,
+            "provider_error_code": None,
+            "transport_stage": "pre_network",
+        }
+
+
 class ProviderTaskTypeError(ProviderPolicyError):
     """A task type is outside the active provider capability tier."""
 

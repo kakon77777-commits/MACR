@@ -857,7 +857,7 @@ class PlanQueue:
         fencing_token: int,
         *,
         terminal_evidence_digest: str,
-        observed_cost_usd: float | None,
+        observed_cost_usd: float,
     ) -> QueueMemberRecord:
         if state not in {QueueMemberState.COMPLETED, QueueMemberState.FAILED}:
             raise ValueError("terminal state is invalid")
@@ -942,7 +942,7 @@ class PlanQueue:
         fencing_token: int,
         *,
         terminal_evidence_digest: str,
-        observed_cost_usd: float,
+        observed_cost_usd: float | None,
     ) -> QueueMemberRecord:
         return self._terminal(
             QueueMemberState.COMPLETED,
@@ -978,7 +978,7 @@ class PlanQueue:
         fencing_token: int,
         *,
         terminal_evidence_digest: str,
-        observed_cost_usd: float,
+        observed_cost_usd: float | None,
     ) -> QueueMemberRecord:
         member = _digest("member_id", member_id)
         dispatcher = _identifier("dispatcher_id", dispatcher_id)
@@ -986,7 +986,11 @@ class PlanQueue:
             "terminal_evidence_digest",
             terminal_evidence_digest,
         )
-        cost = _cost("observed_cost_usd", observed_cost_usd)
+        cost = (
+            None
+            if observed_cost_usd is None
+            else _cost("observed_cost_usd", observed_cost_usd)
+        )
         if (
             isinstance(fencing_token, bool)
             or not isinstance(fencing_token, int)

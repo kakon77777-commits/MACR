@@ -86,6 +86,19 @@ untrusted external observation -> immutable snapshot/evidence
 
 T1 queue members are exact ordered v4 digests bound to provider, route, role, privacy, context class, provider-tier binding, per-member ceiling, aggregate ceiling, expiry, and an authorized dispatcher set; the enclosing manifest uses a v4 digest domain and binds an explicit `worker_count`. Member count is nonzero but otherwise bounded by the strict 4 MiB manifest envelope. Worker count ranges from one through member count and exactly matches the authorized dispatcher set, so worker slots and queued work are separate dimensions. One member permits one provider attempt. `queue-status` provides bounded global state/reconciliation enumeration. `t1-stage` creates exact batch plus dispatch authority only after manifest-schema-4, token-policy, provider-tier and every GLM member-approval validation. `t1-worker` claims one plan-scoped member per invocation and traverses `MacrRuntime`, Candidate Vault, events and accounting once; a dispatcher may be invoked again to drain later work. Per-member ceilings are positive manifest values, aggregate cost must equal their exact sum, and campaign cost must cover that aggregate. Schema-1 manifests remain audit-visible as `legacy_pre_tier`; schema-2 as `legacy_pre_quality_floor`; schema-3 as `legacy_fixed_three_workers`. All fail before authority or dispatch. Expired or ambiguous dispatches enter `reconciliation_required`, block every later T1 claim, and never auto-requeue. Explicit reconciliation revokes the old batch, so continuation requires a new manifest and new authority. Verification and acceptance remain outside the worker. T2 coordinator output is an untrusted, content-free plan-revision proposal; it cannot issue authority, accept, merge, deploy, or name a resident. T3 target paths remain digest-only.
 
+Runtime schema 8 adds the lower operational Provider Admission Kernel in the
+same cross-process SQLite authority domain. Authority scope v3 binds an exact
+project-binding digest, operator-owned lane and admission-policy digest. T1
+`worker_count` remains demand: the worker obtains a provider slot before its
+member becomes claimed. Ordinary CLI, T0, host adapters and T1 converge on the
+same kernel, while the GLM adapter independently consumes the one-use permit
+immediately before key/transport access. Effective target starts at 1,
+candidate target is 2 and revision-1 hard maximum is 8. Above-2 capacity and
+automatic promotion remain NotMeasured. BUSY is nonterminal; ambiguous or
+crashed transport becomes durable provider reconciliation and is never freed
+by TTL alone. This gate is separate from Phase D observation and Phase E
+semantic action admission.
+
 Differential manifests apply one exact probe pack and verifier graph to at least three qualified route candidates. Public comparison rows contain blinded candidate IDs, verifier counts, evidence digests, and costs—never model labels. `probe-plan` and `probe-replay` are manifest/replay commands and perform no provider execution.
 
 ## Direct conversation boundary

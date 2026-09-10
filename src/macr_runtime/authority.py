@@ -72,6 +72,7 @@ class AuthorityScope:
     admission_lanes: tuple[str, ...] = ()
     provider_admission_policy_digests: tuple[str, ...] = ()
     provider_admission_target_digests: tuple[str, ...] = ()
+    provider_admission_circuit_digests: tuple[str, ...] = ()
     scope_contract_version: int = 2
 
     def __post_init__(self) -> None:
@@ -173,12 +174,30 @@ class AuthorityScope:
             "provider_admission_target_digests",
             tuple(item.lower() for item in target_digests),
         )
+        circuit_digests = _string_tuple(
+            "authority provider_admission_circuit_digests",
+            self.provider_admission_circuit_digests,
+            required=False,
+        )
+        if any(not _SHA256.fullmatch(item.lower()) for item in circuit_digests):
+            raise ValueError(
+                "authority provider_admission_circuit_digests must be SHA-256 hex"
+            )
+        object.__setattr__(
+            self,
+            "provider_admission_circuit_digests",
+            tuple(item.lower() for item in circuit_digests),
+        )
         if self.scope_contract_version not in {1, 2, 3}:
             raise ValueError("authority scope contract version is unsupported")
         if self.scope_contract_version == 1 and tier_digests:
             raise ValueError("legacy authority scope cannot bind provider tiers")
         if self.scope_contract_version < 3 and (
-            project_digests or lanes or admission_digests or target_digests
+            project_digests
+            or lanes
+            or admission_digests
+            or target_digests
+            or circuit_digests
         ):
             raise ValueError(
                 "legacy authority scope cannot bind provider admission"
@@ -218,6 +237,7 @@ class AuthorityScope:
                 "admission_lanes",
                 "provider_admission_policy_digests",
                 "provider_admission_target_digests",
+                "provider_admission_circuit_digests",
             }
         else:
             raise ValueError("authority scope contract version is unsupported")
@@ -241,6 +261,10 @@ class AuthorityScope:
             ),
             provider_admission_target_digests=data.get(
                 "provider_admission_target_digests",
+                (),
+            ),
+            provider_admission_circuit_digests=data.get(
+                "provider_admission_circuit_digests",
                 (),
             ),
             scope_contract_version=version,
@@ -275,6 +299,9 @@ class AuthorityScope:
                     "provider_admission_target_digests": list(
                         self.provider_admission_target_digests
                     ),
+                    "provider_admission_circuit_digests": list(
+                        self.provider_admission_circuit_digests
+                    ),
                 }
             )
         return document
@@ -295,6 +322,7 @@ class AuthorityScope:
         admission_lane: str | None = None,
         provider_admission_policy_digest: str | None = None,
         provider_admission_target_digest: str | None = None,
+        provider_admission_circuit_digest: str | None = None,
     ) -> bool:
         tier_permitted = (
             provider_tier_binding_digest is None
@@ -339,6 +367,16 @@ class AuthorityScope:
             and provider_admission_target_digest.lower()
             in self.provider_admission_target_digests
         )
+        circuit_requested = (
+            provider_admission_circuit_digest is not None
+            or bool(self.provider_admission_circuit_digests)
+        )
+        circuit_permitted = not circuit_requested or (
+            self.scope_contract_version == 3
+            and isinstance(provider_admission_circuit_digest, str)
+            and provider_admission_circuit_digest.lower()
+            in self.provider_admission_circuit_digests
+        )
         return (
             provider_id in self.providers
             and plane in self.planes
@@ -354,6 +392,7 @@ class AuthorityScope:
             and tier_permitted
             and admission_permitted
             and target_permitted
+            and circuit_permitted
         )
 
 
@@ -545,6 +584,7 @@ class DispatchAuthorityStore:
         admission_lane: str | None = None,
         provider_admission_policy_digest: str | None = None,
         provider_admission_target_digest: str | None = None,
+        provider_admission_circuit_digest: str | None = None,
     ) -> AuthorizationReference:
         if not isinstance(reference, AuthorizationReference):
             raise DispatchAuthorizationError(
@@ -625,6 +665,9 @@ class DispatchAuthorityStore:
             ),
             provider_admission_target_digest=(
                 provider_admission_target_digest
+            ),
+            provider_admission_circuit_digest=(
+                provider_admission_circuit_digest
             ),
         ):
             raise DispatchAuthorizationError(

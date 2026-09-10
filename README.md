@@ -137,7 +137,7 @@ Phase B/C package replay pins `SOURCE_DATE_EPOCH` to the exact candidate commit
 timestamp. Repeated clean gates therefore require the generated wheel hash—not
 only the semantic replay digests—to remain byte-identical.
 
-Current schema versions are `runtime operational SQLite 7`, `observatory SQLite 2`, `accounting SQLite 4`, Direct conversation schema 2, model-token-policy store schema 1 / policy contract v2, provider-capability-policy schema 2, and T1 manifest schema 4.
+Current schema versions are `runtime operational SQLite 8`, `observatory SQLite 2`, `accounting SQLite 4`, Direct conversation schema 2, model-token-policy store schema 1 / policy contract v2, provider-capability-policy schema 2, and T1 manifest schema 4. Runtime schema 8 contains the provider-neutral **Provider Admission Kernel** operational tables; it does not begin Agent Phase D or consume the reserved `0.7.0a1` version.
 
 For the dedicated multiprocess replay from a source checkout:
 
@@ -282,17 +282,29 @@ digest receives that label; arbitrary mismatches are counted as invalid.
 
 ## T1 staging and worker commands
 
-`queue-status` globally enumerates bounded content-free queue rows, including `reconciliation_required`, without task bodies, answers, credentials, or paths. `t1-stage` loads one strict private schema-4 manifest, verifies every member's existing GLM host approval and the exact T1 token policy, checks that its digest-bound `worker_count` matches the dispatcher set, signs batch plus dispatch authority, and enqueues without a provider call. Member count, worker count, per-member ceilings and the campaign ceiling are operator-selected manifest data rather than fixed constants. `t1-worker` claims at most one exact member per invocation and performs no retry or fallback; an authorized dispatcher may be invoked again to drain a later queued member.
+`queue-status` globally enumerates bounded content-free queue rows, including `reconciliation_required`, without task bodies, answers, credentials, or paths. `t1-stage` loads one strict private schema-4 manifest, verifies every member's existing GLM host approval and the exact T1 token policy, checks that its digest-bound `worker_count` matches the dispatcher set, binds an operator project/lane outside the unchanged v4 manifest digest, signs batch plus dispatch authority, and enqueues without a provider call. Member count, worker count, per-member ceilings and the campaign ceiling are operator-selected demand rather than provider capacity. `t1-worker` first obtains one global provider slot and only then claims one exact member. BUSY leaves it queued with `attempts=0`; an authorized dispatcher may be invoked again to drain later work.
 
 ```powershell
 .\scripts\macr.ps1 queue-status --state reconciliation_required
+.\scripts\macr.ps1 admission-status --provider glm_flash_worker
 .\scripts\macr.ps1 t1-stage .\private\t1-manifest.json `
+  --project-id my-project --admission-lane bulk `
   --dispatcher-id worker-1 --dispatcher-id worker-2 `
   --dispatcher-id worker-3 --dispatcher-id worker-4 `
   --expires-in-minutes 30
 .\scripts\macr.ps1 t1-worker .\private\t1-manifest.json `
   --dispatcher-id worker-1 --allow-network
 ```
+
+Provider admission starts at effective target 1, records target 2 as the only
+bounded live-probe candidate, and has an immutable revision-1 hard ceiling of
+8. A pre-issued exact authority is required to change target 1↔2; no ordinary
+CLI command can self-authorize that transition. Values 3–8, weighted capacity,
+automatic promotion, refill rates and provider-safe concurrency remain
+`NotMeasured`. Project/lane identity is authority-bound. Interactive work gets
+next-slot priority but no permanently idle reserved slot. Unknown network
+outcomes and expired dispatched permits remain capacity-consuming
+`reconciliation_required` evidence and never auto-release or retry.
 
 These commands are implemented, but the T1 route itself is not live-accepted and no exact live T1 manifest is implied by repository state. The separate sequential GLM CLI route has live observations; those do not activate T1 authority.
 

@@ -113,7 +113,7 @@ class V06ReleaseGateTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, msg=completed.stderr)
         document = json.loads(completed.stdout)
-        self.assertEqual(document["runtime_schema_version"], 7)
+        self.assertEqual(document["runtime_schema_version"], 8)
         self.assertEqual(document["observatory_schema_version"], 2)
         self.assertEqual(document["accounting_schema_version"], 4)
         self.assertEqual(document["version"], "0.7.0a0")
@@ -122,12 +122,19 @@ class V06ReleaseGateTests(unittest.TestCase):
         self.assertEqual(document["model_token_policy_count"], 7)
         self.assertEqual(document["provider_capability_policy_schema_version"], 2)
         self.assertEqual(document["provider_capability_policy_count"], 2)
+        self.assertEqual(document["provider_admission_effective_target"], 1)
+        self.assertEqual(document["provider_admission_candidate_target"], 2)
+        self.assertEqual(document["provider_admission_hard_max"], 8)
+        self.assertRegex(
+            document["provider_admission_policy_digest"],
+            r"^[0-9a-f]{64}$",
+        )
         self.assertEqual(document["t1_manifest_schema_version"], 4)
         self.assertRegex(
             document["provider_capability_policy_digest"],
             r"^[0-9a-f]{64}$",
         )
-        self.assertEqual(document["t1_complete_path_processes"], 3)
+        self.assertEqual(document["t1_complete_path_processes"], 5)
         self.assertEqual(document["quiet_census_samples"], 5)
         self.assertFalse(document["network_activity"])
         self.assertFalse(document["provider_generation"])
@@ -165,7 +172,8 @@ class V06ReleaseGateTests(unittest.TestCase):
                 ROOT / "docs" / "STORAGE_AND_MIGRATION.md",
             )
         )
-        self.assertIn("runtime operational SQLite 7", active_docs)
+        self.assertIn("runtime operational SQLite 8", active_docs)
+        self.assertIn("Provider Admission Kernel", active_docs)
         self.assertIn("verify-v06.ps1", active_docs)
         checkpoint = (ROOT / "docs" / "V06_OFFLINE_CHECKPOINT.md").read_text(
             encoding="utf-8"

@@ -101,6 +101,16 @@ Accounting schema 4 and terminal event contract 3 expose provider/date-filtered 
 
 For T1, `queue-status` exposes only bounded content-free state. Schema 4 binds ordered v4 member digests, an explicit worker count, and a v4 manifest digest to exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy-v2 digest, the exact profile-valid output value, per-member cost ceilings, their exact aggregate, an operator-selected campaign ceiling, expiry, and the dispatcher set. Current delegated real-work members require 65,536 output tokens. Member count may exceed worker count; worker count must be between one and member count and equal the number of authorized dispatcher IDs. Schemas 1, 2 and 3 remain inspectable respectively as `legacy_pre_tier`, `legacy_pre_quality_floor`, and `legacy_fixed_three_workers`, but cannot stage or dispatch. Stale schema-4 manifests carrying the prior T1 policy digest also fail before staging and are not rewritten. `reconciliation_required` blocks every later claim. There is no automatic retry, fallback, verification, materialization, or acceptance.
 
+Provider Admission Kernel policy v1 governs GLM capacity across projects and
+all delegated entry points. Effective target is 1, candidate target 2, hard
+ceiling 8 and raw request weight 1. Only an exact pre-issued capacity authority
+may activate target 2; 3–8 and auto-scaling remain NotMeasured. Project and
+lane bindings live in authority scope v3 rather than task text. A saturated
+request is BUSY before dispatch/accounting/key access. A no-response or
+incomplete terminal consumes a reconciliation slot and opens the provider
+circuit until exact evidence-bound resolution. `admission-status` is read-only
+and content-free.
+
 ## Claude boundary
 
 Do not read or use `ANTHROPIC_API_KEY`. A future Claude integration must be an explicitly approved subscription-client route and must not fall back to API billing.

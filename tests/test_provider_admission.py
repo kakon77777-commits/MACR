@@ -20,6 +20,7 @@ from macr_runtime.provider_admission import (
     ProviderAdmissionPolicy,
     ProviderAdmissionRequest,
     ProviderAdmissionTargetBinding,
+    ProviderAdmissionCircuitBinding,
     glm_provider_admission_policy,
     read_provider_admission_status,
 )
@@ -266,6 +267,78 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
 
 
 class ProviderAdmissionKernelTests(unittest.TestCase):
+    def test_known_429_requires_authorized_single_half_open_probe(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            dispatch_reference = self._authority(authorities, (self.project_a,))
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            permit = kernel.try_admit(request, ttl_seconds=60)
+            kernel.begin_transport(permit, request)
+            kernel.finish(
+                permit,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="e" * 64,
+            )
+            with self.assertRaises(ProviderAdmissionReconciliationError):
+                kernel.try_admit(
+                    self._request(
+                        dispatch_reference,
+                        self.project_a,
+                        AdmissionLane.ROUTINE,
+                    ),
+                    ttl_seconds=60,
+                )
+            half_open = ProviderAdmissionCircuitBinding.create(
+                kernel.policy,
+                from_state="open",
+                to_state="half_open",
+            )
+            circuit_reference = authorities.issue(
+                source_kind="operator_circuit_authority",
+                source_id="half-open-one",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_circuit_activation",),
+                    task_types=("provider_circuit_half_open",),
+                    provider_admission_circuit_digests=(
+                        half_open.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            kernel.activate_half_open(half_open, circuit_reference)
+            probe_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.INTERACTIVE,
+            )
+            probe = kernel.try_admit(probe_request, ttl_seconds=60)
+            kernel.begin_transport(probe, probe_request)
+            kernel.finish(
+                probe,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=200,
+                terminal_persisted=True,
+                terminal_evidence_digest="f" * 64,
+            )
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(status.last_signal, "http_200")
+
     def test_candidate_target_two_requires_exact_preissued_authority(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
@@ -328,6 +401,203 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
         self.assertEqual(activated.effective_target, 2)
         with self.assertRaises(ValueError):
             ProviderAdmissionTargetBinding.create(kernel.policy, target=3)
+
+    def test_target_two_still_enforces_per_project_cap(self) -> None:
+        policy = replace(
+            glm_provider_admission_policy(),
+            per_project_cap=1,
+        )
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
+            target = ProviderAdmissionTargetBinding.create(policy, target=2)
+            target_reference = authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="per-project-target-two",
+                scope=AuthorityScope(
+                    providers=(policy.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_capacity_target",),
+                    provider_admission_target_digests=(
+                        target.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            kernel.activate_target(target, target_reference)
+            dispatch_reference = authorities.issue(
+                source_kind="operator_test",
+                source_id="per-project-cap",
+                scope=AuthorityScope(
+                    providers=(policy.provider_id,),
+                    planes=("delegation",),
+                    task_types=("delegated_routine",),
+                    provider_tier_binding_digests=("a" * 64,),
+                    project_binding_digests=(
+                        self.project_a.binding_digest,
+                        self.project_b.binding_digest,
+                    ),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(
+                        policy.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            first = kernel.try_admit(
+                self._request(
+                    dispatch_reference,
+                    self.project_a,
+                    AdmissionLane.ROUTINE,
+                ),
+                ttl_seconds=60,
+            )
+            same_project = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(same_project, ttl_seconds=60)
+            other_project = kernel.try_admit(
+                self._request(
+                    dispatch_reference,
+                    self.project_b,
+                    AdmissionLane.ROUTINE,
+                ),
+                ttl_seconds=60,
+            )
+            kernel.cancel_before_transport(first)
+            kernel.cancel_before_transport(other_project)
+
+        self.assertNotEqual(
+            first.project_binding_digest,
+            other_project.project_binding_digest,
+        )
+
+    def test_denormalized_project_counter_cannot_bypass_project_cap(self) -> None:
+        policy = replace(
+            glm_provider_admission_policy(),
+            per_project_cap=1,
+        )
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
+            target = ProviderAdmissionTargetBinding.create(policy, target=2)
+            target_reference = authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="counter-attack-target-two",
+                scope=AuthorityScope(
+                    providers=(policy.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_capacity_target",),
+                    provider_admission_target_digests=(
+                        target.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            kernel.activate_target(target, target_reference)
+            dispatch_reference = authorities.issue(
+                source_kind="operator_test",
+                source_id="counter-attack",
+                scope=AuthorityScope(
+                    providers=(policy.provider_id,),
+                    planes=("delegation",),
+                    task_types=("delegated_routine",),
+                    provider_tier_binding_digests=("a" * 64,),
+                    project_binding_digests=(
+                        self.project_a.binding_digest,
+                    ),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(
+                        policy.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    self.clock.value + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            first = kernel.try_admit(
+                self._request(
+                    dispatch_reference,
+                    self.project_a,
+                    AdmissionLane.ROUTINE,
+                ),
+                ttl_seconds=60,
+            )
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    """UPDATE provider_admission_projects
+                    SET active_units=0 WHERE provider_id=?""",
+                    (policy.provider_id,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(
+                    self._request(
+                        dispatch_reference,
+                        self.project_a,
+                        AdmissionLane.ROUTINE,
+                    ),
+                    ttl_seconds=60,
+                )
+
+        self.assertEqual(first.project_binding_digest, self.project_a.binding_digest)
+
+    def test_tampered_effective_target_above_candidate_fails_closed(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(authorities, (self.project_a,))
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    """UPDATE provider_admission_state
+                    SET effective_target=8 WHERE provider_id=?""",
+                    (kernel.policy.provider_id,),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "state",
+            ):
+                kernel.try_admit(
+                    self._request(
+                        reference,
+                        self.project_a,
+                        AdmissionLane.ROUTINE,
+                    ),
+                    ttl_seconds=60,
+                )
 
     def setUp(self) -> None:
         self.now = datetime(2026, 9, 10, 8, 0, tzinfo=timezone.utc)

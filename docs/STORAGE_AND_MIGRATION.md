@@ -70,9 +70,9 @@ SQLite event and accounting databases contain bounded operational metadata, not 
 Current schema versions are:
 
 ```text
-runtime operational SQLite 7
+runtime operational SQLite 8
 observatory SQLite          2
-accounting SQLite           3
+accounting SQLite           4
 Direct conversation schema  2
 model-token policy schema   1
 provider-capability schema  2
@@ -81,7 +81,18 @@ Agent runtime schema        2
 semantic schema             1
 ```
 
-Runtime schema 7 adds a nullable provider-tier binding to queue members. Schema-6 rows migrate without rewrite and remain globally countable as `legacy_pre_tier`; schema-2 T1 members carry an exact binding digest. Existing batch-authority bodies, digest-only target claims and fenced target-path leases remain intact. v0.7.0a0 retains those tables for global `queue-status`, exact T1 staging, one-attempt workers, and explicit `reconciliation_required` resolution. The separate future `runtime\agent.sqlite3` hosts Agent lifecycle and semantic components only when an operator explicitly creates it; this feature did not create or migrate shared Agent state. Resolving an ambiguous member revokes the old batch; it never requeues or grants a replacement writer. Raw task bodies, answers and target paths remain absent from runtime/accounting databases.
+Runtime schema 7 adds a nullable provider-tier binding to queue members. Schema
+8 additively adds provider-admission policy/state/project/request tables and
+nullable project/lane/policy bindings on queue batches. Existing schema-4 T1
+manifest bytes and digests are not rewritten; an existing staged batch without
+the separate admission binding is `legacy_pre_provider_admission` and cannot
+dispatch. Admission rows are content-free and keep unknown or crashed
+transports in explicit reconciliation. Existing batch-authority bodies,
+digest-only target claims, events, runs and fenced target-path leases remain
+intact. The separate future `runtime\agent.sqlite3` remains the Agent lifecycle
+and semantic database; provider admission does not begin Phase D. Raw task
+bodies, answers and target paths remain absent from runtime/accounting
+databases.
 
 Direct archive is reversible and changes no content bytes. Permanent Direct deletion is a separate operator-confirmed path requiring exact `DELETE`. It refuses conversations with an active run, overwrites and removes unmaterialized Candidate answer files, deletes Direct conversation/message/run rows with SQLite `secure_delete=ON`, and requires a successful WAL `TRUNCATE` checkpoint. Content-free invocation accounting, operational hashes, Candidate metadata, and a deletion tombstone remain for cost/audit continuity. MACR does not claim forensic erasure from SSD wear-leveling, filesystem snapshots, external backups, provider retention, or already materialized external artifacts.
 
