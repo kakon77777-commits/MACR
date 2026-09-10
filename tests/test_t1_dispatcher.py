@@ -29,6 +29,7 @@ from macr_runtime.provider_admission import (
     AdmissionLane,
     ProviderAdmissionKernel,
     ProviderAdmissionRequest,
+    glm_provider_admission_policy,
 )
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import task_contract_digest
@@ -234,7 +235,20 @@ class T1DispatcherTests(unittest.TestCase):
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
         with d_drive_tempdir() as state_root:
-            services = t1_services(state_root, clock)
+            services = build_test_services(state_root)
+            admission_policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=1,
+                per_project_cap=1,
+            )
+            services = replace(
+                services,
+                provider_admission=ProviderAdmissionKernel(
+                    services.events.path,
+                    policy=admission_policy,
+                    now=clock,
+                ),
+            )
             transport = FakeTransport(success_document())
             provider = GlmFlashWorkerProvider(
                 glm_config(),

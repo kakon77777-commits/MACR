@@ -101,10 +101,12 @@ Accounting schema 4 and terminal event contract 3 expose provider/date-filtered 
 
 For T1, `queue-status` exposes only bounded content-free state. Schema 4 binds ordered v4 member digests, an explicit worker count, and a v4 manifest digest to exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy-v2 digest, the exact profile-valid output value, per-member cost ceilings, their exact aggregate, an operator-selected campaign ceiling, expiry, and the dispatcher set. Current delegated real-work members require 65,536 output tokens. Member count may exceed worker count; worker count must be between one and member count and equal the number of authorized dispatcher IDs. Schemas 1, 2 and 3 remain inspectable respectively as `legacy_pre_tier`, `legacy_pre_quality_floor`, and `legacy_fixed_three_workers`, but cannot stage or dispatch. Stale schema-4 manifests carrying the prior T1 policy digest also fail before staging and are not rewritten. `reconciliation_required` blocks every later claim. There is no automatic retry, fallback, verification, materialization, or acceptance.
 
-Provider Admission Kernel policy v1 governs GLM capacity across projects and
-all delegated entry points. Effective target is 1, candidate target 2, hard
-ceiling 8 and raw request weight 1. Only an exact pre-issued capacity authority
-may activate target 2; 3–8 and auto-scaling remain NotMeasured. Project and
+Provider Admission Kernel policy revision 2 governs GLM capacity across
+projects and all delegated entry points. Effective target is 8, the next review
+marker is 16, the finite hard ceiling is 32, per-project cap is 8, and raw
+request weight is 1. An exact pre-issued capacity authority may select any
+integer target from 1 through 32; auto-scaling and provider-safe concurrency at
+each target remain NotMeasured. Project and
 lane bindings live in authority scope v3 rather than task text. A saturated
 request is BUSY before dispatch/accounting/key access. A no-response or
 incomplete terminal consumes a reconciliation slot and opens the provider

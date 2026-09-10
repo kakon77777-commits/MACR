@@ -28,7 +28,10 @@ from macr_runtime.ledger import AppendOnlyLedger
 from macr_runtime.legacy_ledger import LegacyLedgerImporter
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
-from macr_runtime.provider_admission import ProviderAdmissionKernel
+from macr_runtime.provider_admission import (
+    ProviderAdmissionKernel,
+    glm_provider_admission_policy,
+)
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import RuntimeServices
 from macr_runtime.scheduler import PlanQueue, QueueMember, T1QueuePlan
@@ -256,10 +259,16 @@ class MultiprocessRuntimeTests(unittest.TestCase):
     def test_five_t1_workers_share_one_slot_then_drain_without_extra_attempts(self) -> None:
         with d_drive_tempdir() as temp:
             services = build_test_services(temp)
+            admission_policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=1,
+                per_project_cap=1,
+            )
             services = replace(
                 services,
                 provider_admission=ProviderAdmissionKernel(
-                    services.events.path
+                    services.events.path,
+                    policy=admission_policy,
                 ),
             )
             transport = FakeTransport(success_document())
@@ -313,6 +322,8 @@ class MultiprocessRuntimeTests(unittest.TestCase):
                         str(start_signal),
                         str(temp / f"t1-ready-{index}"),
                         dispatcher_id,
+                        "1",
+                        "1",
                     ],
                     env={
                         **os.environ,

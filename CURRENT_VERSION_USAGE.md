@@ -24,7 +24,8 @@ the named checkpoints remain the detailed contracts.
 - T1 manifest schema 4 supports an operator-selected dynamic `worker_count`;
   each worker invocation still claims at most one member.
 - Runtime schema 8 adds a provider-wide Provider Admission Kernel. GLM starts
-  with effective target 1, candidate target 2 and hard ceiling 8; queued demand
+  with effective target 8, review marker 16 and hard ceiling 32; an exact
+  operator authority may select any target from 1 through 32. Queued demand
   never directly changes provider capacity. Production transport accepts only
   the canonical operator runtime; alternate D-drive databases are explicit
   offline-test capabilities.

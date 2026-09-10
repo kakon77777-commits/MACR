@@ -40,21 +40,24 @@ Member/backlog size may be large. Only in-flight provider attempts are hard
 bounded. Spending remains independently accounted and warn-oriented according
 to operator policy; money is not used as a concurrency semaphore.
 
-## 4. Initial measured boundary
+## 4. Operator-scalable boundary
 
 For GLM the immutable built-in policy declares:
 
 ```text
 capacity_unit       1 per provider request
-effective_target    1
-candidate_target    2
-hard_max            8
+effective_target    8
+candidate_target    16 (next review marker, not an activation ceiling)
+hard_max            32
+per_project_cap     8
 ```
 
-Only target 1 is initially effective. Target 2 is a bounded future live-probe
-candidate. Capacity above 2, weighted capacity units, lane weights, refill
-rate, burst size, automatic promotion and concurrency safety are
-`NotMeasured`. There is no zero or unlimited sentinel.
+An exact pre-issued authority may select any integer target from 1 through 32.
+The default 8 is operator policy rather than a claim that z.ai publishes or
+guarantees that concurrency. Target 16 is a review marker only. Weighted
+capacity units, lane weights, refill rate, burst size, automatic promotion and
+provider-safe concurrency at each target are `NotMeasured`. There is no zero
+or unlimited sentinel.
 
 ## 5. Authority-bound admission identity
 
@@ -160,10 +163,10 @@ capacity. It never changes the provider target.
 
 ## 10. Adaptation and circuit boundary
 
-The first candidate implements observable state and explicit governance, not
-unattended auto-scaling. A future exact authority may promote candidate target
-2 after a bounded live probe. Values above 2 remain unavailable until measured
-and superseded by a new policy revision.
+The kernel implements observable state and explicit governance, not unattended
+auto-scaling. An exact authority may select any bounded target through 32;
+live evidence determines whether the operator retains or lowers that target,
+not whether MACR permits the choice.
 
 Unknown network outcome opens reconciliation and cannot be blind-retried.
 Provider circuit `open` or unresolved capacity state prevents new grants.

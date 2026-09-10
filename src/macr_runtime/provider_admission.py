@@ -27,7 +27,7 @@ from .runtime_db import RuntimeDatabase
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_MAX_PROVIDER_CAPACITY = 8
+_MAX_PROVIDER_CAPACITY = 32
 _ZERO_DIGEST = "0" * 64
 
 
@@ -120,7 +120,7 @@ def _validated_control_state(
             deployment_digest is not None
             and state["deployment_digest"] != deployment_digest
         )
-        or not 1 <= state["effective_target"] <= policy.candidate_target
+        or not 1 <= state["effective_target"] <= policy.hard_max
         or state["control_revision"] < 1
         or not _SHA256.fullmatch(state["control_digest"] or "")
         or (
@@ -309,12 +309,6 @@ class ProviderAdmissionPolicy:
             self.per_project_cap,
             maximum=_MAX_PROVIDER_CAPACITY,
         )
-        if effective != 1:
-            raise ValueError("effective target above one is not live measured")
-        if candidate != 2:
-            raise ValueError("candidate target must remain the bounded value two")
-        if hard != _MAX_PROVIDER_CAPACITY:
-            raise ValueError("hard_max must remain the bounded ceiling eight")
         if not effective <= candidate <= hard:
             raise ValueError("provider admission targets are inconsistent")
         if per_project > hard:
@@ -363,12 +357,12 @@ class ProviderAdmissionPolicy:
 def glm_provider_admission_policy() -> ProviderAdmissionPolicy:
     return ProviderAdmissionPolicy(
         provider_id="glm_flash_worker",
-        revision=1,
+        revision=2,
         capacity_unit=1,
-        effective_target=1,
-        candidate_target=2,
-        hard_max=8,
-        per_project_cap=2,
+        effective_target=8,
+        candidate_target=16,
+        hard_max=32,
+        per_project_cap=8,
         policy_source="built_in",
     )
 
@@ -391,8 +385,15 @@ class ProviderAdmissionTargetBinding:
             "policy_digest",
             _digest("policy_digest", self.policy_digest),
         )
-        if self.target not in {1, 2}:
-            raise ValueError("provider admission target is not measured")
+        object.__setattr__(
+            self,
+            "target",
+            _positive_int(
+                "provider admission target",
+                self.target,
+                maximum=_MAX_PROVIDER_CAPACITY,
+            ),
+        )
         object.__setattr__(
             self,
             "policy_revision",
@@ -412,8 +413,12 @@ class ProviderAdmissionTargetBinding:
     ) -> "ProviderAdmissionTargetBinding":
         if not isinstance(policy, ProviderAdmissionPolicy):
             raise ValueError("policy must be a ProviderAdmissionPolicy")
-        if target not in {policy.effective_target, policy.candidate_target}:
-            raise ValueError("provider admission target is not measured")
+        if (
+            isinstance(target, bool)
+            or not isinstance(target, int)
+            or not 1 <= target <= policy.hard_max
+        ):
+            raise ValueError("provider admission target exceeds policy")
         return cls(
             provider_id=policy.provider_id,
             policy_digest=policy.policy_digest,
@@ -861,10 +866,11 @@ class ProviderAdmissionKernel:
     ) -> sqlite3.Row:
         kind = _identifier("transition_kind", transition_kind)
         signal = _identifier("last_signal", last_signal)
-        if effective_target not in {
-            self.policy.effective_target,
-            self.policy.candidate_target,
-        }:
+        if (
+            isinstance(effective_target, bool)
+            or not isinstance(effective_target, int)
+            or not 1 <= effective_target <= self.policy.hard_max
+        ):
             raise ProviderAdmissionConflict(
                 "provider admission transition target is invalid"
             )
@@ -1074,11 +1080,7 @@ class ProviderAdmissionKernel:
             target.provider_id != self.policy.provider_id
             or target.policy_digest != self.policy.policy_digest
             or target.policy_revision != self.policy.revision
-            or target.target
-            not in {
-                self.policy.effective_target,
-                self.policy.candidate_target,
-            }
+            or not 1 <= target.target <= self.policy.hard_max
         ):
             raise ProviderAdmissionConflict(
                 "provider admission target binding is stale"

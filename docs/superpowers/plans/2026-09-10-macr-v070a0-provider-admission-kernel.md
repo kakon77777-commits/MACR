@@ -58,7 +58,8 @@ Design: `docs/superpowers/specs/2026-09-10-macr-v070a0-provider-admission-kernel
 - Update PowerShell wrappers with project/lane and bounded wait options while
   keeping provider calls opt-in.
 - RED/GREEN: privacy sentinels, absent-store read, exact resolution authority,
-  target 2 candidate only, values above measured boundary rejected.
+  default target 8, review marker 16, and exact operator selection through the
+  finite hard ceiling 32.
 
 ## Slice 6 — gates and documentation
 

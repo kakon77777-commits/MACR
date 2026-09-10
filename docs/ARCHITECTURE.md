@@ -92,9 +92,11 @@ project-binding digest, operator-owned lane and admission-policy digest. T1
 `worker_count` remains demand: the worker obtains a provider slot before its
 member becomes claimed. Ordinary CLI, T0, host adapters and T1 converge on the
 same kernel, while the GLM adapter independently consumes the one-use permit
-immediately before key/transport access. Effective target starts at 1,
-candidate target is 2 and revision-1 hard maximum is 8. Above-2 capacity and
-automatic promotion remain NotMeasured. BUSY is nonterminal; ambiguous or
+immediately before key/transport access. Policy revision 2 starts at effective
+target 8, exposes 16 as the next review marker, and permits an exact
+authority-selected target from 1 through the finite hard maximum 32. Automatic
+promotion and provider-safe concurrency at each target remain NotMeasured.
+BUSY is nonterminal; ambiguous or
 crashed transport becomes durable provider reconciliation and is never freed
 by TTL alone. Governed target/circuit transitions form an append-only digest
 chain matched to the active projection. Half-open consumes one exact authority

@@ -107,8 +107,9 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
         lane: AdmissionLane,
         *,
         run_id: str | None = None,
+        admission_policy=None,
     ):
-        policy = glm_provider_admission_policy()
+        policy = admission_policy or glm_provider_admission_policy()
         tier = "ad88c6730fd2ad6f6fddc834b698cfc6572944a7584ac7fa7823e58d394de793"
         run = run_id or str(uuid.uuid4())
         now = datetime.now(timezone.utc)
@@ -198,7 +199,15 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
     def test_busy_runtime_performs_no_key_transport_event_or_accounting(self) -> None:
         with d_drive_tempdir() as temp:
             services = build_test_services(temp)
-            kernel = ProviderAdmissionKernel(services.events.path)
+            admission_policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=1,
+                per_project_cap=1,
+            )
+            kernel = ProviderAdmissionKernel(
+                services.events.path,
+                policy=admission_policy,
+            )
             services = replace(services, provider_admission=kernel)
             transport = FakeTransport(success_document())
             key_source = CountingKeySource()
@@ -219,6 +228,7 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
                 task,
                 first_project,
                 AdmissionLane.BULK,
+                admission_policy=admission_policy,
             )
             held_request = ProviderAdmissionRequest(
                 request_id=str(uuid.uuid4()),
@@ -242,6 +252,7 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
                 task,
                 second_project,
                 AdmissionLane.ROUTINE,
+                admission_policy=admission_policy,
             )
 
             with self.assertRaises(ProviderAdmissionBusyError):

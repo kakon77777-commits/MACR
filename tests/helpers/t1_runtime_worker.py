@@ -13,7 +13,10 @@ from macr_runtime.event_store import SqliteEventStore
 from macr_runtime.errors import ProviderAdmissionBusyError
 from macr_runtime.execution import DispatchOrigin
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
-from macr_runtime.provider_admission import ProviderAdmissionKernel
+from macr_runtime.provider_admission import (
+    ProviderAdmissionKernel,
+    glm_provider_admission_policy,
+)
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.t1_dispatcher import T1Dispatcher
 from macr_runtime.t1_manifest import load_t1_manifest
@@ -85,6 +88,8 @@ def main() -> int:
     parser.add_argument("start_signal")
     parser.add_argument("ready_signal")
     parser.add_argument("dispatcher_id")
+    parser.add_argument("effective_target", type=int)
+    parser.add_argument("per_project_cap", type=int)
     args = parser.parse_args()
 
     state_root = Path(args.state_root)
@@ -95,7 +100,12 @@ def main() -> int:
     services = replace(
         services,
         provider_admission=ProviderAdmissionKernel(
-            services.events.path
+            services.events.path,
+            policy=replace(
+                glm_provider_admission_policy(),
+                effective_target=args.effective_target,
+                per_project_cap=args.per_project_cap,
+            ),
         ),
     )
     config = next(

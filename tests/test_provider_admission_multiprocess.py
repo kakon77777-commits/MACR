@@ -171,7 +171,7 @@ class ProviderAdmissionMultiprocessTests(unittest.TestCase):
         self.assertEqual(status.counts["granted"], 2)
         self.assertEqual(status.effective_target, 2)
 
-    def test_eight_processes_share_one_effective_provider_slot(self) -> None:
+    def test_default_eight_grants_eight_distinct_projects(self) -> None:
         with d_drive_tempdir() as temp:
             database = temp / "runtime" / "dispatch.sqlite3"
             policy = glm_provider_admission_policy()
@@ -259,10 +259,11 @@ class ProviderAdmissionMultiprocessTests(unittest.TestCase):
         }
         self.assertEqual(
             outcome_counts,
-            {"granted": 1, "busy": 7, "error": 0, "start_timeout": 0},
+            {"granted": 8, "busy": 0, "error": 0, "start_timeout": 0},
         )
-        self.assertEqual(status.counts["granted"], 1)
-        self.assertEqual(status.counts["waiting"], 7)
+        self.assertEqual(status.counts["granted"], 8)
+        self.assertEqual(status.counts["waiting"], 0)
+        self.assertEqual(status.effective_target, 8)
 
 
 if __name__ == "__main__":

@@ -296,12 +296,13 @@ digest receives that label; arbitrary mismatches are counted as invalid.
   --dispatcher-id worker-1 --allow-network
 ```
 
-Provider admission starts at effective target 1, records target 2 as the only
-bounded live-probe candidate, and has an immutable revision-1 hard ceiling of
-8. A pre-issued exact authority is required to change target 1↔2; no ordinary
-CLI command can self-authorize that transition. Values 3–8, weighted capacity,
-automatic promotion, refill rates and provider-safe concurrency remain
-`NotMeasured`. Project/lane identity is authority-bound. Interactive work gets
+Provider admission policy revision 2 starts at effective target 8, records 16
+as the next review marker, and has a finite hard ceiling of 32. A pre-issued
+exact authority may select any integer target from 1 through 32; no ordinary
+CLI command can self-authorize that transition. Weighted capacity, automatic
+promotion, refill rates, and provider-safe concurrency at each selected target
+remain `NotMeasured` until live observation. Project/lane identity is
+authority-bound. Interactive work gets
 next-slot priority but no permanently idle reserved slot. Unknown network
 outcomes and expired dispatched permits remain capacity-consuming
 `reconciliation_required` evidence and never auto-release or retry. Target and

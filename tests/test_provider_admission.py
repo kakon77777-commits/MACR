@@ -90,11 +90,12 @@ class ProviderAdmissionContractTests(unittest.TestCase):
         policy = glm_provider_admission_policy()
 
         self.assertEqual(policy.provider_id, "glm_flash_worker")
+        self.assertEqual(policy.revision, 2)
         self.assertEqual(policy.capacity_unit, 1)
-        self.assertEqual(policy.effective_target, 1)
-        self.assertEqual(policy.candidate_target, 2)
-        self.assertEqual(policy.hard_max, 8)
-        self.assertEqual(policy.per_project_cap, 2)
+        self.assertEqual(policy.effective_target, 8)
+        self.assertEqual(policy.candidate_target, 16)
+        self.assertEqual(policy.hard_max, 32)
+        self.assertEqual(policy.per_project_cap, 8)
         self.assertEqual(policy.policy_source, "built_in")
         self.assertEqual(len(policy.policy_digest), 64)
 
@@ -103,13 +104,13 @@ class ProviderAdmissionContractTests(unittest.TestCase):
 
         for changed in (
             {"hard_max": 0},
-            {"hard_max": 9},
+            {"hard_max": 33},
             {"effective_target": 0},
-            {"effective_target": 2},
-            {"candidate_target": 1},
-            {"candidate_target": 9},
+            {"effective_target": 33},
+            {"candidate_target": 7},
+            {"candidate_target": 33},
             {"per_project_cap": 0},
-            {"per_project_cap": 9},
+            {"per_project_cap": 33},
             {"capacity_unit": 0},
             {"capacity_unit": -1},
         ):
@@ -237,6 +238,64 @@ class ProviderAdmissionAuthorityTests(unittest.TestCase):
 
 
 class ProviderAdmissionSchemaTests(unittest.TestCase):
+    def test_revision_one_runtime_cannot_silently_gain_revision_two_capacity(self) -> None:
+        legacy_policy = ProviderAdmissionPolicy(
+            provider_id="glm_flash_worker",
+            revision=1,
+            capacity_unit=1,
+            effective_target=1,
+            candidate_target=2,
+            hard_max=8,
+            per_project_cap=2,
+            policy_source="built_in",
+        )
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            ProviderAdmissionKernel(path, policy=legacy_policy)
+            connection = sqlite3.connect(path)
+            try:
+                before = connection.execute(
+                    """SELECT policy_digest, effective_target,
+                              control_revision, control_digest
+                    FROM provider_admission_state"""
+                ).fetchone()
+                transition_count_before = connection.execute(
+                    "SELECT COUNT(*) FROM provider_admission_transitions"
+                ).fetchone()[0]
+                policy_count_before = connection.execute(
+                    "SELECT COUNT(*) FROM provider_admission_policies"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "control state",
+            ):
+                ProviderAdmissionKernel(path)
+            connection = sqlite3.connect(path)
+            try:
+                after = connection.execute(
+                    """SELECT policy_digest, effective_target,
+                              control_revision, control_digest
+                    FROM provider_admission_state"""
+                ).fetchone()
+                transition_count_after = connection.execute(
+                    "SELECT COUNT(*) FROM provider_admission_transitions"
+                ).fetchone()[0]
+                policy_count_after = connection.execute(
+                    "SELECT COUNT(*) FROM provider_admission_policies"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertEqual(before, after)
+        self.assertEqual(
+            (transition_count_before, transition_count_after),
+            (1, 1),
+        )
+        self.assertEqual((policy_count_before, policy_count_after), (1, 1))
+
     def test_schema_seven_migrates_but_nonterminal_runtime_blocks_bootstrap(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
@@ -471,6 +530,37 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
 
 
 class ProviderAdmissionKernelTests(unittest.TestCase):
+    def test_operator_can_activate_any_target_through_hard_max(self) -> None:
+        for selected_target in (1, 7, 16, 24, 32):
+            with self.subTest(target=selected_target), d_drive_tempdir() as temp:
+                path = temp / "runtime" / "dispatch.sqlite3"
+                authorities = DispatchAuthorityStore(path, now=self.clock)
+                kernel = ProviderAdmissionKernel(path, now=self.clock)
+                target = ProviderAdmissionTargetBinding.create(
+                    kernel.policy,
+                    target=selected_target,
+                )
+                reference = authorities.issue(
+                    source_kind="operator_capacity_authority",
+                    source_id=f"target-{selected_target}",
+                    scope=AuthorityScope(
+                        providers=(kernel.policy.provider_id,),
+                        planes=("provider_capacity_activation",),
+                        task_types=("provider_capacity_target",),
+                        provider_admission_target_digests=(
+                            target.binding_digest,
+                        ),
+                        scope_contract_version=3,
+                    ),
+                    expires_at=(
+                        self.clock.value + timedelta(minutes=5)
+                    ).isoformat(),
+                )
+
+                status = kernel.activate_target(target, reference)
+
+            self.assertEqual(status.effective_target, selected_target)
+
     def test_known_429_requires_authorized_single_half_open_probe(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
@@ -646,7 +736,7 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
         self.assertEqual(status.circuit_state, "open")
         self.assertEqual(status.last_signal, "known_pre_network_terminal")
 
-    def test_candidate_target_two_requires_exact_preissued_authority(self) -> None:
+    def test_target_two_downgrade_requires_exact_preissued_authority(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             authorities = DispatchAuthorityStore(path, now=self.clock)
@@ -706,8 +796,15 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
             kernel.cancel_before_transport(second)
 
         self.assertEqual(activated.effective_target, 2)
+        self.assertEqual(
+            ProviderAdmissionTargetBinding.create(
+                kernel.policy,
+                target=3,
+            ).target,
+            3,
+        )
         with self.assertRaises(ValueError):
-            ProviderAdmissionTargetBinding.create(kernel.policy, target=3)
+            ProviderAdmissionTargetBinding.create(kernel.policy, target=33)
 
     def test_target_two_still_enforces_per_project_cap(self) -> None:
         policy = replace(
@@ -876,7 +973,7 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
 
         self.assertEqual(first.project_binding_digest, self.project_a.binding_digest)
 
-    def test_tampered_effective_target_above_candidate_fails_closed(self) -> None:
+    def test_tampered_effective_target_above_hard_max_fails_closed(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             authorities = DispatchAuthorityStore(path, now=self.clock)
@@ -886,7 +983,7 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
             try:
                 connection.execute(
                     """UPDATE provider_admission_state
-                    SET effective_target=8 WHERE provider_id=?""",
+                    SET effective_target=33 WHERE provider_id=?""",
                     (kernel.policy.provider_id,),
                 )
                 connection.commit()
@@ -1011,8 +1108,10 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
         self,
         store: DispatchAuthorityStore,
         projects: tuple[ProjectAdmissionBinding, ...],
+        *,
+        policy: ProviderAdmissionPolicy | None = None,
     ):
-        policy = glm_provider_admission_policy()
+        policy = policy or glm_provider_admission_policy()
         return store.issue(
             source_kind="operator_test",
             source_id=str(uuid.uuid4()),
@@ -1058,12 +1157,22 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
     def test_target_one_is_global_across_projects_and_busy_is_nonterminal(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
+            policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=1,
+                per_project_cap=1,
+            )
             authorities = DispatchAuthorityStore(path, now=self.clock)
             reference = self._authority(
                 authorities,
                 (self.project_a, self.project_b),
+                policy=policy,
             )
-            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
             first = kernel.try_admit(
                 self._request(reference, self.project_a, AdmissionLane.BULK),
                 ttl_seconds=60,
@@ -1087,12 +1196,22 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
     def test_waiting_request_can_gain_released_slot_without_new_identity(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
+            policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=1,
+                per_project_cap=1,
+            )
             authorities = DispatchAuthorityStore(path, now=self.clock)
             reference = self._authority(
                 authorities,
                 (self.project_a, self.project_b),
+                policy=policy,
             )
-            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
             first = kernel.try_admit(
                 self._request(reference, self.project_a, AdmissionLane.BULK),
                 ttl_seconds=60,
@@ -1114,12 +1233,22 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
     def test_interactive_gets_next_slot_then_older_bulk_makes_progress(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
+            policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=1,
+                per_project_cap=1,
+            )
             authorities = DispatchAuthorityStore(path, now=self.clock)
             reference = self._authority(
                 authorities,
                 (self.project_a, self.project_b),
+                policy=policy,
             )
-            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
             holder = kernel.try_admit(
                 self._request(reference, self.project_a, AdmissionLane.ROUTINE),
                 ttl_seconds=60,
@@ -1497,12 +1626,22 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
     def test_expired_waiting_cancels_but_expired_grant_never_auto_releases(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
+            policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=1,
+                per_project_cap=1,
+            )
             authorities = DispatchAuthorityStore(path, now=self.clock)
             reference = self._authority(
                 authorities,
                 (self.project_a, self.project_b),
+                policy=policy,
             )
-            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
             first_request = self._request(
                 reference,
                 self.project_a,
