@@ -1332,7 +1332,8 @@ class ProviderAdmissionKernel:
                 "provider admission policy transition values are invalid"
             )
         if (
-            self.policy.provider_id != binding.provider_id
+            self.policy != glm_provider_admission_policy_v1()
+            or self.policy.provider_id != binding.provider_id
             or self.policy.policy_digest != binding.from_policy_digest
             or self.policy.revision != binding.from_policy_revision
             or successor.provider_id != binding.provider_id

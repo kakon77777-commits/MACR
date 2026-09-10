@@ -480,6 +480,70 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
         self.assertEqual(status.effective_target, 1)
         self.assertEqual(counts, (1, 1))
 
+    def test_foreign_revision_one_cannot_upgrade_into_builtin_revision_two(self) -> None:
+        foreign = replace(
+            glm_provider_admission_policy_v1(),
+            candidate_target=3,
+            policy_source="foreign_test",
+        )
+        successor = glm_provider_admission_policy()
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            kernel = ProviderAdmissionKernel.canonical_runtime(
+                path,
+                policy=foreign,
+            )
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                foreign,
+                successor,
+                target=8,
+            )
+            now = datetime.now(timezone.utc)
+            reference = kernel.authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="foreign-policy-v1-to-v2",
+                scope=AuthorityScope(
+                    providers=(foreign.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "stale",
+            ):
+                kernel.supersede_policy(binding, successor, reference)
+            kernel.authorities.verify(
+                reference,
+                provider_id=foreign.provider_id,
+                plane="provider_capacity_activation",
+                task_type="provider_admission_policy_transition",
+                provider_admission_target_digest=binding.binding_digest,
+            )
+            status = kernel.status(foreign.provider_id)
+            connection = sqlite3.connect(path)
+            try:
+                counts = (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM provider_admission_policies"
+                    ).fetchone()[0],
+                    connection.execute(
+                        "SELECT COUNT(*) FROM provider_admission_transitions"
+                    ).fetchone()[0],
+                )
+            finally:
+                connection.close()
+
+        self.assertEqual(status.policy_digest, foreign.policy_digest)
+        self.assertEqual(status.effective_target, 1)
+        self.assertEqual(counts, (1, 1))
+
     def test_revision_one_runtime_cannot_silently_gain_revision_two_capacity(self) -> None:
         legacy_policy = ProviderAdmissionPolicy(
             provider_id="glm_flash_worker",
