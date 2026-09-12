@@ -704,3 +704,29 @@ evidence. The discriminating repair at
 `da3c78707ba8f59b4d04d2708ac27e7b6ff249cc` permits the benign status only
 when all provider-scoped admission tables are empty, proves positive readback
 does not change the GLM-only database bytes, and rejects an orphan policy.
+
+### Shared Grok admission activation
+
+After full gates and Twin concurrence, `main` and `origin/main` advanced to
+`2da512a7c274c0ddb403829bb1721fc6f831ed54` / tree
+`ae38ffd6d17f4948e86b92692f90959041bad6cf`. Five pre-activation samples found
+zero GLM invokers and zero Grok/Direct processes; runtime nonterminal runs,
+dispatch leases, and Direct created runs were also zero. The unrelated GLM
+domain remained open with one reconciliation-required request.
+
+A WAL-consistent backup was written to
+`D:\AI_RESIDENCE\AI_Runtime\macr-state\backups\grok-admission-20260912T095908Z\dispatch-before.sqlite3`
+(6,582,272 bytes, SHA-256
+`62dccd607b88195e453fddddde5f9c0d4391ba047c0277c9cbfc7a664ad99529`,
+1,607 pages, integrity `ok`). Canonical Grok genesis installed policy
+`bc9b2cc9e3d4e57de1613daf66d323f05942b6281d7a5540e4fbe910b37bf4fe`
+and deployment
+`31dacbb03fa5727b29d130b2a35abd3a330c83ec4909aba6a8e438d71002c874`
+at `8/16/32`, per-project 8, closed circuit, and zero requests.
+
+Post-activation row-set hashes proved all unaffected runtime tables and every
+GLM policy/state/transition row equal to the backup. Grok added exactly one
+policy, one state, and one genesis transition. Five post samples were again
+zero. The two historical Grok Direct rows remained null-snapshot/fail-closed;
+no credential, provider/local-model call, generation, retry, fallback, target
+change, reconciliation, or charge occurred.

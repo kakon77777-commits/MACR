@@ -112,3 +112,53 @@ Provider-safe throughput at 8, 16, or 32 remains `NotMeasured`. A bounded live
 probe, billing reconciliation, and any target change require separate operator
 action. Candidate completion remains distinct from verification, acceptance,
 merge, release, deployment, and Agent adoption.
+
+## Shared canonical activation
+
+After the exact candidate gates and Twin concurrence, `main` and `origin/main`
+were fast-forwarded to `2da512a7c274c0ddb403829bb1721fc6f831ed54` /
+tree `ae38ffd6d17f4948e86b92692f90959041bad6cf`. The two pre-existing untracked
+operator files were preserved.
+
+The Direct instance descriptor was absent, the broader Grok/Direct process
+census and legacy GLM invoker census were both zero for five consecutive
+samples, runtime nonterminal runs and dispatch leases were zero, and Direct had
+zero `created` runs. The shared GLM domain was independently open with one
+`reconciliation_required` request; it was deliberately left untouched.
+
+SQLite backup API created the WAL-consistent pre-activation copy:
+
+```text
+D:\AI_RESIDENCE\AI_Runtime\macr-state\backups\grok-admission-20260912T095908Z\dispatch-before.sqlite3
+bytes       6582272
+sha256      62dccd607b88195e453fddddde5f9c0d4391ba047c0277c9cbfc7a664ad99529
+page count  1607 source / 1607 backup
+integrity   ok / ok
+```
+
+The canonical kernel then installed only Grok policy revision 1, its genesis
+transition, and its active state:
+
+```text
+policy digest      bc9b2cc9e3d4e57de1613daf66d323f05942b6281d7a5540e4fbe910b37bf4fe
+deployment digest  31dacbb03fa5727b29d130b2a35abd3a330c83ec4909aba6a8e438d71002c874
+effective/review/hard  8 / 16 / 32
+per-project cap    8
+circuit            closed
+last signal        policy_installed
+requests           0
+```
+
+Post-activation integrity was `ok`. Canonical row-set hashing proved every
+unaffected runtime table equal and all GLM policy/state/transition rows equal
+to the backup. Grok contains exactly one policy, one state, and one transition;
+its request/project rows remain empty. A second five-sample process census was
+zero. `admission-status --provider grok` returned initialized canonical state
+with network/provider false.
+
+The Direct database still contains exactly two historical Grok conversations,
+both with null token-policy snapshots and zero active runs. They remain
+fail-closed and were not backfilled. No key read, provider request, local-model
+request, generation, retry, fallback, target change, reconciliation, or
+currency expenditure occurred. Opening Direct Chat now requires a fresh launch
+from merged source; no old process was running during activation.
