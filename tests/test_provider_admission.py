@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import hashlib
+import json
 import unittest
 import uuid
 from dataclasses import replace
@@ -84,6 +86,7 @@ class ProviderAdmissionContractTests(unittest.TestCase):
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             ProviderAdmissionKernel(path)
+            before_hash = hashlib.sha256(path.read_bytes()).hexdigest()
             connection = sqlite3.connect(path)
             before = connection.execute(
                 """SELECT COUNT(*) FROM provider_admission_state
@@ -92,6 +95,7 @@ class ProviderAdmissionContractTests(unittest.TestCase):
             connection.close()
 
             status = read_provider_admission_status(path, "grok")
+            after_hash = hashlib.sha256(path.read_bytes()).hexdigest()
 
             connection = sqlite3.connect(path)
             after = connection.execute(
@@ -107,6 +111,42 @@ class ProviderAdmissionContractTests(unittest.TestCase):
         self.assertEqual(status.hard_max, 32)
         self.assertEqual(before, 0)
         self.assertEqual(after, 0)
+        self.assertEqual(before_hash, after_hash)
+
+    def test_readonly_grok_status_rejects_orphan_policy_evidence(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            ProviderAdmissionKernel(path)
+            policy = grok_provider_admission_policy()
+            body_json = json.dumps(
+                policy.to_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO provider_admission_policies(
+                    provider_id, revision, body_json, body_sha256,
+                    policy_digest, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    policy.provider_id,
+                    policy.revision,
+                    body_json,
+                    hashlib.sha256(body_json.encode("utf-8")).hexdigest(),
+                    policy.policy_digest,
+                    "2026-09-12T00:00:00+00:00",
+                ),
+            )
+            connection.commit()
+            connection.close()
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "state is missing",
+            ):
+                read_provider_admission_status(path, "grok")
 
     def test_glm_reconciliation_does_not_poison_grok_capacity(self) -> None:
         with d_drive_tempdir() as temp:

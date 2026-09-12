@@ -2648,6 +2648,22 @@ def read_provider_admission_status(
             (provider,),
         ).fetchone()
         if state_head is None:
+            related_rows = sum(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE provider_id=?",
+                    (provider,),
+                ).fetchone()[0]
+                for table in (
+                    "provider_admission_policies",
+                    "provider_admission_transitions",
+                    "provider_admission_requests",
+                    "provider_admission_projects",
+                )
+            )
+            if related_rows:
+                raise ProviderAdmissionConflict(
+                    "provider admission state is missing for existing evidence"
+                )
             return ProviderAdmissionStatus(
                 initialized=False,
                 provider_id=provider,
