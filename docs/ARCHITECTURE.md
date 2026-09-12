@@ -88,13 +88,15 @@ T1 queue members are exact ordered v4 digests bound to provider, route, role, pr
 
 Runtime schema 8 adds the lower operational Provider Admission Kernel in the
 same cross-process SQLite authority domain. Authority scope v3 binds an exact
-project-binding digest, operator-owned lane and admission-policy digest. T1
-`worker_count` remains demand: the worker obtains a provider slot before its
-member becomes claimed. Ordinary CLI, T0, host adapters and T1 converge on the
-same kernel, while the GLM adapter independently consumes the one-use permit
-immediately before key/transport access. Policy revision 2 starts at effective
-target 8, exposes 16 as the next review marker, and permits an exact
-authority-selected target from 1 through the finite hard maximum 32. Automatic
+project-binding digest, operator-owned lane and admission-policy digest. Each
+provider owns an independent control/capacity domain in the same database.
+T1 `worker_count` remains demand: the worker obtains a GLM slot before its
+member becomes claimed. Ordinary CLI, T0, host adapters and Direct Grok all
+resolve the exact provider kernel. GLM policy revision 2 and Grok policy
+revision 1 each start at effective target 8, expose 16 as the next review
+marker, cap one project at 8, and permit an exact authority-selected target
+from 1 through the finite hard maximum 32. The GLM and Grok adapters consume a
+one-use permit as the last governed operation before transport. Automatic
 promotion and provider-safe concurrency at each target remain NotMeasured.
 BUSY is nonterminal; ambiguous or
 crashed transport becomes durable provider reconciliation and is never freed
@@ -113,6 +115,7 @@ Differential manifests apply one exact probe pack and verifier graph to at least
 
 - Direct provider IDs are closed to exact `grok`/`grok-4.6` and exact `ollama_qwythos`/Qwythos-9B-v2 Q4_K_M.
 - Provider/model, system-prompt hash, settings profile/version, policy hash, plaintext-encryption marker, dataset role, and training eligibility are immutable conversation metadata.
+- Grok Direct holds a conversation-scoped dispatch lease plus one slot from the same provider-wide `grok` domain used by delegated/Plan/host calls. Same-conversation sends are serial; distinct conversations may overlap only inside the current Grok target. Qwythos retains its prior provider-wide Direct serialization and does not inherit Grok concurrency.
 - Grok Direct records are `archive_only`; Qwythos Direct records are `eval_only`; both are `training_eligible=false`. The Qwythos installed model digest is pinned at conversation creation and its canonical weights are never modified.
 - Complete history is sent without automatic summary, compaction, truncation, routing, fallback, or retry. A local context estimate warns or refuses before provider use without dropping earlier turns.
 - Raw answer bytes enter the private Candidate Vault before a successful assistant message is committed. Rejected protocol observations retain safe usage/cost/finish/model evidence without entering conversation history.
@@ -153,7 +156,7 @@ The CLI resolves provider scope without creating state or reading a task file. S
 
 ## Grok boundary
 
-- `grok` is fixed to `grok-4.6` with `reasoning.effort=high`.
+- `grok` is fixed to `grok-4.6` with `reasoning.effort=high`, a 500,000-token hard context, 65,536 default output and 131,072 exact maximum output.
 - `grok_standard` is fixed to `grok-4.3` and must be named explicitly.
 - Every request sets `store=false`, uses a per-task output bound, and enables no tools.
 - Returned model identity must exactly match the requested profile.
@@ -262,7 +265,7 @@ activation method. Caller-constructed DTOs, environment variables and Claude
 Claude Code/Codex shells can use the existing MACR CLI under honest `cli`
 attribution. Live host-owned bindings remain `NotMeasured`.
 
-Ordinary external policies are larger than the local Qwythos policy: Grok hard context 400,000 and 32,768 output floor; GLM 512,000 context with 32,768 minimum and 65,536 default/maximum; Gemini 512,000 with a 16,384 floor; MiniMax 180,000 with a 2,048 OpenAI-compatible ceiling/floor exception; Qwythos remains 8,192 context and 4,096 output without the cloud floor. The T1 GLM preset is separate at 128,000 context, 32,768 minimum and 65,536 default/maximum. Its schema-4 cost envelopes and worker count are exact manifest data rather than product-wide constants.
+Ordinary external policies are larger than the local Qwythos policy: Grok 4.6 has 500,000 hard context, 32,768 output floor, 65,536 default and 131,072 maximum; GLM has 512,000 context with 32,768 minimum and 65,536 default/maximum; Gemini has 512,000 with a 16,384 floor; MiniMax has 180,000 with a 2,048 OpenAI-compatible ceiling/floor exception; Qwythos remains 8,192 context and 4,096 output without the cloud floor. `TaskConstraints` can represent 131,072, but each exact provider policy still refuses a larger-than-local envelope before transport. The T1 GLM preset is separate at 128,000 context, 32,768 minimum and 65,536 default/maximum. Its schema-4 cost envelopes and worker count are exact manifest data rather than product-wide constants.
 
 The Windows `macr.ps1` entry point owns Python child encoding. It temporarily sets `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`, invokes Python once with `-X utf8`, preserves the child exit code, and restores both caller values in `finally`. This is process-local output handling, not a machine/user environment mutation and not credential configuration.
 

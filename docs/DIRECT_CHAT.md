@@ -1,6 +1,6 @@
 # MACR Direct Chat UI 0.1 Operator Guide
 
-Status: retained Direct UI `0.1` under `MACR 0.7.0a0`, 2026-09-01
+Status: retained Direct UI `0.1` under `MACR 0.7.0a0`, updated 2026-09-12
 
 This is the executable Direct plane for provider-native Grok 4.6 and local Qwythos conversations. It remains separate from the v0.7 Agent semantic plane. Earlier v0.5/v0.6 design and implementation records remain separately versioned and unchanged.
 
@@ -28,12 +28,18 @@ The loader accepts only one bounded non-whitespace `xai-...` API secret. A UUID-
 
 The server shuts down after 30 idle minutes by default. Active requests and unsettled accounting keep it alive. Launching the shortcut again opens the existing instance when it is reachable.
 
+After updating MACR, close the existing Direct Chat process and reopen the
+shortcut. An already-running process retains its loaded code and historical
+in-memory authority; a newly installed provider-admission row does not govern
+that old process retroactively.
+
 ## Interaction contract
 
 - Select either **Grok 4.6** or **Qwythos** before creating a conversation.
 - Provider and model cannot change inside a conversation.
 - The system-prompt field is visible and blank by default. Blank means no system message. Nonblank text is stored visibly and sent exactly once at the start of every full-history request.
 - Every request carries all stored user/assistant turns. Direct UI 0.1 does not silently summarize, compact, truncate, route, retry, or switch models.
+- Two sends to the same conversation are serialized. Distinct Grok conversations may overlap, but every Direct turn also consumes the same provider-wide Grok capacity used by delegated, Plan, and Codex/Claude host-adapter calls. At the default effective target 8, a ninth concurrent Grok request is refused before provider transport. Qwythos retains provider-wide Direct serialization.
 - While generating, the UI shows model and elapsed wall time only. It has no fabricated percentage and does not stream partial tokens.
 - A completed answer is privately captured and accounted before it is atomically added to history. Model text is rendered as exact safe pre-wrapped text, not executable HTML.
 - Search, archive, restore, active settings, and provider-account summaries are local UI functions.
@@ -44,6 +50,7 @@ The server shuts down after 30 idle minutes by default. Active requests and unse
 ### Grok 4.6
 
 - Exact provider/model: `grok` / `grok-4.6`, reasoning effort `high`.
+- New conversations pin a 400,000-token warning, 500,000-token hard context, 65,536 default output and 131,072 maximum output. Existing conversations keep their complete valid snapshot; the runtime neither enlarges them nor backfills missing legacy snapshots.
 - Request uses xAI Responses input roles, `store=false`, no tools, no previous response ID, one transport attempt, and a bounded maximum output.
 - Conversation dataset role is `archive_only`; local `training_eligible=false`.
 - The settings preference `provider_improvement_preference=allowed` is recorded, but it does not prove provider retention, deletion, or training behavior.
@@ -101,6 +108,12 @@ The implementation gate is offline/local and does not spend Grok credit. The ope
 5. Open Settings and Accounting. Confirm Qwythos is `zero_local`; confirm Grok cost is provider-reported or explicitly unknown, never silently zero.
 6. Search for each conversation, archive it, enable archived history, and restore it.
 7. Inspect no provider response as delegated verification or acceptance. These are Direct conversation records only.
+
+The admission state can be checked without provider use:
+
+```powershell
+.\scripts\macr.ps1 admission-status --provider grok
+```
 
 ## Alpha limits
 

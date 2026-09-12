@@ -29,6 +29,13 @@ the named checkpoints remain the detailed contracts.
   never directly changes provider capacity. Production transport accepts only
   the canonical operator runtime; alternate D-drive databases are explicit
   offline-test capabilities.
+- Grok 4.6 has its own admission domain with the same 8/16/32 limits and
+  per-project cap 8. Direct Chat, ordinary delegated invocation, T0 Plan, and
+  Codex/Claude host-adapter calls share that Grok pool; GLM and Grok do not
+  consume each other's capacity.
+- New Grok conversations pin 500,000 hard context, 65,536 default output and
+  131,072 maximum output. The generic task contract accepts 131,072, but every
+  other exact provider policy keeps and enforces its smaller maximum.
 - The v0.7 Agent contract, state, and semantic kernels through Phase C are
   available offline.
 
@@ -51,6 +58,11 @@ generation is:
 ```powershell
 .\scripts\macr.ps1 direct-chat --smoke
 ```
+
+After a MACR upgrade, exit the old Direct Chat process and reopen it. Same-
+conversation turns remain serial. Different Grok conversations may overlap up
+to the shared Grok provider target; the ninth concurrent request is refused
+before transport when the effective target remains 8.
 
 Full behavior and privacy-deletion boundaries are in `docs\DIRECT_CHAT.md`.
 
@@ -118,6 +130,14 @@ Interpretation:
 
 Remote HTTP error messages, response bodies, connection reasons, credentials,
 prompts, and answers are not written into public event/accounting telemetry.
+
+Read the independent provider-capacity domains without contacting either
+provider:
+
+```powershell
+.\scripts\macr.ps1 admission-status --provider glm_flash_worker
+.\scripts\macr.ps1 admission-status --provider grok
+```
 
 ## Dynamic T1 use
 

@@ -40,6 +40,10 @@ Local startup smoke without model generation:
 
 The UI exposes only `grok` (`grok-4.6`) and `ollama_qwythos`. A blank system-prompt field produces no system message; nonblank content stays visible and is sent exactly once. Responses appear only after the provider completes. Conversation history, search, archive/restore, settings snapshots, cost metadata, and candidate captures remain on D:. Permanent privacy deletion requires exact `DELETE`, refuses active runs, removes Direct plaintext and Candidate files, enables SQLite `secure_delete`, and truncates the Direct WAL while retaining content-free accounting/audit metadata. See `docs/DIRECT_CHAT.md` for limits and the manual two-provider acceptance run.
 
+After upgrading MACR, close any already-running Direct Chat process and launch
+the shortcut again. A process that loaded older code retains that old code and
+authority in memory; a new admission row cannot govern it retroactively.
+
 ## Provider profiles
 
 | Provider ID | Model/route | Scope | Selection rule |
@@ -64,7 +68,7 @@ Token limits are no longer one global setting. Built-ins and append-only operato
 
 | Exact provider/model | Warning context | Hard context | Minimum task output | Default output | MACR max output |
 |---|---:|---:|---:|---:|---:|
-| `grok/grok-4.6` | 180,000 | 400,000 | 32,768 | 32,768 | 65,536 |
+| `grok/grok-4.6` | 400,000 | 500,000 | 32,768 | 65,536 | 131,072 |
 | `grok_standard/grok-4.3` | 180,000 | 400,000 | 32,768 | 32,768 | 65,536 |
 | `glm_flash_worker/glm-5.3-flash` | 400,000 | 512,000 | 32,768 | 65,536 | 65,536 |
 | `google_gemini/gemini-3.7-flash` | 400,000 | 512,000 | 16,384 | 16,384 | 65,536 |
@@ -72,9 +76,13 @@ Token limits are no longer one global setting. Built-ins and append-only operato
 | `minimax/MiniMax-M2.7-highspeed` | 160,000 | 180,000 | 2,048 | 2,048 | 2,048 |
 | `ollama_qwythos/Qwythos-9B-v2` | 7,000 | 8,192 | 1 | 4,096 | 4,096 |
 
-`TaskConstraints.max_output_tokens` now defaults to 16,384. For external text
-models, the exact model-local default is also a hard quality floor: Grok uses
-32,768; ordinary GLM uses 32,768 minimum with a 65,536 quality-first default;
+`TaskConstraints.max_output_tokens` now defaults to 16,384 and accepts an
+explicit value through 131,072. The exact provider/model policy remains the
+effective gate: only `grok/grok-4.6` currently accepts 131,072; GLM, Grok 4.3,
+Gemini, MiniMax, and Qwythos reject values above their own smaller maximums
+before transport. For external text models, the exact model-local default is
+also a hard quality floor: Grok uses 32,768 minimum with a 65,536 default;
+ordinary GLM uses 32,768 minimum with a 65,536 quality-first default;
 Gemini uses 16,384. MiniMax remains an explicit
 2,048-token capability exception because that is its configured provider
 ceiling. Loopback Qwythos does not inherit the cloud floor. An external
@@ -86,9 +94,11 @@ The quality floor is an explicit field in model-token policy contract v2 and
 therefore changes the policy digest. Grok, Gemini, MiniMax and GLM adapters
 repeat the check before credential access; runtime admission is not the sole
 enforcement point. Existing GLM approvals bind policy-v1 digests and must be
-regenerated. A legacy Grok Direct conversation without a current v2 policy
-snapshot fails before message append, authority admission or network; create a
-new conversation rather than silently rebinding its history. A legacy local
+regenerated. A legacy Grok Direct conversation without a policy snapshot fails
+before message append, authority admission or network; create a new
+conversation rather than silently rebinding its history. An older conversation
+with a valid pinned 400,000/32,768 policy remains on that exact policy; it is
+not rewritten to 500,000/65,536. A legacy local
 Qwythos v1 snapshot is verified under its original digest and retains the same
 local limits in memory; it does not acquire the cloud floor.
 
@@ -287,6 +297,7 @@ digest receives that label; arbitrary mismatches are counted as invalid.
 ```powershell
 .\scripts\macr.ps1 queue-status --state reconciliation_required
 .\scripts\macr.ps1 admission-status --provider glm_flash_worker
+.\scripts\macr.ps1 admission-status --provider grok
 .\scripts\macr.ps1 t1-stage .\private\t1-manifest.json `
   --project-id my-project --admission-lane bulk `
   --dispatcher-id worker-1 --dispatcher-id worker-2 `
@@ -296,10 +307,16 @@ digest receives that label; arbitrary mismatches are counted as invalid.
   --dispatcher-id worker-1 --allow-network
 ```
 
-Provider admission policy revision 2 starts at effective target 8, records 16
-as the next review marker, and has a finite hard ceiling of 32. A pre-issued
-exact authority may select any integer target from 1 through 32; no ordinary
-CLI command can self-authorize that transition. Weighted capacity, automatic
+Provider admission is provider-scoped, not one global bucket. GLM policy
+revision 2 and Grok policy revision 1 each start at effective target 8, record
+16 as the next review marker, have a finite hard ceiling of 32, and cap one
+project at 8. Direct Grok, ordinary delegated Grok, T0 Plan execution, and the
+Codex/Claude host adapter all consume the same `grok` domain; GLM state and
+Grok state remain independent. Same-conversation Direct turns are serialized,
+while different Grok conversations may run concurrently inside that shared
+provider limit. A pre-issued exact authority may select any integer target
+from 1 through 32; no ordinary CLI command can self-authorize that transition.
+Weighted capacity, automatic
 promotion, refill rates, and provider-safe concurrency at each selected target
 remain `NotMeasured` until live observation. Project/lane identity is
 authority-bound. Interactive work gets

@@ -1,11 +1,11 @@
 # Provider status
 
-Updated: 2026-09-07 for MACR v0.7.0a0 Phase-C Alpha feature candidate
+Updated: 2026-09-12 for MACR v0.7.0a0 Phase-C Alpha feature candidate
 
 | Provider ID | Required model/route | Credential | Billing | Runtime state |
 |---|---|---|---:|---|
 | `minimax` | exact `MiniMax-M2.7` or `MiniMax-M2.7-highspeed` | `MINIMAX_API_KEY` | allowed | adapter implemented; 180,000 hard context / 2,048 output policy |
-| `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | delegated + Direct adapters implemented; Direct live acceptance pending |
+| `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | delegated + Direct adapters share provider admission; 500,000 hard context / 65,536 default / 131,072 max output |
 | `grok_standard` | `grok-4.3` | `XAI_API_KEY` | allowed | adapter implemented; manual profile only |
 | `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | delegated + Direct adapters implemented; Direct live acceptance pending |
 | `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
@@ -26,7 +26,7 @@ Accounting's `soft_warning` state remains distinct from each delegated provider 
 
 ## Exact model-token policy status
 
-The active token controls use policy contract v2 with an explicit digest-bound floor and append-only store schema 1 at `settings\model-token-policies.sqlite3`: Grok 4.6/4.3 hard context 400,000, floor/default 32,768 and max output 65,536; ordinary GLM 5.3 Flash hard context 512,000, minimum 32,768 and default/max 65,536; Gemini 3.7 Flash hard context 512,000, floor/default 16,384 and max output 65,536; MiniMax M2.7 variants hard context 180,000 and provider-limited 2,048 floor/max; Qwythos-9B-v2 hard context 8,192 and max output 4,096 with no cloud floor. The separate T1 GLM preset is 128,000 context, 32,768 minimum and 65,536 default/max. An override never changes provider/model identity or immutable provider ceilings/floors, and cannot reduce GLM's task-specific 65,536 real-work requirement. `capability-status` reports content-free current/legacy/invalid/active override counts; a policy-v1-base override is immutable `legacy_pre_quality_floor` evidence and fails typed activation/use.
+The active token controls use policy contract v2 with an explicit digest-bound floor and append-only store schema 1 at `settings\model-token-policies.sqlite3`: Grok 4.6 has 500,000 hard context, 32,768 floor, 65,536 default and 131,072 max output; Grok 4.3 remains 400,000 with 32,768 default / 65,536 max; ordinary GLM 5.3 Flash has 512,000 hard context, minimum 32,768 and default/max 65,536; Gemini 3.7 Flash has 512,000 hard context, floor/default 16,384 and max output 65,536; MiniMax M2.7 variants have 180,000 hard context and provider-limited 2,048 floor/max; Qwythos-9B-v2 has 8,192 hard context and max output 4,096 with no cloud floor. The generic task contract can represent 131,072, but only the exact Grok 4.6 policy accepts it. The separate T1 GLM preset is 128,000 context, 32,768 minimum and 65,536 default/max. An override never changes provider/model identity or immutable provider ceilings/floors, and cannot reduce GLM's task-specific 65,536 real-work requirement. `capability-status` reports content-free current/legacy/invalid/active override counts; a policy-v1-base override is immutable `legacy_pre_quality_floor` evidence and fails typed activation/use.
 
 ## Grok policy
 
@@ -39,6 +39,10 @@ Every MACR Grok call requires:
 - a public or explicitly approved internal task;
 - positive `max_cost_usd` and bounded `max_output_tokens`;
 - `store=false`, no tools, exact returned-model equality, and actual-cost capture.
+- one exact slot from the provider-wide Grok admission domain. Direct,
+  delegated, T0 Plan, and Codex/Claude host-adapter calls share its effective
+  target 8, review marker 16, hard ceiling 32, and per-project cap 8. Same-
+  conversation Direct calls remain serial; GLM capacity is a separate domain.
 
 Grok 4.6 failure never invokes Grok 4.3 automatically.
 

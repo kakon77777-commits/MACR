@@ -667,3 +667,27 @@ revision 45. All unrelated operational digests remained equal. No production
 credential or provider call was used. Exact backup, pre/post evidence and
 recovery are recorded in
 `docs/checkpoints/MACR-v0.7.0a0-provider-admission-policy-v2-activation-2026-09-10.md`.
+
+## v0.7.0a0 Grok admission and large-context candidate
+
+On 2026-09-12 the provider admission substrate was extended to the exact
+`grok/grok-4.6` route on implementation commit
+`597b49a652d1855d5dd6da1a44e097299268ff6b` / tree
+`c8c148ab13a32c86371b03831046d44133fd99b6`. Grok receives an independent
+provider domain with effective/review/hard targets `8/16/32` and per-project
+cap 8. Direct, delegated, T0 Plan, and Codex/Claude host-adapter paths converge
+on that domain; GLM and Grok capacity/circuit state remain separate.
+
+New Grok conversations pin 500,000 hard context, 65,536 default output and
+131,072 maximum output. Historical complete snapshots remain exact; missing
+or internally inconsistent snapshots fail before dispatch. The generic task
+contract can now represent 131,072, but every smaller exact model policy still
+rejects it locally.
+
+Focused offline evidence passed 162 tests plus repeated concurrency controls.
+No credential, real provider request, local-model generation, shared-state
+write, automatic retry/fallback, target promotion, acceptance, Agent action,
+or deployment occurred in the implementation checkpoint. Merge alone cannot
+govern an already-running old Direct process. Exact scope, restart requirement,
+activation sequence, and remaining live boundary are recorded in
+`docs/checkpoints/MACR-v0.7.0a0-grok-admission-context-2026-09-12.md`.
