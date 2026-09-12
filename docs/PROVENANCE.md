@@ -730,3 +730,42 @@ policy, one state, and one genesis transition. Five post samples were again
 zero. The two historical Grok Direct rows remained null-snapshot/fail-closed;
 no credential, provider/local-model call, generation, retry, fallback, target
 change, reconciliation, or charge occurred.
+
+## v0.7 Hosted Agent Cell precursor and shared uncertainty isolation
+
+On 2026-09-12 the offline precursor was integrated into local `main` at exact
+implementation commit `91e6309fda698922d5b20276802eb646f1830095` / tree
+`465e7bfb38b7ce9f78a949a9bff3c8bb9d7e9325`. The complete gate reported 164
+focused tests, 38 required IDs, 969 inherited tests and 98 Phase-C focused
+tests. Grok and GLM used only injected fake transports; no shared mutation was
+performed by the gate. One preceding wrapper attempt stopped at
+`SpawnProcess-34`; the later standalone Phase-C and complete wrapper passes do
+not erase that test-environment observation.
+
+The code adds an offline Hosted Agent Cell precursor with private D-drive
+blobs, content-free Agent SQLite evidence, exact provider/context/tool bindings,
+bounded read-only tools, durable preallocation, checkpoint/rehydration and
+Candidate Vault completion. It remains under package `0.7.0a0`; canonical
+`v0.7.0a1`, shared Agent DB adoption and live Hosted Cell provider use remain
+unclaimed.
+
+Under explicit operator direction, a SQLite-native backup was captured at
+`D:\AI_RESIDENCE\AI_Runtime\macr-state\backups\provider-admission-pre-r3-r2-20260912-220517.sqlite3`
+(6,590,464 bytes, SHA-256
+`b902eb73a543bc860ceb48489ec9462fcceb55a507114180705f5d3df597a35a`).
+GLM r2 then advanced to r3 using binding
+`70fcf82b6c0526e4d1956b12a170aa583226a5b00c2dd6ee11c1698cc0a1741e`;
+Grok r1 advanced to r2 using binding
+`6866a0887865b7991c08d9bf227a2fac99d05fc4f9f0c77aa3261427c3f16031`.
+The consumed authority digests are respectively
+`56b6012b824ffeb20328e41ef203982b92bf1212085197209e67364e946af43c`
+and `4adcca84dc96b2b8d50480f7ceb464390beb50ca013ca7f2f6accbc8d55ddd50`.
+
+Post-activation GLM is policy r3/control revision 73 and Grok is policy
+r2/control revision 2; both remain `8/16/32`, per-project 8, circuit closed.
+The old GLM request remains unresolved under its historical r2 policy and
+continues consuming one slot; accounting remains `unknown_after_dispatch` with
+NULL currency cost. No credential, provider call, generation, retry, fallback,
+billing settlement, Hosted Agent DB adoption, tag, or release occurred. The
+full evidence is in
+`docs/checkpoints/MACR-v0.7-provider-admission-r3-r2-activation-2026-09-12.md`.

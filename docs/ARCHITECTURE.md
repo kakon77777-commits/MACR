@@ -92,8 +92,9 @@ project-binding digest, operator-owned lane and admission-policy digest. Each
 provider owns an independent control/capacity domain in the same database.
 T1 `worker_count` remains demand: the worker obtains a GLM slot before its
 member becomes claimed. Ordinary CLI, T0, host adapters and Direct Grok all
-resolve the exact provider kernel. The latest built-ins are GLM policy revision
-3 and Grok policy revision 2; each starts at effective target 8 and exposes 16 as the next review
+resolve the exact provider kernel. The canonical shared runtime activated GLM
+policy revision 3 and Grok policy revision 2 on 2026-09-12; each retains
+effective target 8 and exposes 16 as the next review
 marker, cap one project at 8, and permit an exact authority-selected target
 from 1 through the finite hard maximum 32. The GLM and Grok adapters consume a
 one-use permit as the last governed operation before transport. Automatic
@@ -113,10 +114,19 @@ and authority under one SQLite write lock.
 This gate is separate from Phase D observation and Phase E semantic action
 admission.
 
-Code availability is not policy activation. Canonical runtime resolution
-reopens the exact stored GLM r2/Grok r1 policy until an explicit successor
-transition receipt exists; Hosted Agent Cell shared adoption is a separate
-later operation.
+Code availability is not policy activation. The current canonical runtime has
+explicit successor receipts (GLM control revision 73, Grok revision 2), while
+the historical policies and GLM unresolved request remain immutable evidence.
+Hosted Agent Cell shared adoption is a separate later operation and remains
+false.
+
+The offline `macr_runtime.agent.cell` precursor wraps the existing AgentRun,
+semantic projection, action, temporal, Candidate Vault, provider runtime and
+admission owners. It adds private D-drive context/model/tool blobs plus a
+content-free Agent SQLite component, exact provider/context/tool-profile
+bindings, bounded read-only tools, checkpoint/rehydration and crash recovery.
+It does not redefine verified observation, acceptance, Phase-F resume, or
+canonical `v0.7.0a1` closure.
 
 Differential manifests apply one exact probe pack and verifier graph to at least three qualified route candidates. Public comparison rows contain blinded candidate IDs, verifier counts, evidence digests, and costs—never model labels. `probe-plan` and `probe-replay` are manifest/replay commands and perform no provider execution.
 

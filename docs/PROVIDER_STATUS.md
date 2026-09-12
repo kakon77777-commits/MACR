@@ -1,16 +1,16 @@
 # Provider status
 
-Updated: 2026-09-12 for MACR v0.7.0a0 Phase-C Alpha feature candidate
+Updated: 2026-09-12 for MACR v0.7.0a0 Phase-C Alpha with shared GLM r3/Grok r2 active
 
 | Provider ID | Required model/route | Credential | Billing | Runtime state |
 |---|---|---|---:|---|
 | `minimax` | exact `MiniMax-M2.7` or `MiniMax-M2.7-highspeed` | `MINIMAX_API_KEY` | allowed | adapter implemented; 180,000 hard context / 2,048 output policy |
-| `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | delegated + Direct adapters share provider admission; 500,000 hard context / 65,536 default / 131,072 max output |
+| `grok` | `grok-4.6`, reasoning high | `XAI_API_KEY` | allowed | admission r2 active; delegated + Direct adapters share capacity; 500,000 hard context / 65,536 default / 131,072 max output |
 | `grok_standard` | `grok-4.3` | `XAI_API_KEY` | allowed | adapter implemented; manual profile only |
 | `ollama_qwythos` | installed Qwythos-9B-v2 Q4_K_M | none | zero | delegated + Direct adapters implemented; Direct live acceptance pending |
 | `google_gemini` | `gemini-3.7-flash` | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
 | `google_image` | `gemini-3.1-flash-image`, one 1K output | D: service-account file + project environment | allowed | adapter implemented; live v0.3 candidate evidence recorded |
-| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | provider-late fixed `D:\KEY\GLM.txt` | allowed | native pre-validation observation adapter; prior v0.4 live candidate evidence retained |
+| `glm_flash_worker` | `glm-5.3-flash`, reasoning max | provider-late fixed `D:\KEY\GLM.txt` | allowed | admission r3 active; one historical unknown request reserves one slot; native observation adapter |
 | `google_veo_fast` | `veo-3.1-fast-generate-001` | not loaded | unavailable | disabled; no long-running-operation adapter |
 | `google_tts` | `gemini-3.1-flash-tts-preview` | not loaded | unavailable | disabled; no audio adapter |
 | `google_lyria` | `lyria-3-clip-preview` | not loaded | unavailable | disabled; no music adapter |
@@ -105,10 +105,10 @@ Accounting schema 4 and terminal event contract 3 expose provider/date-filtered 
 
 For T1, `queue-status` exposes only bounded content-free state. Schema 4 binds ordered v4 member digests, an explicit worker count, and a v4 manifest digest to exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy-v2 digest, the exact profile-valid output value, per-member cost ceilings, their exact aggregate, an operator-selected campaign ceiling, expiry, and the dispatcher set. Current delegated real-work members require 65,536 output tokens. Member count may exceed worker count; worker count must be between one and member count and equal the number of authorized dispatcher IDs. Schemas 1, 2 and 3 remain inspectable respectively as `legacy_pre_tier`, `legacy_pre_quality_floor`, and `legacy_fixed_three_workers`, but cannot stage or dispatch. Stale schema-4 manifests carrying the prior T1 policy digest also fail before staging and are not rewritten. `reconciliation_required` blocks later claims in the same plan. It remains globally enumerable, but another exact-authorized project/plan may use remaining provider capacity. There is no automatic retry, fallback, verification, materialization, or acceptance.
 
-The latest built-in Provider Admission Kernel candidate is GLM policy revision
-3. It does not govern a canonical runtime still pinned to stored revision 2
-until an explicit transition receipt exists. Both revisions retain effective
-target 8, the next review
+The canonical shared runtime explicitly activated GLM policy revision 3 and
+Grok policy revision 2 on 2026-09-12. GLM control revision 73 and Grok control
+revision 2 are each backed by one consumed transition authority and append-only
+receipt. Both retain effective target 8, the next review
 marker is 16, the finite hard ceiling is 32, per-project cap is 8, and raw
 request weight is 1. An exact pre-issued capacity authority may select any
 integer target from 1 through 32; auto-scaling and provider-safe concurrency at
@@ -125,7 +125,10 @@ is read-only by default and requires its exact preflight binding digest to
 advance historical GLM r2/Grok r1 state; preserved uncertain rows keep their
 historical policy digest and accounting state. The binding includes a
 database-derived control/unresolved-set snapshot that apply rechecks under the
-transition write lock. Active target/circuit state must match its append-only receipt
+transition write lock. The preserved GLM r2 request remains
+`reconciliation_required`, keeps its historical policy digest and one capacity
+unit, and still has unknown billing/NULL cost; r3 merely stops that one request
+from discarding the other seven slots. Active target/circuit state must match its append-only receipt
 chain. Half-open consumes a one-use authority bound to one exact request digest;
 another request cannot borrow the probe and a pre-network failure reopens the
 circuit. `canonical_runtime` is digest-bound to the operator-selected runtime

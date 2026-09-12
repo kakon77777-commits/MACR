@@ -315,9 +315,9 @@ digest receives that label; arbitrary mismatches are counted as invalid.
   --dispatcher-id worker-1 --allow-network
 ```
 
-Provider admission is provider-scoped, not one global bucket. The latest
-built-in candidates are GLM policy revision 3 and Grok policy revision 2; each
-starts at effective target 8, records
+Provider admission is provider-scoped, not one global bucket. On 2026-09-12
+the canonical shared runtime explicitly activated GLM policy revision 3 and
+Grok policy revision 2. Both retain effective target 8, record
 16 as the next review marker, have a finite hard ceiling of 32, and cap one
 project at 8. Direct Grok, ordinary delegated Grok, T0 Plan execution, and the
 Codex/Claude host adapter all consume the same `grok` domain; GLM state and
@@ -332,9 +332,12 @@ resolve, zero, retry, or rewrite any uncertain provider charge. When unresolved
 rows are preserved, the binding also contains a database-derived snapshot of
 the exact control head and ordered unresolved request set; apply recomputes it
 inside the transition transaction.
-Merge or installation does not activate them. A canonical runtime continues
-to reopen its exact stored GLM r2/Grok r1 policy and semantics until the
-explicit transition receipt exists.
+
+Merge or installation alone does not activate a successor. This runtime now
+has the required append-only receipts: GLM control revision 73 and Grok control
+revision 2. The preserved GLM unknown request remains unresolved and consumes
+one slot; its billing cost is still NULL rather than silently zeroed.
+
 Weighted capacity, automatic
 promotion, refill rates, and provider-safe concurrency at each selected target
 remain `NotMeasured` until live observation. Project/lane identity is
@@ -355,6 +358,31 @@ D-drive kernels are explicitly `offline_test` and cannot be paired with the
 production transport path or relabelled as canonical.
 
 These commands are implemented, but the T1 route itself is not live-accepted and no exact live T1 manifest is implied by repository state. The separate sequential GLM CLI route has live observations; those do not activate T1 authority.
+
+## Hosted Agent Cell precursor
+
+MACR now contains an offline Hosted Agent Cell precursor under
+`macr_runtime.agent.cell`. It gives one exact `AgentRun` a D-drive private blob
+home, deterministic provider-ready context, bounded read-only workspace tools,
+durable model/tool preallocation, checkpoint/rehydration, Candidate Vault
+completion, and exact Grok/GLM adapter bridging without automatic retry,
+fallback, acceptance, or authority creation. Operational Agent SQLite remains
+content-free; briefing, model, tool, and candidate bytes stay in private blobs.
+
+This is evidence toward the reserved `v0.7.0a1`, not its release. There is no
+production Agent CLI/preparer, shared Agent DB adoption, live Hosted Cell
+provider run, wake scheduler, write/process tool, or canonical Phase A-H claim.
+The exact offline gate is:
+
+```powershell
+.\scripts\verify-v07-hosted-agent-cell.ps1
+```
+
+The accepted implementation subject is `91e6309fda698922d5b20276802eb646f1830095`
+/ tree `465e7bfb38b7ce9f78a949a9bff3c8bb9d7e9325`; its complete wrapper reported
+164 focused tests, 38 required IDs and 969 inherited tests with provider/network
+generation disabled. One earlier `SpawnProcess-34` wrapper interruption is
+retained as a test-environment observation rather than erased.
 
 Generated images are preserved at:
 
