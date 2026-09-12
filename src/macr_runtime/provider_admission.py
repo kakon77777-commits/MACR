@@ -2647,6 +2647,24 @@ def read_provider_admission_status(
             WHERE provider_id=?""",
             (provider,),
         ).fetchone()
+        if state_head is None:
+            return ProviderAdmissionStatus(
+                initialized=False,
+                provider_id=provider,
+                policy_digest=policy.policy_digest,
+                deployment_mode=None,
+                deployment_digest=None,
+                effective_target=policy.effective_target,
+                candidate_target=policy.candidate_target,
+                hard_max=policy.hard_max,
+                per_project_cap=policy.per_project_cap,
+                circuit_state="closed",
+                last_signal=None,
+                counts=empty_counts,
+                lane_counts={item.value: 0 for item in AdmissionLane},
+                project_active_counts=(),
+                legacy_pre_provider_admission_count=0,
+            )
         legacy_policy = glm_provider_admission_policy_v1()
         if (
             provider == legacy_policy.provider_id

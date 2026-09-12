@@ -80,6 +80,34 @@ class ProviderAdmissionContractTests(unittest.TestCase):
         with self.assertRaises(ProviderAdmissionConflict):
             directory.get("unknown-provider")
 
+    def test_readonly_grok_status_is_uninitialized_in_glm_only_database(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            ProviderAdmissionKernel(path)
+            connection = sqlite3.connect(path)
+            before = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_state
+                WHERE provider_id='grok'"""
+            ).fetchone()[0]
+            connection.close()
+
+            status = read_provider_admission_status(path, "grok")
+
+            connection = sqlite3.connect(path)
+            after = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_state
+                WHERE provider_id='grok'"""
+            ).fetchone()[0]
+            connection.close()
+
+        self.assertFalse(status.initialized)
+        self.assertEqual(status.provider_id, "grok")
+        self.assertEqual(status.effective_target, 8)
+        self.assertEqual(status.candidate_target, 16)
+        self.assertEqual(status.hard_max, 32)
+        self.assertEqual(before, 0)
+        self.assertEqual(after, 0)
+
     def test_glm_reconciliation_does_not_poison_grok_capacity(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
