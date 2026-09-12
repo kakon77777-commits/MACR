@@ -698,3 +698,9 @@ follow-up at `c68ababfc19310d539ae3e51d15f02d9c100722f` / tree
 `c1490d903328182beb62ff15a097083dfa7c1b97` makes that state explicitly
 `initialized=false` without inserting a Grok row. The shared readback then
 passed with `8/16/32`, per-project 8, zero requests, and network/provider false.
+Twin review identified that missing state could otherwise mask orphan Grok
+evidence. The discriminating repair at
+`c61c8443d689cdb96814860c8f97cbb881d3bae0` / tree
+`da3c78707ba8f59b4d04d2708ac27e7b6ff249cc` permits the benign status only
+when all provider-scoped admission tables are empty, proves positive readback
+does not change the GLM-only database bytes, and rejects an orphan policy.

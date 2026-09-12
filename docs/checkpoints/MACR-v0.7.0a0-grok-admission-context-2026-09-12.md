@@ -17,6 +17,13 @@ only the existing GLM domain report Grok as `initialized=false` rather than a
 generic failure, without creating a policy/state row. The focused control and
 the complete 45-test provider-admission module passed, and readback against the
 shared database returned the expected content-free uninitialized status.
+Twin review then challenged the missing-state boundary: a benign uninitialized
+answer must not conceal orphan Grok policy or request evidence. Follow-up
+commit `c61c8443d689cdb96814860c8f97cbb881d3bae0` / tree
+`da3c78707ba8f59b4d04d2708ac27e7b6ff249cc` returns uninitialized only when
+all Grok policy, transition, request, and project tables are empty; otherwise
+it fails closed. The positive control also proves the GLM-only database bytes
+are unchanged by readback, and an orphan-policy negative is rejected.
 
 This checkpoint extends the existing provider-neutral admission substrate to
 the exact `grok/grok-4.6` route without consuming the reserved `0.7.0a1` Agent
