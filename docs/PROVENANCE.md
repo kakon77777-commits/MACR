@@ -691,3 +691,10 @@ or deployment occurred in the implementation checkpoint. Merge alone cannot
 govern an already-running old Direct process. Exact scope, restart requirement,
 activation sequence, and remaining live boundary are recorded in
 `docs/checkpoints/MACR-v0.7.0a0-grok-admission-context-2026-09-12.md`.
+
+Before merge, a read-only shared-state check found that a schema-8 database
+containing only GLM admission returned a generic failure for Grok status. The
+follow-up at `c68ababfc19310d539ae3e51d15f02d9c100722f` / tree
+`c1490d903328182beb62ff15a097083dfa7c1b97` makes that state explicitly
+`initialized=false` without inserting a Grok row. The shared readback then
+passed with `8/16/32`, per-project 8, zero requests, and network/provider false.

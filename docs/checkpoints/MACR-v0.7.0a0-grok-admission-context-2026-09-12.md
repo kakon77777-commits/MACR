@@ -10,6 +10,14 @@ tree   c8c148ab13a32c86371b03831046d44133fd99b6
 branch feature/grok-admission-context-v1
 ```
 
+The subsequent read-only status repair is commit
+`c68ababfc19310d539ae3e51d15f02d9c100722f` / tree
+`c1490d903328182beb62ff15a097083dfa7c1b97`. It makes a schema-8 database with
+only the existing GLM domain report Grok as `initialized=false` rather than a
+generic failure, without creating a policy/state row. The focused control and
+the complete 45-test provider-admission module passed, and readback against the
+shared database returned the expected content-free uninitialized status.
+
 This checkpoint extends the existing provider-neutral admission substrate to
 the exact `grok/grok-4.6` route without consuming the reserved `0.7.0a1` Agent
 MVP version. It does not change `grok_standard/grok-4.3` or Qwythos transport
