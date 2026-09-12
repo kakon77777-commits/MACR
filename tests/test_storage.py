@@ -28,6 +28,10 @@ class StorageLayoutTests(unittest.TestCase):
             state_root / "runtime" / "agent.sqlite3",
         )
         self.assertEqual(
+            layout.agent_cell_root,
+            state_root / "agent-cells",
+        )
+        self.assertEqual(
             layout.accounting_db_path,
             state_root / "accounting" / "accounting.sqlite3",
         )
@@ -83,6 +87,7 @@ class StorageLayoutTests(unittest.TestCase):
                     "cache",
                     "test-tmp",
                     "runtime",
+                    "agent-cells",
                     "accounting",
                     "candidates",
                     "quarantine",

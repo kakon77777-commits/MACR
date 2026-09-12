@@ -71,6 +71,10 @@ class StorageLayout:
         return Path(self.state_root) / "runtime" / "agent.sqlite3"
 
     @property
+    def agent_cell_root(self) -> Path:
+        return Path(self.state_root) / "agent-cells"
+
+    @property
     def accounting_db_path(self) -> Path:
         return Path(self.state_root) / "accounting" / "accounting.sqlite3"
 
@@ -131,6 +135,7 @@ class StorageLayout:
                 "cache",
                 "test-tmp",
                 "runtime",
+                "agent-cells",
                 "accounting",
                 "candidates",
                 "quarantine",
@@ -150,5 +155,6 @@ class StorageLayout:
             "codex_home_target": self.codex_home_target,
             "source_exists": Path(self.source_root).is_dir(),
             "state_exists": Path(self.state_root).is_dir(),
+            "agent_cell_root": str(self.agent_cell_root),
             "codex_home_migrated": False,
         }

@@ -103,25 +103,36 @@ The outbound request excludes local task/workspace identity and currency budget.
 
 Accounting schema 4 and terminal event contract 3 expose provider/date-filtered failure groups with `network_attempted`, `response_received`, `provider_http_status`, `provider_error_code`, and `transport_stage`. The fields are observations, not retry permission. A received HTTP error can still have unknown billing, and a later successful manual dispatch does not settle the earlier run.
 
-For T1, `queue-status` exposes only bounded content-free state. Schema 4 binds ordered v4 member digests, an explicit worker count, and a v4 manifest digest to exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy-v2 digest, the exact profile-valid output value, per-member cost ceilings, their exact aggregate, an operator-selected campaign ceiling, expiry, and the dispatcher set. Current delegated real-work members require 65,536 output tokens. Member count may exceed worker count; worker count must be between one and member count and equal the number of authorized dispatcher IDs. Schemas 1, 2 and 3 remain inspectable respectively as `legacy_pre_tier`, `legacy_pre_quality_floor`, and `legacy_fixed_three_workers`, but cannot stage or dispatch. Stale schema-4 manifests carrying the prior T1 policy digest also fail before staging and are not rewritten. `reconciliation_required` blocks every later claim. There is no automatic retry, fallback, verification, materialization, or acceptance.
+For T1, `queue-status` exposes only bounded content-free state. Schema 4 binds ordered v4 member digests, an explicit worker count, and a v4 manifest digest to exact routes, role/privacy/context classes, targets, GLM approvals, the T1 token-policy-v2 digest, the exact profile-valid output value, per-member cost ceilings, their exact aggregate, an operator-selected campaign ceiling, expiry, and the dispatcher set. Current delegated real-work members require 65,536 output tokens. Member count may exceed worker count; worker count must be between one and member count and equal the number of authorized dispatcher IDs. Schemas 1, 2 and 3 remain inspectable respectively as `legacy_pre_tier`, `legacy_pre_quality_floor`, and `legacy_fixed_three_workers`, but cannot stage or dispatch. Stale schema-4 manifests carrying the prior T1 policy digest also fail before staging and are not rewritten. `reconciliation_required` blocks later claims in the same plan. It remains globally enumerable, but another exact-authorized project/plan may use remaining provider capacity. There is no automatic retry, fallback, verification, materialization, or acceptance.
 
-Provider Admission Kernel policy revision 2 governs GLM capacity across
-projects and all delegated entry points. Effective target is 8, the next review
+The latest built-in Provider Admission Kernel candidate is GLM policy revision
+3. It does not govern a canonical runtime still pinned to stored revision 2
+until an explicit transition receipt exists. Both revisions retain effective
+target 8, the next review
 marker is 16, the finite hard ceiling is 32, per-project cap is 8, and raw
 request weight is 1. An exact pre-issued capacity authority may select any
 integer target from 1 through 32; auto-scaling and provider-safe concurrency at
 each target remain NotMeasured. Project and
 lane bindings live in authority scope v3 rather than task text. A saturated
-request is BUSY before dispatch/accounting/key access. A no-response or
-incomplete terminal consumes a reconciliation slot and opens the provider
-circuit until exact evidence-bound resolution. `admission-status` is read-only
-and content-free. Active target/circuit state must match its append-only receipt
+request is BUSY before dispatch/accounting/key access. A durably terminalized
+no-response consumes one reconciliation slot without opening the global
+circuit; it continues to count against provider and project capacity until
+exact evidence-bound resolution. Missing terminal evidence and HTTP 429/5xx
+pressure still open the global circuit. A later sibling success cannot close
+it, and reconciliation authority releases only the named capacity unit.
+`admission-status` is read-only and content-free. `admission-policy-upgrade`
+is read-only by default and requires its exact preflight binding digest to
+advance historical GLM r2/Grok r1 state; preserved uncertain rows keep their
+historical policy digest and accounting state. The binding includes a
+database-derived control/unresolved-set snapshot that apply rechecks under the
+transition write lock. Active target/circuit state must match its append-only receipt
 chain. Half-open consumes a one-use authority bound to one exact request digest;
 another request cannot borrow the probe and a pre-network failure reopens the
 circuit. `canonical_runtime` is digest-bound to the operator-selected runtime
 database; an alternate temp database is `offline_test` and cannot authorize
-production transport. The final transport edge rechecks TTL, open circuit,
-unresolved capacity and dispatch authority under the same write lock.
+production transport. The final transport edge rechecks TTL, circuit,
+policy-scoped uncertainty, capacity and dispatch authority under the same
+write lock.
 
 ## Claude boundary
 

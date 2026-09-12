@@ -21,8 +21,10 @@ from macr_runtime.provider_admission import (
     ProjectAdmissionBinding,
     ProviderAdmissionDirectory,
     ProviderAdmissionKernel,
+    ProviderAdmissionPolicyTransitionBinding,
     ProviderAdmissionRequest,
     glm_provider_admission_policy,
+    glm_provider_admission_policy_v2,
 )
 from macr_runtime.providers.grok import GrokResponsesProvider
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
@@ -74,6 +76,78 @@ class NoOpAdmissionGuard:
 
 
 class ProviderAdmissionRuntimeTests(unittest.TestCase):
+    def test_policy_migration_preserves_unknown_billing_and_null_cost(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            predecessor = glm_provider_admission_policy_v2()
+            kernel = ProviderAdmissionKernel(
+                services.events.path,
+                policy=predecessor,
+            )
+            services = replace(services, provider_admission=kernel)
+            provider = self._provider(
+                kernel,
+                NoResponseTransport(success_document()),
+                CountingKeySource(),
+            )
+            task = delegated_task()
+            project = ProjectAdmissionBinding(
+                "legacy-project",
+                1,
+                "operator_asserted",
+            )
+            context, _ = self._context_and_reference(
+                services,
+                task,
+                project,
+                AdmissionLane.ROUTINE,
+                admission_policy=predecessor,
+            )
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+            before = services.accounting.read_invocation(context.run_id)
+            successor = glm_provider_admission_policy()
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                predecessor,
+                successor,
+                target=8,
+                reconciliation_snapshot_digest=(
+                    kernel.reconciliation_isolation_snapshot_digest()
+                ),
+                reconciliation_isolation_evidence_digest="9" * 64,
+            )
+            now = datetime.now(timezone.utc)
+            reference = services.authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="runtime-policy-v2-to-v3",
+                scope=AuthorityScope(
+                    providers=(provider.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+
+            migrated = kernel.supersede_policy(
+                binding,
+                successor,
+                reference,
+            )
+            after = services.accounting.read_invocation(context.run_id)
+
+        self.assertEqual(result.failure_code, "ProviderUnavailableError")
+        self.assertEqual(before, after)
+        self.assertEqual(after["billing_state"], "unknown_after_dispatch")
+        self.assertIsNone(after["currency_cost_usd"])
+        self.assertEqual(migrated.circuit_state, "closed")
+        self.assertEqual(migrated.counts["reconciliation_required"], 1)
+
     def _grok_context_and_reference(
         self,
         services,
@@ -292,7 +366,8 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.failure_code, "ProviderUnavailableError")
         self.assertEqual(status.counts["reconciliation_required"], 1)
-        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(status.last_signal, "unknown_after_dispatch_isolated")
 
     def test_known_local_approval_failure_releases_capacity_without_transport(self) -> None:
         with d_drive_tempdir() as temp:
@@ -603,7 +678,8 @@ class ProviderAdmissionRuntimeTests(unittest.TestCase):
 
         self.assertEqual(result.failure_code, "ProviderUnavailableError")
         self.assertEqual(status.counts["reconciliation_required"], 1)
-        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(status.last_signal, "unknown_after_dispatch_isolated")
 
     def test_direct_glm_call_without_permit_fails_before_key_or_transport(self) -> None:
         with d_drive_tempdir() as temp:

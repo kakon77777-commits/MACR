@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.cli import (
+    _admission_policy_upgrade,
     _admission_status,
     _accounting_status,
     _capability_status,
@@ -51,6 +52,11 @@ from macr_runtime.provider_capability import glm_extended_text_policy
 from macr_runtime.provider_capability_store import (
     ProviderCapabilityGovernance,
     ProviderCapabilityPolicyStore,
+)
+from macr_runtime.provider_admission import (
+    ProviderAdmissionKernel,
+    glm_provider_admission_policy,
+    glm_provider_admission_policy_v2,
 )
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.model_token_store import ModelTokenPolicyStore
@@ -110,6 +116,95 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_admission_policy_upgrade_is_digest_confirmed_and_network_free(self) -> None:
+        with d_drive_tempdir() as state_root:
+            runtime_path = state_root / "runtime" / "dispatch.sqlite3"
+            ProviderAdmissionKernel.canonical_runtime(
+                runtime_path,
+                policy=glm_provider_admission_policy_v2(),
+            )
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+            }
+
+            def durable_snapshot():
+                connection = sqlite3.connect(runtime_path)
+                try:
+                    return (
+                        hashlib.sha256(runtime_path.read_bytes()).hexdigest(),
+                        connection.execute(
+                            "SELECT COUNT(*) FROM dispatch_authorities"
+                        ).fetchone()[0],
+                        connection.execute(
+                            "SELECT COUNT(*) FROM provider_admission_transitions"
+                        ).fetchone()[0],
+                        connection.execute(
+                            "SELECT policy_digest, control_digest "
+                            "FROM provider_admission_state"
+                        ).fetchall(),
+                    )
+                finally:
+                    connection.close()
+
+            before = durable_snapshot()
+            preflight_output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(preflight_output):
+                    preflight_exit = _admission_policy_upgrade(
+                        "glm_flash_worker",
+                        target=8,
+                        apply=False,
+                        expected_binding_digest=None,
+                        reconciliation_isolation_evidence_digest=None,
+                    )
+            after_preflight = durable_snapshot()
+            preflight = json.loads(preflight_output.getvalue())
+
+            rejected_output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(rejected_output):
+                    rejected_exit = _admission_policy_upgrade(
+                        "glm_flash_worker",
+                        target=8,
+                        apply=True,
+                        expected_binding_digest="f" * 64,
+                        reconciliation_isolation_evidence_digest=None,
+                    )
+            after_rejection = durable_snapshot()
+
+            applied_output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(applied_output):
+                    applied_exit = _admission_policy_upgrade(
+                        "glm_flash_worker",
+                        target=8,
+                        apply=True,
+                        expected_binding_digest=preflight[
+                            "required_binding_digest"
+                        ],
+                        reconciliation_isolation_evidence_digest=None,
+                    )
+            applied = json.loads(applied_output.getvalue())
+            active = ProviderAdmissionKernel.canonical_runtime(runtime_path)
+
+        self.assertEqual(preflight_exit, 0)
+        self.assertEqual(
+            preflight["status"],
+            "provider_admission_policy_upgrade_preflight",
+        )
+        self.assertEqual(preflight["from_revision"], 2)
+        self.assertEqual(preflight["to_revision"], 3)
+        self.assertEqual(before, after_preflight)
+        self.assertEqual(rejected_exit, 4)
+        self.assertEqual(after_preflight, after_rejection)
+        self.assertEqual(applied_exit, 0)
+        self.assertEqual(applied["status"], "provider_admission_policy_upgraded")
+        self.assertFalse(applied["network_activity"])
+        self.assertFalse(applied["provider_generation"])
+        self.assertEqual(active.policy, glm_provider_admission_policy())
+
     def test_admission_status_is_readonly_when_runtime_is_absent(self) -> None:
         with d_drive_tempdir() as root:
             state_root = root / "absent-state"

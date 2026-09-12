@@ -298,6 +298,14 @@ digest receives that label; arbitrary mismatches are counted as invalid.
 .\scripts\macr.ps1 queue-status --state reconciliation_required
 .\scripts\macr.ps1 admission-status --provider glm_flash_worker
 .\scripts\macr.ps1 admission-status --provider grok
+.\scripts\macr.ps1 admission-policy-upgrade `
+  --provider glm_flash_worker --target 8
+# If unresolved calls are preserved, also add this to both commands:
+# --reconciliation-isolation-evidence-digest <reviewed-evidence-sha256>
+# Review required_binding_digest, then explicitly apply that exact transition:
+.\scripts\macr.ps1 admission-policy-upgrade `
+  --provider glm_flash_worker --target 8 --apply `
+  --expected-binding-digest <exact-digest-from-preflight>
 .\scripts\macr.ps1 t1-stage .\private\t1-manifest.json `
   --project-id my-project --admission-lane bulk `
   --dispatcher-id worker-1 --dispatcher-id worker-2 `
@@ -307,8 +315,9 @@ digest receives that label; arbitrary mismatches are counted as invalid.
   --dispatcher-id worker-1 --allow-network
 ```
 
-Provider admission is provider-scoped, not one global bucket. GLM policy
-revision 2 and Grok policy revision 1 each start at effective target 8, record
+Provider admission is provider-scoped, not one global bucket. The latest
+built-in candidates are GLM policy revision 3 and Grok policy revision 2; each
+starts at effective target 8, records
 16 as the next review marker, have a finite hard ceiling of 32, and cap one
 project at 8. Direct Grok, ordinary delegated Grok, T0 Plan execution, and the
 Codex/Claude host adapter all consume the same `grok` domain; GLM state and
@@ -316,13 +325,28 @@ Grok state remain independent. Same-conversation Direct turns are serialized,
 while different Grok conversations may run concurrently inside that shared
 provider limit. A pre-issued exact authority may select any integer target
 from 1 through 32; no ordinary CLI command can self-authorize that transition.
+The separate `admission-policy-upgrade` command previews the next exact
+built-in policy digest without writes; activation requires the reviewed
+binding digest and consumes a one-use policy-transition authority. It does not
+resolve, zero, retry, or rewrite any uncertain provider charge. When unresolved
+rows are preserved, the binding also contains a database-derived snapshot of
+the exact control head and ordered unresolved request set; apply recomputes it
+inside the transition transaction.
+Merge or installation does not activate them. A canonical runtime continues
+to reopen its exact stored GLM r2/Grok r1 policy and semantics until the
+explicit transition receipt exists.
 Weighted capacity, automatic
 promotion, refill rates, and provider-safe concurrency at each selected target
 remain `NotMeasured` until live observation. Project/lane identity is
 authority-bound. Interactive work gets
-next-slot priority but no permanently idle reserved slot. Unknown network
-outcomes and expired dispatched permits remain capacity-consuming
-`reconciliation_required` evidence and never auto-release or retry. Target and
+next-slot priority but no permanently idle reserved slot. One durably
+terminalized no-response outcome or expired dispatched permit remains
+capacity-consuming `reconciliation_required` evidence in its global and
+project counts, but no longer discards every remaining provider slot. Each
+unresolved call consumes one slot until exact reconciliation. Missing local
+terminal evidence and explicit provider pressure (HTTP 429/5xx) still open the
+provider-wide circuit. T1 reconciliation stops the affected plan, not unrelated
+plans/projects. There is never automatic release or retry. Target and
 circuit changes append immutable receipts whose latest digest must match the
 active projection. Half-open consumes one exact authority for one exact request
 digest; a local pre-network failure reopens rather than closing the circuit.

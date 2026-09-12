@@ -27,7 +27,6 @@ from .registry import ProviderRegistry
 from .provider_admission import (
     AdmissionLane,
     ProjectAdmissionBinding,
-    ProviderAdmissionPermit,
     ProviderAdmissionRequest,
 )
 from .runtime import MacrRuntime, RuntimeServices, task_contract_digest
@@ -676,6 +675,15 @@ class T1Dispatcher:
             observed_cost_usd=normalized_cost,
         )
 
+    def _plan_has_reconciliation(self, plan_digest: str) -> bool:
+        # Materialize expired claims first, then scope the stop decision to the
+        # exact plan instead of using the returned global aggregate.
+        self.queue.state_counts()
+        return any(
+            item.state is QueueMemberState.RECONCILIATION_REQUIRED
+            for item in self.queue.list_members(plan_digest)
+        )
+
     def run_one(
         self,
         manifest: T1ExecutionManifest,
@@ -692,9 +700,9 @@ class T1Dispatcher:
             raise ValueError("origin must be a DispatchOrigin")
         if not isinstance(allow_network, bool) or not isinstance(allow_local, bool):
             raise ValueError("T1 provider opt-ins must be boolean")
-        if self.queue.state_counts()["reconciliation_required"] != 0:
+        if self._plan_has_reconciliation(manifest.plan_digest):
             raise T1DispatchError(
-                "global reconciliation must be empty before a T1 claim"
+                "plan reconciliation must be empty before a T1 claim"
             )
         self._validate_bundle(manifest, bundle, dispatcher_id)
         self._validate_manifest_routes(manifest)
@@ -953,9 +961,9 @@ class T1Dispatcher:
             raise T1DispatchError("T1 authority expiry must match the manifest")
         if datetime.fromisoformat(normalized_expiry) <= self._current_time():
             raise T1DispatchError("T1 manifest is expired")
-        if self.queue.state_counts()["reconciliation_required"] != 0:
+        if self._plan_has_reconciliation(manifest.plan_digest):
             raise T1DispatchError(
-                "global reconciliation must be empty before T1 staging"
+                "plan reconciliation must be empty before T1 staging"
             )
         self._validate_manifest_routes(manifest)
         existing = self._existing_bundle(manifest)

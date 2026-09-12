@@ -45,6 +45,10 @@ from .provider_capability_store import read_effective_policy
 from .provider_admission import (
     AdmissionLane,
     ProjectAdmissionBinding,
+    ProviderAdmissionKernel,
+    ProviderAdmissionPolicyTransitionBinding,
+    builtin_provider_admission_policy_history,
+    read_provider_admission_isolation_snapshot_digest,
     read_provider_admission_status,
 )
 from .observatory import ModelObservatory
@@ -248,6 +252,173 @@ def _admission_status(provider_id: str) -> int:
             {
                 "status": "provider_admission_status",
                 "admission": snapshot.to_dict(),
+                "network_activity": False,
+                "provider_generation": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _admission_policy_upgrade(
+    provider_id: str,
+    *,
+    target: int,
+    apply: bool,
+    expected_binding_digest: str | None,
+    reconciliation_isolation_evidence_digest: str | None,
+) -> int:
+    layout = StorageLayout.from_environment()
+    try:
+        snapshot = read_provider_admission_status(
+            layout.runtime_db_path,
+            provider_id,
+        )
+        if not snapshot.initialized:
+            raise ValueError("provider admission runtime is not initialized")
+        history = builtin_provider_admission_policy_history(provider_id)
+        matches = tuple(
+            index
+            for index, item in enumerate(history)
+            if item.policy_digest == snapshot.policy_digest
+        )
+        if len(matches) != 1:
+            raise ValueError("active provider admission policy is not built in")
+        current_index = matches[0]
+        if current_index + 1 >= len(history):
+            print(
+                json.dumps(
+                    {
+                        "status": "provider_admission_policy_current",
+                        "provider_id": provider_id,
+                        "policy_revision": history[current_index].revision,
+                        "policy_digest": history[current_index].policy_digest,
+                        "network_activity": False,
+                        "provider_generation": False,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        predecessor = history[current_index]
+        successor = history[current_index + 1]
+        unresolved = snapshot.counts["reconciliation_required"]
+        if unresolved and reconciliation_isolation_evidence_digest is None:
+            raise ValueError(
+                "reconciliation isolation requires an exact evidence digest"
+            )
+        if not unresolved and reconciliation_isolation_evidence_digest is not None:
+            raise ValueError(
+                "reconciliation isolation evidence is not applicable"
+            )
+        reconciliation_snapshot_digest = (
+            read_provider_admission_isolation_snapshot_digest(
+                layout.runtime_db_path,
+                provider_id,
+            )
+            if unresolved
+            else None
+        )
+        binding = ProviderAdmissionPolicyTransitionBinding.create(
+            predecessor,
+            successor,
+            target=target,
+            reconciliation_snapshot_digest=reconciliation_snapshot_digest,
+            reconciliation_isolation_evidence_digest=(
+                reconciliation_isolation_evidence_digest
+            ),
+        )
+        preview = {
+            "provider_id": provider_id,
+            "from_revision": predecessor.revision,
+            "from_policy_digest": predecessor.policy_digest,
+            "to_revision": successor.revision,
+            "to_policy_digest": successor.policy_digest,
+            "target": target,
+            "required_binding_digest": binding.binding_digest,
+            "reconciliation_snapshot_digest": (
+                binding.reconciliation_snapshot_digest
+            ),
+            "reconciliation_isolation_evidence_digest": (
+                binding.reconciliation_isolation_evidence_digest
+            ),
+            "current_circuit_state": snapshot.circuit_state,
+            "reconciliation_required": snapshot.counts[
+                "reconciliation_required"
+            ],
+        }
+        if not apply:
+            print(
+                json.dumps(
+                    {
+                        "status": "provider_admission_policy_upgrade_preflight",
+                        **preview,
+                        "network_activity": False,
+                        "provider_generation": False,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        if expected_binding_digest != binding.binding_digest:
+            raise ValueError("expected binding digest does not match preflight")
+        kernel = ProviderAdmissionKernel.canonical_runtime(
+            layout.runtime_db_path,
+            provider_id=provider_id,
+        )
+        now = datetime.now(timezone.utc)
+        reference = kernel.authorities.issue(
+            source_kind="cli_operator_policy_upgrade",
+            source_id=f"{provider_id}:{binding.binding_digest}:{uuid.uuid4()}",
+            scope=AuthorityScope(
+                providers=(provider_id,),
+                planes=("provider_capacity_activation",),
+                task_types=("provider_admission_policy_transition",),
+                provider_admission_target_digests=(binding.binding_digest,),
+                scope_contract_version=3,
+            ),
+            expires_at=(now + timedelta(minutes=10)).isoformat(),
+        )
+        try:
+            activated = kernel.supersede_policy(
+                binding,
+                successor,
+                reference,
+            )
+        except Exception:
+            try:
+                kernel.authorities.revoke(reference)
+            except Exception:
+                pass
+            raise
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "provider_admission_policy_upgrade_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "provider_generation": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "provider_admission_policy_upgraded",
+                **preview,
+                "active_policy_digest": activated.policy_digest,
+                "active_circuit_state": activated.circuit_state,
+                "active_reconciliation_required": activated.counts[
+                    "reconciliation_required"
+                ],
                 "network_activity": False,
                 "provider_generation": False,
             },
@@ -1464,6 +1635,35 @@ def build_parser() -> argparse.ArgumentParser:
         default="glm_flash_worker",
         help="exact provider admission domain",
     )
+    admission_upgrade = sub.add_parser(
+        "admission-policy-upgrade",
+        help=(
+            "preview or explicitly activate the next built-in provider "
+            "admission policy without provider use"
+        ),
+    )
+    admission_upgrade.add_argument(
+        "--provider",
+        choices=("glm_flash_worker", "grok"),
+        required=True,
+    )
+    admission_upgrade.add_argument("--target", type=int, default=8)
+    admission_upgrade.add_argument(
+        "--apply",
+        action="store_true",
+        help="consume one exact operator transition authority",
+    )
+    admission_upgrade.add_argument(
+        "--expected-binding-digest",
+        help="exact digest printed by the immediately reviewed preflight",
+    )
+    admission_upgrade.add_argument(
+        "--reconciliation-isolation-evidence-digest",
+        help=(
+            "required exact evidence digest when preserved unresolved calls "
+            "are isolated during the policy transition"
+        ),
+    )
     accounting_status.add_argument(
         "--since",
         help="restrict invocation accounting to an aware ISO timestamp",
@@ -1694,6 +1894,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _accounting_status(args.provider, args.since)
     if args.command == "admission-status":
         return _admission_status(args.provider)
+    if args.command == "admission-policy-upgrade":
+        return _admission_policy_upgrade(
+            args.provider,
+            target=args.target,
+            apply=args.apply,
+            expected_binding_digest=args.expected_binding_digest,
+            reconciliation_isolation_evidence_digest=(
+                args.reconciliation_isolation_evidence_digest
+            ),
+        )
     if args.command == "migrate-ledger":
         return _migrate_ledger(
             dry_run=args.dry_run,

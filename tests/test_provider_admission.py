@@ -31,7 +31,9 @@ from macr_runtime.provider_admission import (
     ProviderAdmissionCircuitBinding,
     glm_provider_admission_policy,
     glm_provider_admission_policy_v1,
+    glm_provider_admission_policy_v2,
     grok_provider_admission_policy,
+    grok_provider_admission_policy_v1,
     read_provider_admission_status,
 )
 from macr_runtime.runtime_db import RuntimeDatabase
@@ -51,7 +53,15 @@ class ProviderAdmissionContractTests(unittest.TestCase):
         policy = grok_provider_admission_policy()
 
         self.assertEqual(policy.provider_id, "grok")
-        self.assertEqual(policy.revision, 1)
+        self.assertEqual(policy.revision, 2)
+        self.assertEqual(
+            policy.uncertain_dispatch_scope,
+            "capacity_reservation",
+        )
+        self.assertNotEqual(
+            policy.policy_digest,
+            grok_provider_admission_policy_v1().policy_digest,
+        )
         self.assertEqual(policy.capacity_unit, 1)
         self.assertEqual(policy.effective_target, 8)
         self.assertEqual(policy.candidate_target, 16)
@@ -227,7 +237,11 @@ class ProviderAdmissionContractTests(unittest.TestCase):
             glm_status = glm.status("glm_flash_worker")
             grok_status = grok.status("grok")
 
-        self.assertEqual(glm_status.circuit_state, "open")
+        self.assertEqual(glm_status.circuit_state, "closed")
+        self.assertEqual(
+            glm_status.last_signal,
+            "unknown_after_dispatch_isolated",
+        )
         self.assertEqual(glm_status.counts["reconciliation_required"], 1)
         self.assertEqual(grok_status.circuit_state, "closed")
         self.assertEqual(grok_status.counts["completed"], 1)
@@ -282,13 +296,17 @@ class ProviderAdmissionContractTests(unittest.TestCase):
         policy = glm_provider_admission_policy()
 
         self.assertEqual(policy.provider_id, "glm_flash_worker")
-        self.assertEqual(policy.revision, 2)
+        self.assertEqual(policy.revision, 3)
         self.assertEqual(policy.capacity_unit, 1)
         self.assertEqual(policy.effective_target, 8)
         self.assertEqual(policy.candidate_target, 16)
         self.assertEqual(policy.hard_max, 32)
         self.assertEqual(policy.per_project_cap, 8)
         self.assertEqual(policy.policy_source, "built_in")
+        self.assertEqual(
+            policy.uncertain_dispatch_scope,
+            "capacity_reservation",
+        )
         self.assertEqual(len(policy.policy_digest), 64)
 
     def test_policy_rejects_zero_unlimited_and_unmeasured_effective_values(self) -> None:
@@ -452,7 +470,7 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
 
     def test_revision_one_forward_upgrade_is_exact_idle_and_append_only(self) -> None:
         legacy_policy = glm_provider_admission_policy_v1()
-        successor = glm_provider_admission_policy()
+        successor = glm_provider_admission_policy_v2()
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             legacy = ProviderAdmissionKernel.canonical_runtime(
@@ -517,9 +535,244 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
         self.assertEqual(revisions, (1, 2))
         self.assertEqual(transitions, ("genesis", "policy_superseded"))
 
+    def test_revision_two_unknown_is_explicitly_isolated_by_revision_three(self) -> None:
+        predecessor = glm_provider_admission_policy_v2()
+        successor = glm_provider_admission_policy()
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            legacy = ProviderAdmissionKernel.canonical_runtime(
+                path,
+                policy=predecessor,
+            )
+            project = ProjectAdmissionBinding(
+                "legacy-unknown-project",
+                1,
+                "operator_asserted",
+            )
+            now = datetime.now(timezone.utc)
+            dispatch_reference = legacy.authorities.issue(
+                source_kind="operator_test",
+                source_id="legacy-r2-unknown",
+                scope=AuthorityScope(
+                    providers=(predecessor.provider_id,),
+                    planes=("delegation",),
+                    task_types=("delegated_routine",),
+                    member_digests=("c" * 64,),
+                    provider_tier_binding_digests=("a" * 64,),
+                    project_binding_digests=(project.binding_digest,),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(
+                        predecessor.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+            request = ProviderAdmissionRequest(
+                request_id=str(uuid.uuid4()),
+                provider_id=predecessor.provider_id,
+                project_binding_digest=project.binding_digest,
+                lane=AdmissionLane.ROUTINE,
+                run_id=str(uuid.uuid4()),
+                authorization=dispatch_reference,
+                plane="delegation",
+                task_type="delegated_routine",
+                task_digest="b" * 64,
+                member_digest="c" * 64,
+                batch_id=None,
+                provider_tier_binding_digest="a" * 64,
+            )
+            permit = legacy.try_admit(request, ttl_seconds=60)
+            legacy.begin_transport(permit, request)
+            legacy.finish(
+                permit,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="d" * 64,
+            )
+            before = legacy.status(predecessor.provider_id)
+            unproven_binding = ProviderAdmissionPolicyTransitionBinding.create(
+                predecessor,
+                successor,
+                target=8,
+            )
+            unproven_reference = legacy.authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="policy-v2-to-v3-missing-evidence",
+                scope=AuthorityScope(
+                    providers=(predecessor.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        unproven_binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "isolatable",
+            ):
+                legacy.supersede_policy(
+                    unproven_binding,
+                    successor,
+                    unproven_reference,
+                )
+            self.assertEqual(
+                legacy.status(predecessor.provider_id).policy_digest,
+                predecessor.policy_digest,
+            )
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                predecessor,
+                successor,
+                target=8,
+                reconciliation_snapshot_digest=(
+                    legacy.reconciliation_isolation_snapshot_digest()
+                ),
+                reconciliation_isolation_evidence_digest="9" * 64,
+            )
+            transition_reference = legacy.authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="policy-v2-to-v3-isolate",
+                scope=AuthorityScope(
+                    providers=(predecessor.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+
+            migrated = legacy.supersede_policy(
+                binding,
+                successor,
+                transition_reference,
+            )
+            reopened = ProviderAdmissionKernel.canonical_runtime(path)
+            connection = sqlite3.connect(path)
+            try:
+                request_row = connection.execute(
+                    """SELECT state, policy_digest, terminal_evidence_digest
+                    FROM provider_admission_requests WHERE request_id=?""",
+                    (request.request_id,),
+                ).fetchone()
+                revisions = tuple(
+                    row[0]
+                    for row in connection.execute(
+                        """SELECT revision FROM provider_admission_policies
+                        WHERE provider_id=? ORDER BY revision""",
+                        (predecessor.provider_id,),
+                    ).fetchall()
+                )
+            finally:
+                connection.close()
+
+            resolution_reference = reopened.authorities.issue(
+                source_kind="operator_reconciliation",
+                source_id="resolve-legacy-r2-unit",
+                scope=AuthorityScope(
+                    providers=(predecessor.provider_id,),
+                    planes=("provider_admission_reconciliation",),
+                    task_types=("provider_admission_resolution",),
+                    member_digests=(request.member_digest,),
+                    provider_tier_binding_digests=(
+                        request.provider_tier_binding_digest,
+                    ),
+                    project_binding_digests=(project.binding_digest,),
+                    admission_lanes=(request.lane.value,),
+                    provider_admission_policy_digests=(
+                        predecessor.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+            reopened.resolve_reconciliation(
+                request.request_id,
+                resolution_reference,
+                resolution_evidence_digest="e" * 64,
+            )
+            resolved = reopened.status(successor.provider_id)
+
+        self.assertEqual(before.circuit_state, "open")
+        self.assertEqual(migrated.policy_digest, successor.policy_digest)
+        self.assertEqual(migrated.circuit_state, "closed")
+        self.assertEqual(migrated.counts["reconciliation_required"], 1)
+        self.assertEqual(len(migrated.project_active_counts), 1)
+        self.assertEqual(reopened.policy, successor)
+        self.assertEqual(
+            request_row,
+            (
+                "reconciliation_required",
+                predecessor.policy_digest,
+                "d" * 64,
+            ),
+        )
+        self.assertEqual(revisions, (2, 3))
+        self.assertEqual(resolved.circuit_state, "closed")
+        self.assertEqual(resolved.counts["reconciled"], 1)
+        self.assertEqual(resolved.project_active_counts, ())
+
+    def test_grok_revision_one_reopens_then_explicitly_upgrades(self) -> None:
+        predecessor = grok_provider_admission_policy_v1()
+        successor = grok_provider_admission_policy()
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            legacy = ProviderAdmissionKernel.canonical_runtime(
+                path,
+                policy=predecessor,
+                provider_id="grok",
+            )
+            self.assertEqual(
+                ProviderAdmissionKernel.canonical_runtime(
+                    path,
+                    provider_id="grok",
+                ).policy,
+                predecessor,
+            )
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                predecessor,
+                successor,
+                target=8,
+            )
+            now = datetime.now(timezone.utc)
+            reference = legacy.authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="grok-policy-v1-to-v2",
+                scope=AuthorityScope(
+                    providers=("grok",),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(minutes=10)).isoformat(),
+            )
+
+            migrated = legacy.supersede_policy(
+                binding,
+                successor,
+                reference,
+            )
+            reopened = ProviderAdmissionKernel.canonical_runtime(
+                path,
+                provider_id="grok",
+            )
+
+        self.assertEqual(migrated.policy_digest, successor.policy_digest)
+        self.assertEqual(reopened.policy, successor)
+
     def test_revision_one_forward_upgrade_refuses_active_request(self) -> None:
         legacy_policy = glm_provider_admission_policy_v1()
-        successor = glm_provider_admission_policy()
+        successor = glm_provider_admission_policy_v2()
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             legacy = ProviderAdmissionKernel.canonical_runtime(
@@ -586,7 +839,7 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ProviderAdmissionConflict,
-                "idle provider",
+                "idle or",
             ):
                 legacy.supersede_policy(
                     binding,
@@ -601,7 +854,7 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
 
     def test_policy_upgrade_revalidates_epoch_under_write_lock(self) -> None:
         legacy_policy = glm_provider_admission_policy_v1()
-        successor = glm_provider_admission_policy()
+        successor = glm_provider_admission_policy_v2()
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             legacy = ProviderAdmissionKernel.canonical_runtime(
@@ -675,7 +928,7 @@ class ProviderAdmissionSchemaTests(unittest.TestCase):
             candidate_target=3,
             policy_source="foreign_test",
         )
-        successor = glm_provider_admission_policy()
+        successor = glm_provider_admission_policy_v2()
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             kernel = ProviderAdmissionKernel.canonical_runtime(
@@ -1961,7 +2214,7 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
 
         self.assertEqual(record.state, "dispatched")
 
-    def test_expired_grant_cannot_begin_transport_and_is_reconciled(self) -> None:
+    def test_expired_pre_transport_grant_is_cancelled_and_released(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             authorities = DispatchAuthorityStore(path, now=self.clock)
@@ -1976,15 +2229,16 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
             self.clock.value += timedelta(seconds=2)
 
             with self.assertRaisesRegex(
-                ProviderAdmissionReconciliationError,
-                "expired",
+                ProviderAdmissionConflict,
+                "fresh grant",
             ):
                 kernel.begin_transport(permit, request)
             record = kernel.read_request(request.request_id)
             status = kernel.status(kernel.policy.provider_id)
 
-        self.assertEqual(record.state, "reconciliation_required")
-        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(record.state, "cancelled")
+        self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(status.project_active_counts, ())
 
     def test_revoked_authority_cancels_grant_before_transport(self) -> None:
         with d_drive_tempdir() as temp:
@@ -2075,6 +2329,429 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
         self.assertEqual(status.circuit_state, "open")
         self.assertEqual(status.project_active_counts, ())
 
+    def test_late_successful_sibling_cannot_close_pressure_circuit(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=2,
+                per_project_cap=2,
+            )
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+                policy=policy,
+            )
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
+            pressure_request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            sibling_request = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.BULK,
+            )
+            pressure = kernel.try_admit(pressure_request, ttl_seconds=60)
+            sibling = kernel.try_admit(sibling_request, ttl_seconds=60)
+            kernel.begin_transport(pressure, pressure_request)
+            kernel.begin_transport(sibling, sibling_request)
+            kernel.finish(
+                pressure,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="1" * 64,
+            )
+            kernel.finish(
+                sibling,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=200,
+                terminal_persisted=True,
+                terminal_evidence_digest="2" * 64,
+            )
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.counts["completed"], 2)
+
+    def test_pressure_open_survives_sibling_unknown_resolution(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=2,
+                per_project_cap=2,
+            )
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+                policy=policy,
+            )
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
+            pressure_request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            unknown_request = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.BULK,
+            )
+            pressure = kernel.try_admit(pressure_request, ttl_seconds=60)
+            unknown = kernel.try_admit(unknown_request, ttl_seconds=60)
+            kernel.begin_transport(pressure, pressure_request)
+            kernel.begin_transport(unknown, unknown_request)
+            kernel.finish(
+                pressure,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="3" * 64,
+            )
+            kernel.finish(
+                unknown,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="4" * 64,
+            )
+            resolution_reference = authorities.issue(
+                source_kind="operator_reconciliation",
+                source_id="resolve-pressure-sibling",
+                scope=AuthorityScope(
+                    providers=(policy.provider_id,),
+                    planes=("provider_admission_reconciliation",),
+                    task_types=("provider_admission_resolution",),
+                    member_digests=(unknown_request.member_digest,),
+                    provider_tier_binding_digests=(
+                        unknown_request.provider_tier_binding_digest,
+                    ),
+                    project_binding_digests=(self.project_b.binding_digest,),
+                    admission_lanes=(unknown_request.lane.value,),
+                    provider_admission_policy_digests=(
+                        policy.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(self.clock.value + timedelta(minutes=5)).isoformat(),
+            )
+            kernel.resolve_reconciliation(
+                unknown_request.request_id,
+                resolution_reference,
+                resolution_evidence_digest="5" * 64,
+            )
+            status = kernel.status(policy.provider_id)
+
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.counts["reconciled"], 1)
+        self.assertEqual(status.project_active_counts, ())
+
+    def test_policy_migration_refuses_unknown_episode_with_later_pressure(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            predecessor = glm_provider_admission_policy_v2()
+            successor = glm_provider_admission_policy()
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+                policy=predecessor,
+            )
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=predecessor,
+                now=self.clock,
+            )
+            unknown_request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            pressure_request = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.BULK,
+            )
+            unknown = kernel.try_admit(unknown_request, ttl_seconds=60)
+            pressure = kernel.try_admit(pressure_request, ttl_seconds=60)
+            kernel.begin_transport(unknown, unknown_request)
+            kernel.begin_transport(pressure, pressure_request)
+            kernel.finish(
+                unknown,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="a" * 64,
+            )
+            kernel.finish(
+                pressure,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="b" * 64,
+            )
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                predecessor,
+                successor,
+                target=8,
+                reconciliation_snapshot_digest=(
+                    kernel.reconciliation_isolation_snapshot_digest()
+                ),
+                reconciliation_isolation_evidence_digest="c" * 64,
+            )
+            transition_reference = authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="mixed-unknown-pressure-migration",
+                scope=AuthorityScope(
+                    providers=(predecessor.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(self.clock.value + timedelta(minutes=5)).isoformat(),
+            )
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "isolatable",
+            ):
+                kernel.supersede_policy(
+                    binding,
+                    successor,
+                    transition_reference,
+                )
+            status = kernel.status(predecessor.provider_id)
+
+        self.assertEqual(status.policy_digest, predecessor.policy_digest)
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.counts["reconciliation_required"], 1)
+
+    def test_policy_migration_refuses_snapshot_drift_from_late_unknown(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            predecessor = glm_provider_admission_policy_v2()
+            successor = glm_provider_admission_policy()
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+                policy=predecessor,
+            )
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=predecessor,
+                now=self.clock,
+            )
+            first_request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            late_request = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.BULK,
+            )
+            first = kernel.try_admit(first_request, ttl_seconds=60)
+            late = kernel.try_admit(late_request, ttl_seconds=60)
+            kernel.begin_transport(first, first_request)
+            kernel.begin_transport(late, late_request)
+            kernel.finish(
+                first,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="d" * 64,
+            )
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                predecessor,
+                successor,
+                target=8,
+                reconciliation_snapshot_digest=(
+                    kernel.reconciliation_isolation_snapshot_digest()
+                ),
+                reconciliation_isolation_evidence_digest="e" * 64,
+            )
+            kernel.finish(
+                late,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="f" * 64,
+            )
+            self.assertNotEqual(
+                binding.reconciliation_snapshot_digest,
+                kernel.reconciliation_isolation_snapshot_digest(),
+            )
+            transition_reference = authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="stale-unknown-snapshot-migration",
+                scope=AuthorityScope(
+                    providers=(predecessor.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(self.clock.value + timedelta(minutes=5)).isoformat(),
+            )
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "isolatable",
+            ):
+                kernel.supersede_policy(
+                    binding,
+                    successor,
+                    transition_reference,
+                )
+            status = kernel.status(predecessor.provider_id)
+
+        self.assertEqual(status.policy_digest, predecessor.policy_digest)
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.counts["reconciliation_required"], 2)
+
+    def test_half_open_no_response_reopens_and_reserves_probe_unit(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            dispatch_reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            opening_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            opening = kernel.try_admit(opening_request, ttl_seconds=60)
+            kernel.begin_transport(opening, opening_request)
+            kernel.finish(
+                opening,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="6" * 64,
+            )
+            probe_request = self._request(
+                dispatch_reference,
+                self.project_b,
+                AdmissionLane.INTERACTIVE,
+            )
+            binding = ProviderAdmissionCircuitBinding.create(
+                kernel.policy,
+                from_state="open",
+                to_state="half_open",
+                probe_request_digest=probe_request.binding_digest,
+            )
+            circuit_reference = authorities.issue(
+                source_kind="operator_circuit_authority",
+                source_id="half-open-unknown",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_circuit_activation",),
+                    task_types=("provider_circuit_half_open",),
+                    provider_admission_circuit_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(self.clock.value + timedelta(minutes=5)).isoformat(),
+            )
+            kernel.activate_half_open(
+                binding,
+                circuit_reference,
+                probe_request,
+            )
+            probe = kernel.try_admit(probe_request, ttl_seconds=60)
+            kernel.begin_transport(probe, probe_request)
+            kernel.finish(
+                probe,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="7" * 64,
+            )
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.counts["reconciliation_required"], 1)
+        self.assertEqual(len(status.project_active_counts), 1)
+
+    def test_expired_dispatched_request_reserves_capacity_without_global_stop(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=1,
+                per_project_cap=1,
+            )
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+                policy=policy,
+            )
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
+            request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.BULK,
+            )
+            permit = kernel.try_admit(request, ttl_seconds=1)
+            kernel.begin_transport(permit, request)
+            self.clock.value += timedelta(seconds=2)
+
+            with self.assertRaises(ProviderAdmissionBusyError):
+                kernel.try_admit(
+                    self._request(
+                        reference,
+                        self.project_b,
+                        AdmissionLane.INTERACTIVE,
+                    ),
+                    ttl_seconds=60,
+                )
+            record = kernel.read_request(request.request_id)
+            status = kernel.status(kernel.policy.provider_id)
+
+        self.assertEqual(record.state, "reconciliation_required")
+        self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(status.last_signal, "dispatch_expired_isolated")
+        self.assertEqual(status.counts["reconciliation_required"], 1)
+
     def test_cancelled_half_open_probe_reopens_circuit(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
@@ -2138,7 +2815,96 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
         self.assertEqual(status.circuit_state, "open")
         self.assertEqual(status.last_signal, "half_open_cancelled")
 
-    def test_known_terminal_releases_capacity_but_unknown_requires_reconciliation(self) -> None:
+    def test_expired_half_open_grant_reopens_and_releases_probe_unit(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            dispatch_reference = self._authority(
+                authorities,
+                (self.project_a,),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            opening_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.ROUTINE,
+            )
+            opening = kernel.try_admit(opening_request, ttl_seconds=60)
+            kernel.begin_transport(opening, opening_request)
+            kernel.finish(
+                opening,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=True,
+                terminal_evidence_digest="1" * 64,
+            )
+            probe_request = self._request(
+                dispatch_reference,
+                self.project_a,
+                AdmissionLane.INTERACTIVE,
+            )
+            binding = ProviderAdmissionCircuitBinding.create(
+                kernel.policy,
+                from_state="open",
+                to_state="half_open",
+                probe_request_digest=probe_request.binding_digest,
+            )
+            circuit_reference = authorities.issue(
+                source_kind="operator_circuit_authority",
+                source_id="expired-half-open-probe",
+                scope=AuthorityScope(
+                    providers=(kernel.policy.provider_id,),
+                    planes=("provider_circuit_activation",),
+                    task_types=("provider_circuit_half_open",),
+                    provider_admission_circuit_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(self.clock.value + timedelta(minutes=5)).isoformat(),
+            )
+            kernel.activate_half_open(
+                binding,
+                circuit_reference,
+                probe_request,
+            )
+            probe = kernel.try_admit(probe_request, ttl_seconds=1)
+            self.clock.value += timedelta(seconds=2)
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "fresh grant",
+            ):
+                kernel.begin_transport(probe, probe_request)
+            record = kernel.read_request(probe_request.request_id)
+            status = kernel.status(kernel.policy.provider_id)
+            connection = sqlite3.connect(path)
+            try:
+                probe_digest = connection.execute(
+                    """SELECT half_open_probe_request_digest
+                    FROM provider_admission_state WHERE provider_id=?""",
+                    (kernel.policy.provider_id,),
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            with self.assertRaises(ProviderAdmissionReconciliationError):
+                kernel.try_admit(
+                    self._request(
+                        dispatch_reference,
+                        self.project_a,
+                        AdmissionLane.ROUTINE,
+                    ),
+                    ttl_seconds=60,
+                )
+
+        self.assertEqual(record.state, "cancelled")
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.last_signal, "half_open_probe_expired")
+        self.assertEqual(status.project_active_counts, ())
+        self.assertIsNone(probe_digest)
+
+    def test_unknown_reserves_one_slot_without_blocking_other_projects(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             authorities = DispatchAuthorityStore(path, now=self.clock)
@@ -2178,7 +2944,76 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
                 terminal_evidence_digest="e" * 64,
             )
 
-            with self.assertRaises(ProviderAdmissionReconciliationError):
+            next_request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.INTERACTIVE,
+            )
+            next_permit = kernel.try_admit(next_request, ttl_seconds=60)
+            kernel.begin_transport(next_permit, next_request)
+            kernel.finish(
+                next_permit,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=200,
+                terminal_persisted=True,
+                terminal_evidence_digest="f" * 64,
+            )
+            status = kernel.status("glm_flash_worker")
+            known_record = kernel.read_request(known.request_id)
+            unknown_record = kernel.read_request(unknown.request_id)
+
+        self.assertEqual(known_record.state, "completed")
+        self.assertEqual(unknown_record.state, "reconciliation_required")
+        self.assertEqual(status.counts["reconciliation_required"], 1)
+        self.assertEqual(status.counts["completed"], 2)
+        self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(
+            status.project_active_counts,
+            (
+                {
+                    "project_binding_digest": self.project_b.binding_digest,
+                    "active_units": 1,
+                },
+            ),
+        )
+
+    def test_isolated_unknowns_exhaust_capacity_but_never_become_free(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            policy = replace(
+                glm_provider_admission_policy(),
+                effective_target=2,
+                per_project_cap=2,
+            )
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+                policy=policy,
+            )
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=policy,
+                now=self.clock,
+            )
+            for project in (self.project_a, self.project_b):
+                request = self._request(
+                    reference,
+                    project,
+                    AdmissionLane.BULK,
+                )
+                permit = kernel.try_admit(request, ttl_seconds=60)
+                kernel.begin_transport(permit, request)
+                kernel.finish(
+                    permit,
+                    network_attempted=True,
+                    response_received=False,
+                    provider_http_status=None,
+                    terminal_persisted=True,
+                    terminal_evidence_digest="9" * 64,
+                )
+            with self.assertRaises(ProviderAdmissionBusyError):
                 kernel.try_admit(
                     self._request(
                         reference,
@@ -2187,14 +3022,124 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
                     ),
                     ttl_seconds=60,
                 )
-            status = kernel.status("glm_flash_worker")
-            known_record = kernel.read_request(known.request_id)
-            unknown_record = kernel.read_request(unknown.request_id)
+            status = kernel.status(kernel.policy.provider_id)
 
-        self.assertEqual(known_record.state, "completed")
-        self.assertEqual(unknown_record.state, "reconciliation_required")
-        self.assertEqual(status.counts["reconciliation_required"], 1)
+        self.assertEqual(status.counts["reconciliation_required"], 2)
+        self.assertEqual(status.counts["waiting"], 1)
+        self.assertEqual(status.circuit_state, "closed")
+        self.assertEqual(
+            sum(item["active_units"] for item in status.project_active_counts),
+            2,
+        )
+
+    def test_missing_terminal_evidence_still_opens_global_circuit(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a, self.project_b),
+            )
+            kernel = ProviderAdmissionKernel(path, now=self.clock)
+            request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.BULK,
+            )
+            permit = kernel.try_admit(request, ttl_seconds=60)
+            kernel.begin_transport(permit, request)
+            kernel.finish(
+                permit,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=False,
+                terminal_evidence_digest="8" * 64,
+            )
+
+            with self.assertRaises(ProviderAdmissionReconciliationError):
+                kernel.try_admit(
+                    self._request(
+                        reference,
+                        self.project_b,
+                        AdmissionLane.INTERACTIVE,
+                    ),
+                    ttl_seconds=60,
+                )
+            status = kernel.status(kernel.policy.provider_id)
+
         self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.last_signal, "local_integrity_stop")
+
+    def test_unpersisted_http_pressure_cannot_be_relabelled_as_unknown(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            predecessor = glm_provider_admission_policy_v2()
+            successor = glm_provider_admission_policy()
+            authorities = DispatchAuthorityStore(path, now=self.clock)
+            reference = self._authority(
+                authorities,
+                (self.project_a,),
+                policy=predecessor,
+            )
+            kernel = ProviderAdmissionKernel(
+                path,
+                policy=predecessor,
+                now=self.clock,
+            )
+            request = self._request(
+                reference,
+                self.project_a,
+                AdmissionLane.BULK,
+            )
+            permit = kernel.try_admit(request, ttl_seconds=60)
+            kernel.begin_transport(permit, request)
+            kernel.finish(
+                permit,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=429,
+                terminal_persisted=False,
+                terminal_evidence_digest="7" * 64,
+            )
+            binding = ProviderAdmissionPolicyTransitionBinding.create(
+                predecessor,
+                successor,
+                target=8,
+                reconciliation_snapshot_digest=(
+                    kernel.reconciliation_isolation_snapshot_digest()
+                ),
+                reconciliation_isolation_evidence_digest="6" * 64,
+            )
+            transition_reference = authorities.issue(
+                source_kind="operator_capacity_authority",
+                source_id="unpersisted-http-pressure",
+                scope=AuthorityScope(
+                    providers=(predecessor.provider_id,),
+                    planes=("provider_capacity_activation",),
+                    task_types=("provider_admission_policy_transition",),
+                    provider_admission_target_digests=(
+                        binding.binding_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(self.clock.value + timedelta(minutes=5)).isoformat(),
+            )
+
+            with self.assertRaisesRegex(
+                ProviderAdmissionConflict,
+                "isolatable",
+            ):
+                kernel.supersede_policy(
+                    binding,
+                    successor,
+                    transition_reference,
+                )
+            status = kernel.status(predecessor.provider_id)
+
+        self.assertEqual(status.circuit_state, "open")
+        self.assertEqual(status.last_signal, "http_429")
+        self.assertEqual(status.counts["reconciliation_required"], 1)
 
     def test_reconciliation_requires_exact_authority_and_restores_capacity(self) -> None:
         with d_drive_tempdir() as temp:
@@ -2260,7 +3205,7 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
         self.assertEqual(status.circuit_state, "closed")
         self.assertEqual(status.counts["reconciled"], 1)
 
-    def test_expired_waiting_cancels_but_expired_grant_never_auto_releases(self) -> None:
+    def test_expired_waiting_and_grant_cancel_before_new_admission(self) -> None:
         with d_drive_tempdir() as temp:
             path = temp / "runtime" / "dispatch.sqlite3"
             policy = replace(
@@ -2294,20 +3239,21 @@ class ProviderAdmissionKernelTests(unittest.TestCase):
                 kernel.try_admit(waiting, ttl_seconds=1)
 
             self.clock.value += timedelta(seconds=3)
-            with self.assertRaises(ProviderAdmissionReconciliationError):
-                kernel.try_admit(
-                    self._request(
-                        reference,
-                        self.project_b,
-                        AdmissionLane.INTERACTIVE,
-                    ),
-                    ttl_seconds=60,
-                )
+            replacement_request = self._request(
+                reference,
+                self.project_b,
+                AdmissionLane.INTERACTIVE,
+            )
+            replacement = kernel.try_admit(
+                replacement_request,
+                ttl_seconds=60,
+            )
+            kernel.cancel_before_transport(replacement)
             waiting_record = kernel.read_request(waiting.request_id)
             first_record = kernel.read_request(first.request_id)
 
         self.assertEqual(waiting_record.state, "cancelled")
-        self.assertEqual(first_record.state, "reconciliation_required")
+        self.assertEqual(first_record.state, "cancelled")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from macr_runtime.event_store import SqliteEventStore
 from macr_runtime.errors import (
     DispatchAuthorizationError,
     ProviderAdmissionBusyError,
+    ProviderAdmissionReconciliationError,
     ProviderUnavailableError,
 )
 from macr_runtime.execution import DispatchOrigin, InteractionPlane
@@ -27,6 +28,7 @@ from macr_runtime.provider_capability_store import (
 )
 from macr_runtime.provider_admission import (
     AdmissionLane,
+    ProjectAdmissionBinding,
     ProviderAdmissionKernel,
     ProviderAdmissionRequest,
     glm_provider_admission_policy,
@@ -190,7 +192,98 @@ class NoResponseTransport(FakeTransport):
         )
 
 
+class OneNoResponseThenSuccessTransport(FakeTransport):
+    def __init__(self, response):
+        super().__init__(response)
+        self.calls = 0
+
+    def post_json(self, url, *, headers, payload, timeout_s):
+        self.calls += 1
+        if self.calls == 1:
+            raise ProviderUnavailableError(
+                "synthetic first no response",
+                network_attempted=True,
+                response_received=False,
+                transport_stage="connection",
+            )
+        return super().post_json(
+            url,
+            headers=headers,
+            payload=payload,
+            timeout_s=timeout_s,
+        )
+
+
 class T1DispatcherTests(unittest.TestCase):
+    def test_reconciliation_stops_only_its_plan_not_another_project(self) -> None:
+        now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
+        clock = Clock(now)
+        with d_drive_tempdir() as state_root:
+            services = t1_services(state_root, clock)
+            transport = OneNoResponseThenSuccessTransport(success_document())
+            provider = GlmFlashWorkerProvider(
+                glm_config(),
+                transport=transport,
+                environ={"MACR_STATE_ROOT": str(state_root)},
+                key_source=StaticKeySource(),
+                approval_store=AllowingApprovalStore(),
+                token_policy=t1_glm_live_policy(),
+                admission_guard=services.provider_admission,
+            )
+            dispatcher = T1Dispatcher(
+                ProviderRegistry((provider,)),
+                services,
+                now=clock,
+            )
+            first_manifest = approved_manifest(
+                provider,
+                member_count=1,
+                worker_count=1,
+            )
+            first_bundle = dispatcher.stage(
+                first_manifest,
+                first_manifest.authorized_dispatchers,
+                first_manifest.expires_at,
+                project_binding=ProjectAdmissionBinding(
+                    "project-a",
+                    1,
+                    "operator_asserted",
+                ),
+            )
+            first = dispatcher.run_one(
+                first_manifest,
+                first_bundle,
+                first_manifest.authorized_dispatchers[0],
+                DispatchOrigin("test", "process_id", "1234"),
+                allow_network=True,
+                allow_local=False,
+            )
+            second_manifest = replan_manifest(first_manifest, "b" * 64)
+            second_bundle = dispatcher.stage(
+                second_manifest,
+                second_manifest.authorized_dispatchers,
+                second_manifest.expires_at,
+                project_binding=ProjectAdmissionBinding(
+                    "project-b",
+                    1,
+                    "operator_asserted",
+                ),
+            )
+            second = dispatcher.run_one(
+                second_manifest,
+                second_bundle,
+                second_manifest.authorized_dispatchers[0],
+                DispatchOrigin("test", "process_id", "5678"),
+                allow_network=True,
+                allow_local=False,
+            )
+            counts = dispatcher.queue.state_counts()
+
+        self.assertTrue(first.reconciliation_required)
+        self.assertEqual(second.queue_state, "completed")
+        self.assertEqual(counts["reconciliation_required"], 1)
+        self.assertEqual(counts["completed"], 1)
+        self.assertEqual(transport.calls, 2)
     def test_unknown_cost_remains_null_in_t1_reconciliation(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)
         clock = Clock(now)
@@ -747,21 +840,25 @@ class T1DispatcherTests(unittest.TestCase):
                 new_subject.authorized_dispatchers,
                 new_subject.expires_at,
             )
-            resumed = recovered.run_one(
-                new_subject,
-                new_bundle,
-                "worker-2",
-                DispatchOrigin("test", "process_id", "5678"),
-                allow_network=True,
-                allow_local=False,
+            with self.assertRaises(ProviderAdmissionReconciliationError):
+                recovered.run_one(
+                    new_subject,
+                    new_bundle,
+                    "worker-2",
+                    DispatchOrigin("test", "process_id", "5678"),
+                    allow_network=True,
+                    allow_local=False,
+                )
+            admission_status = services.provider_admission.status(
+                provider.provider_id
             )
 
         self.assertEqual(result.queue_state, "reconciliation_required")
         self.assertEqual(result.provider_state, "unknown_after_dispatch")
         self.assertEqual(counts["reconciliation_required"], 1)
         self.assertEqual(counts["queued"], 2)
-        self.assertEqual(resumed.queue_state, "completed")
-        self.assertEqual(len(transport.posts), 2)
+        self.assertEqual(admission_status.circuit_state, "open")
+        self.assertEqual(len(transport.posts), 1)
 
     def test_stale_task_approval_refuses_before_any_authority_or_queue_write(self) -> None:
         now = datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc)

@@ -5,6 +5,7 @@ import json
 import re
 import sqlite3
 import uuid
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -294,6 +295,7 @@ class ProviderAdmissionPolicy:
     hard_max: int
     per_project_cap: int
     policy_source: str
+    uncertain_dispatch_scope: str = "global"
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -342,13 +344,18 @@ class ProviderAdmissionPolicy:
             "policy_source",
             _identifier("policy_source", self.policy_source),
         )
+        if self.uncertain_dispatch_scope not in {
+            "global",
+            "capacity_reservation",
+        }:
+            raise ValueError("uncertain_dispatch_scope is invalid")
 
     @property
     def policy_digest(self) -> str:
         return sha256_id("provider_admission_policy_v1", self.to_dict())
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        document = {
             "provider_id": self.provider_id,
             "revision": self.revision,
             "capacity_unit": self.capacity_unit,
@@ -358,6 +365,11 @@ class ProviderAdmissionPolicy:
             "per_project_cap": self.per_project_cap,
             "policy_source": self.policy_source,
         }
+        if self.uncertain_dispatch_scope != "global":
+            document["uncertain_dispatch_scope"] = (
+                self.uncertain_dispatch_scope
+            )
+        return document
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "ProviderAdmissionPolicy":
@@ -371,12 +383,31 @@ class ProviderAdmissionPolicy:
             "per_project_cap",
             "policy_source",
         }
-        if not isinstance(value, Mapping) or set(value) != expected:
+        if not isinstance(value, Mapping) or set(value) not in {
+            frozenset(expected),
+            frozenset({*expected, "uncertain_dispatch_scope"}),
+        }:
             raise ValueError("provider admission policy fields must be exact")
         return cls(**value)
 
 
 def glm_provider_admission_policy() -> ProviderAdmissionPolicy:
+    return ProviderAdmissionPolicy(
+        provider_id="glm_flash_worker",
+        revision=3,
+        capacity_unit=1,
+        effective_target=8,
+        candidate_target=16,
+        hard_max=32,
+        per_project_cap=8,
+        policy_source="built_in",
+        uncertain_dispatch_scope="capacity_reservation",
+    )
+
+
+def glm_provider_admission_policy_v2() -> ProviderAdmissionPolicy:
+    """Historical 8-slot policy with provider-global uncertainty stop."""
+
     return ProviderAdmissionPolicy(
         provider_id="glm_flash_worker",
         revision=2,
@@ -407,6 +438,22 @@ def glm_provider_admission_policy_v1() -> ProviderAdmissionPolicy:
 def grok_provider_admission_policy() -> ProviderAdmissionPolicy:
     return ProviderAdmissionPolicy(
         provider_id="grok",
+        revision=2,
+        capacity_unit=1,
+        effective_target=8,
+        candidate_target=16,
+        hard_max=32,
+        per_project_cap=8,
+        policy_source="built_in",
+        uncertain_dispatch_scope="capacity_reservation",
+    )
+
+
+def grok_provider_admission_policy_v1() -> ProviderAdmissionPolicy:
+    """Historical Grok policy with provider-global uncertainty stop."""
+
+    return ProviderAdmissionPolicy(
+        provider_id="grok",
         revision=1,
         capacity_unit=1,
         effective_target=8,
@@ -414,6 +461,26 @@ def grok_provider_admission_policy() -> ProviderAdmissionPolicy:
         hard_max=32,
         per_project_cap=8,
         policy_source="built_in",
+    )
+
+
+def builtin_provider_admission_policy_history(
+    provider_id: str,
+) -> tuple[ProviderAdmissionPolicy, ...]:
+    provider = _identifier("provider_id", provider_id)
+    if provider == "glm_flash_worker":
+        return (
+            glm_provider_admission_policy_v1(),
+            glm_provider_admission_policy_v2(),
+            glm_provider_admission_policy(),
+        )
+    if provider == "grok":
+        return (
+            grok_provider_admission_policy_v1(),
+            grok_provider_admission_policy(),
+        )
+    raise ProviderAdmissionConflict(
+        "provider admission policy is not built in"
     )
 
 
@@ -434,6 +501,109 @@ def builtin_provider_admission_policy(
         raise ProviderAdmissionConflict(
             "provider admission policy is not built in"
         ) from exc
+
+
+def _reconciliation_isolation_snapshot_digest(
+    connection: sqlite3.Connection,
+    policy: ProviderAdmissionPolicy,
+    state: sqlite3.Row,
+) -> str:
+    rows = connection.execute(
+        """SELECT request_id, run_id, project_binding_digest,
+                  admission_lane, authority_digest, authority_epoch,
+                  task_digest, member_digest,
+                  provider_tier_binding_digest, policy_digest,
+                  capacity_unit, state, transport_started_at,
+                  terminal_at, terminal_evidence_digest
+        FROM provider_admission_requests
+        WHERE provider_id=? AND state='reconciliation_required'
+        ORDER BY request_id""",
+        (policy.provider_id,),
+    ).fetchall()
+    requests = []
+    for row in rows:
+        _uuid4("request_id", row["request_id"])
+        _uuid4("run_id", row["run_id"])
+        for name in (
+            "project_binding_digest",
+            "authority_digest",
+            "task_digest",
+            "policy_digest",
+            "terminal_evidence_digest",
+        ):
+            _digest(name, row[name])
+        for name in ("member_digest", "provider_tier_binding_digest"):
+            _optional_digest(name, row[name])
+        AdmissionLane(row["admission_lane"])
+        if (
+            isinstance(row["authority_epoch"], bool)
+            or not isinstance(row["authority_epoch"], int)
+            or row["authority_epoch"] < 0
+            or row["capacity_unit"] != 1
+            or row["state"] != "reconciliation_required"
+            or row["transport_started_at"] is None
+            or row["terminal_at"] is None
+        ):
+            raise ProviderAdmissionConflict(
+                "provider admission reconciliation row is invalid"
+            )
+        _aware(row["transport_started_at"])
+        _aware(row["terminal_at"])
+        requests.append({name: row[name] for name in row.keys()})
+    project_rows = connection.execute(
+        """SELECT project_binding_digest, active_units
+        FROM provider_admission_projects
+        WHERE provider_id=? AND active_units>0
+        ORDER BY project_binding_digest""",
+        (policy.provider_id,),
+    ).fetchall()
+    capacity_rows = connection.execute(
+        """SELECT request_id, project_binding_digest, state, capacity_unit
+        FROM provider_admission_requests
+        WHERE provider_id=? AND state IN (
+            'granted', 'dispatched', 'reconciliation_required'
+        ) ORDER BY request_id""",
+        (policy.provider_id,),
+    ).fetchall()
+    for row in capacity_rows:
+        _uuid4("request_id", row["request_id"])
+        _digest("project_binding_digest", row["project_binding_digest"])
+        if row["state"] not in {
+            "granted",
+            "dispatched",
+            "reconciliation_required",
+        } or row["capacity_unit"] != 1:
+            raise ProviderAdmissionConflict(
+                "provider admission active capacity row is invalid"
+            )
+    expected_projects = Counter(
+        row["project_binding_digest"] for row in capacity_rows
+    )
+    observed_projects = {
+        row["project_binding_digest"]: row["active_units"]
+        for row in project_rows
+    }
+    if observed_projects != dict(expected_projects):
+        raise ProviderAdmissionConflict(
+            "provider admission reconciliation capacity is inconsistent"
+        )
+    return sha256_id(
+        "provider_admission_reconciliation_isolation_snapshot_v1",
+        {
+            "provider_id": policy.provider_id,
+            "policy_revision": policy.revision,
+            "policy_digest": policy.policy_digest,
+            "deployment_digest": state["deployment_digest"],
+            "effective_target": state["effective_target"],
+            "circuit_state": state["circuit_state"],
+            "control_revision": state["control_revision"],
+            "control_digest": state["control_digest"],
+            "last_signal": state["last_signal"],
+            "requests": requests,
+            "active_capacity": [dict(row) for row in capacity_rows],
+            "project_active_counts": [dict(row) for row in project_rows],
+        },
+    )
 
 
 @dataclass(frozen=True)
@@ -516,6 +686,8 @@ class ProviderAdmissionPolicyTransitionBinding:
     to_policy_digest: str
     to_policy_revision: int
     target: int
+    reconciliation_snapshot_digest: str | None = None
+    reconciliation_isolation_evidence_digest: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -554,6 +726,22 @@ class ProviderAdmissionPolicyTransitionBinding:
                 maximum=_MAX_PROVIDER_CAPACITY,
             ),
         )
+        object.__setattr__(
+            self,
+            "reconciliation_snapshot_digest",
+            _optional_digest(
+                "reconciliation_snapshot_digest",
+                self.reconciliation_snapshot_digest,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "reconciliation_isolation_evidence_digest",
+            _optional_digest(
+                "reconciliation_isolation_evidence_digest",
+                self.reconciliation_isolation_evidence_digest,
+            ),
+        )
 
     @classmethod
     def create(
@@ -562,6 +750,8 @@ class ProviderAdmissionPolicyTransitionBinding:
         successor: ProviderAdmissionPolicy,
         *,
         target: int,
+        reconciliation_snapshot_digest: str | None = None,
+        reconciliation_isolation_evidence_digest: str | None = None,
     ) -> "ProviderAdmissionPolicyTransitionBinding":
         if not isinstance(current, ProviderAdmissionPolicy) or not isinstance(
             successor,
@@ -583,17 +773,26 @@ class ProviderAdmissionPolicyTransitionBinding:
             to_policy_digest=successor.policy_digest,
             to_policy_revision=successor.revision,
             target=target,
+            reconciliation_snapshot_digest=reconciliation_snapshot_digest,
+            reconciliation_isolation_evidence_digest=(
+                reconciliation_isolation_evidence_digest
+            ),
         )
 
     @property
     def binding_digest(self) -> str:
         return sha256_id(
-            "provider_admission_policy_transition_v1",
+            (
+                "provider_admission_policy_transition_v2"
+                if self.reconciliation_snapshot_digest is not None
+                or self.reconciliation_isolation_evidence_digest is not None
+                else "provider_admission_policy_transition_v1"
+            ),
             self.to_dict(),
         )
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        document = {
             "provider_id": self.provider_id,
             "from_policy_digest": self.from_policy_digest,
             "from_policy_revision": self.from_policy_revision,
@@ -601,6 +800,15 @@ class ProviderAdmissionPolicyTransitionBinding:
             "to_policy_revision": self.to_policy_revision,
             "target": self.target,
         }
+        if self.reconciliation_snapshot_digest is not None:
+            document["reconciliation_snapshot_digest"] = (
+                self.reconciliation_snapshot_digest
+            )
+        if self.reconciliation_isolation_evidence_digest is not None:
+            document["reconciliation_isolation_evidence_digest"] = (
+                self.reconciliation_isolation_evidence_digest
+            )
+        return document
 
 
 @dataclass(frozen=True)
@@ -846,7 +1054,9 @@ class ProviderAdmissionRecord:
 class ProviderAdmissionStatus:
     initialized: bool
     provider_id: str
+    policy_revision: int
     policy_digest: str
+    uncertain_dispatch_scope: str
     deployment_mode: str | None
     deployment_digest: str | None
     effective_target: int
@@ -864,7 +1074,9 @@ class ProviderAdmissionStatus:
         return {
             "initialized": self.initialized,
             "provider_id": self.provider_id,
+            "policy_revision": self.policy_revision,
             "policy_digest": self.policy_digest,
+            "uncertain_dispatch_scope": self.uncertain_dispatch_scope,
             "deployment_mode": self.deployment_mode,
             "deployment_digest": self.deployment_digest,
             "effective_target": self.effective_target,
@@ -912,9 +1124,13 @@ class ProviderAdmissionKernel:
         path: str | Path,
         *,
         policy: ProviderAdmissionPolicy | None = None,
+        provider_id: str = "glm_flash_worker",
         now: Callable[[], datetime] = _utc_now,
     ) -> "ProviderAdmissionKernel":
-        selected_policy = policy or glm_provider_admission_policy()
+        provider = _identifier("provider_id", provider_id)
+        selected_policy = policy or builtin_provider_admission_policy(provider)
+        if policy is not None and policy.provider_id != provider:
+            raise ValueError("explicit provider admission policy identity conflicts")
         candidate = Path(path)
         if policy is None and candidate.is_file():
             connection = sqlite3.connect(
@@ -931,7 +1147,8 @@ class ProviderAdmissionKernel:
                     connection.execute(
                         """SELECT policy_digest
                         FROM provider_admission_state
-                        WHERE provider_id='glm_flash_worker'"""
+                        WHERE provider_id=?""",
+                        (provider,),
                     ).fetchone()
                     if meta is not None and meta["version"] >= 8
                     else None
@@ -940,9 +1157,19 @@ class ProviderAdmissionKernel:
                 state = None
             finally:
                 connection.close()
-            legacy = glm_provider_admission_policy_v1()
-            if state is not None and state["policy_digest"] == legacy.policy_digest:
-                selected_policy = legacy
+            if state is not None:
+                matching = tuple(
+                    item
+                    for item in builtin_provider_admission_policy_history(
+                        provider
+                    )
+                    if item.policy_digest == state["policy_digest"]
+                )
+                if len(matching) != 1:
+                    raise ProviderAdmissionConflict(
+                        "provider admission state uses an unknown policy"
+                    )
+                selected_policy = matching[0]
         return cls(
             path,
             policy=selected_policy,
@@ -1350,6 +1577,18 @@ class ProviderAdmissionKernel:
             connection.close()
         return self.status(self.policy.provider_id)
 
+    def reconciliation_isolation_snapshot_digest(self) -> str:
+        connection = self.database.connect()
+        try:
+            state = self._validated_state(connection)
+            return _reconciliation_isolation_snapshot_digest(
+                connection,
+                self.policy,
+                state,
+            )
+        finally:
+            connection.close()
+
     def supersede_policy(
         self,
         binding: ProviderAdmissionPolicyTransitionBinding,
@@ -1363,15 +1602,28 @@ class ProviderAdmissionKernel:
             raise ValueError(
                 "provider admission policy transition values are invalid"
             )
+        supported_pairs = {
+            (
+                glm_provider_admission_policy_v1(),
+                glm_provider_admission_policy_v2(),
+            ),
+            (
+                glm_provider_admission_policy_v2(),
+                glm_provider_admission_policy(),
+            ),
+            (
+                grok_provider_admission_policy_v1(),
+                grok_provider_admission_policy(),
+            ),
+        }
         if (
-            self.policy != glm_provider_admission_policy_v1()
+            (self.policy, successor) not in supported_pairs
             or self.policy.provider_id != binding.provider_id
             or self.policy.policy_digest != binding.from_policy_digest
             or self.policy.revision != binding.from_policy_revision
             or successor.provider_id != binding.provider_id
             or successor.policy_digest != binding.to_policy_digest
             or successor.revision != binding.to_policy_revision
-            or successor != glm_provider_admission_policy()
             or not 1 <= binding.target <= successor.hard_max
         ):
             raise ProviderAdmissionConflict(
@@ -1399,16 +1651,78 @@ class ProviderAdmissionKernel:
                 task_type="provider_admission_policy_transition",
                 provider_admission_target_digest=binding.binding_digest,
             )
-            active_or_waiting = connection.execute(
-                """SELECT COUNT(*) FROM provider_admission_requests
-                WHERE provider_id=? AND state IN (
-                    'waiting','granted','dispatched','reconciliation_required'
-                )""",
+            state_counts = {
+                row["state"]: row["count"]
+                for row in connection.execute(
+                    """SELECT state, COUNT(*) AS count
+                    FROM provider_admission_requests
+                    WHERE provider_id=? GROUP BY state""",
+                    (self.policy.provider_id,),
+                ).fetchall()
+            }
+            blocking = sum(
+                state_counts.get(name, 0)
+                for name in ("waiting", "granted", "dispatched")
+            )
+            unresolved = state_counts.get("reconciliation_required", 0)
+            semantics_migration = (
+                self.policy.uncertain_dispatch_scope == "global"
+                and successor.uncertain_dispatch_scope
+                == "capacity_reservation"
+            )
+            current_reconciliation_snapshot = (
+                _reconciliation_isolation_snapshot_digest(
+                    connection,
+                    self.policy,
+                    state,
+                )
+                if unresolved
+                else None
+            )
+            can_isolate_existing = (
+                semantics_migration
+                and binding.reconciliation_snapshot_digest
+                == current_reconciliation_snapshot
+                and binding.reconciliation_isolation_evidence_digest
+                is not None
+                and state["circuit_state"] == "open"
+                and self._open_episode_is_unknown_only(
+                    connection,
+                    self.policy.provider_id,
+                )
+            )
+            active_units = connection.execute(
+                """SELECT COALESCE(SUM(active_units), 0)
+                FROM provider_admission_projects WHERE provider_id=?""",
                 (self.policy.provider_id,),
             ).fetchone()[0]
-            if state["circuit_state"] != "closed" or active_or_waiting:
+            project_over_cap = connection.execute(
+                """SELECT COUNT(*) FROM provider_admission_projects
+                WHERE provider_id=? AND active_units>?""",
+                (self.policy.provider_id, successor.per_project_cap),
+            ).fetchone()[0]
+            if (
+                blocking
+                or active_units != unresolved
+                or active_units > binding.target
+                or project_over_cap
+                or (
+                    unresolved
+                    and not can_isolate_existing
+                )
+                or (
+                    not unresolved
+                    and (
+                        state["circuit_state"] != "closed"
+                        or binding.reconciliation_snapshot_digest is not None
+                        or binding.reconciliation_isolation_evidence_digest
+                        is not None
+                    )
+                )
+            ):
                 raise ProviderAdmissionConflict(
-                    "provider admission policy transition requires an idle provider"
+                    "provider admission policy transition requires an idle or "
+                    "exactly isolatable runtime"
                 )
             row = connection.execute(
                 """SELECT body_json, body_sha256, policy_digest
@@ -1447,10 +1761,19 @@ class ProviderAdmissionKernel:
                 effective_target=binding.target,
                 circuit_state="closed",
                 half_open_probe_request_digest=None,
-                last_signal="policy_superseded",
+                last_signal=(
+                    "policy_superseded_with_reconciliation"
+                    if unresolved
+                    else "policy_superseded"
+                ),
                 now=now,
                 authority_digest=reference.digest,
                 binding_digest=binding.binding_digest,
+                evidence_digest=(
+                    binding.reconciliation_isolation_evidence_digest
+                    if unresolved
+                    else None
+                ),
                 control_policy=successor,
             )
             connection.commit()
@@ -1704,7 +2027,7 @@ class ProviderAdmissionKernel:
         now: datetime,
     ) -> None:
         state = self._validated_state(connection)
-        expired_active_request_id: str | None = None
+        expired_dispatched_request_id: str | None = None
         rows = connection.execute(
             """SELECT * FROM provider_admission_requests
             WHERE provider_id = ?
@@ -1722,26 +2045,47 @@ class ProviderAdmissionKernel:
                     (now.isoformat(), row["request_id"]),
                 )
                 continue
+            if row["state"] == "granted":
+                self._cancel_granted_row(
+                    connection,
+                    row,
+                    state,
+                    now=now.isoformat(),
+                    reason="half_open_probe_expired",
+                )
+                continue
             connection.execute(
                 """UPDATE provider_admission_requests
                 SET state='reconciliation_required', terminal_at=?
-                WHERE request_id=?
-                  AND state IN ('granted', 'dispatched')""",
+                WHERE request_id=? AND state='dispatched'""",
                 (now.isoformat(), row["request_id"]),
             )
-            if expired_active_request_id is None:
-                expired_active_request_id = row["request_id"]
-        if expired_active_request_id is not None:
+            if expired_dispatched_request_id is None:
+                expired_dispatched_request_id = row["request_id"]
+        if expired_dispatched_request_id is not None:
+            isolated = (
+                self.policy.uncertain_dispatch_scope
+                == "capacity_reservation"
+                and state["circuit_state"] == "closed"
+            )
             self._append_control_transition(
                 connection,
                 state,
-                transition_kind="permit_expired",
+                transition_kind=(
+                    "dispatch_expired_isolated"
+                    if isolated
+                    else "permit_expired"
+                ),
                 effective_target=state["effective_target"],
-                circuit_state="open",
+                circuit_state="closed" if isolated else "open",
                 half_open_probe_request_digest=None,
-                last_signal="permit_expired",
+                last_signal=(
+                    "dispatch_expired_isolated"
+                    if isolated
+                    else "permit_expired"
+                ),
                 now=now.isoformat(),
-                request_id=expired_active_request_id,
+                request_id=expired_dispatched_request_id,
             )
 
     def _selected_waiting(
@@ -1806,6 +2150,53 @@ class ProviderAdmissionKernel:
             ),
         )
 
+    @staticmethod
+    def _open_episode_is_unknown_only(
+        connection: sqlite3.Connection,
+        provider_id: str,
+    ) -> bool:
+        previous_state: str | None = None
+        active = False
+        unknown_only = False
+        for row in connection.execute(
+            """SELECT transition_kind, body_json
+            FROM provider_admission_transitions
+            WHERE provider_id=? ORDER BY control_revision""",
+            (provider_id,),
+        ).fetchall():
+            try:
+                body = json.loads(row["body_json"])
+                current_state = body["circuit_state"]
+                signal = body["last_signal"]
+            except (KeyError, TypeError, json.JSONDecodeError) as exc:
+                raise ProviderAdmissionConflict(
+                    "provider admission transition body is invalid"
+                ) from exc
+            if current_state == "open" and previous_state != "open":
+                active = True
+                unknown_only = row["transition_kind"] == "unknown_after_dispatch"
+            elif current_state != "open":
+                active = False
+                unknown_only = False
+            elif active and (
+                row["transition_kind"]
+                in {
+                    "circuit_opened",
+                    "half_open_failed",
+                    "half_open_cancelled",
+                    "permit_expired",
+                }
+                or signal == "local_integrity_stop"
+                or signal == "http_429"
+                or (
+                    isinstance(signal, str)
+                    and signal.startswith("http_5")
+                )
+            ):
+                unknown_only = False
+            previous_state = current_state
+        return active and unknown_only
+
     def try_admit(
         self,
         request: ProviderAdmissionRequest,
@@ -1840,16 +2231,17 @@ class ProviderAdmissionKernel:
                 raise ProviderAdmissionReconciliationError(
                     "provider admission half-open slot is bound to another probe"
                 )
-            unresolved = connection.execute(
-                """SELECT COUNT(*) FROM provider_admission_requests
-                WHERE provider_id=? AND state='reconciliation_required'""",
-                (request.provider_id,),
-            ).fetchone()[0]
-            if unresolved:
-                connection.commit()
-                raise ProviderAdmissionReconciliationError(
-                    "provider admission has unresolved capacity"
-                )
+            if self.policy.uncertain_dispatch_scope == "global":
+                unresolved = connection.execute(
+                    """SELECT COUNT(*) FROM provider_admission_requests
+                    WHERE provider_id=? AND state='reconciliation_required'""",
+                    (request.provider_id,),
+                ).fetchone()[0]
+                if unresolved:
+                    connection.commit()
+                    raise ProviderAdmissionReconciliationError(
+                        "provider admission has unresolved capacity"
+                    )
             row = connection.execute(
                 "SELECT * FROM provider_admission_requests WHERE request_id=?",
                 (request.request_id,),
@@ -2111,12 +2503,7 @@ class ProviderAdmissionKernel:
                 raise ProviderAdmissionConflict(
                     "provider admission permit is not a fresh grant"
                 )
-            unresolved = connection.execute(
-                """SELECT COUNT(*) FROM provider_admission_requests
-                WHERE provider_id=? AND state='reconciliation_required'""",
-                (permit.provider_id,),
-            ).fetchone()[0]
-            if unresolved or state["circuit_state"] == "open":
+            if state["circuit_state"] == "open":
                 self._cancel_granted_row(
                     connection,
                     row,
@@ -2128,6 +2515,24 @@ class ProviderAdmissionKernel:
                 raise ProviderAdmissionReconciliationError(
                     "provider admission circuit opened before transport"
                 )
+            if self.policy.uncertain_dispatch_scope == "global":
+                unresolved = connection.execute(
+                    """SELECT COUNT(*) FROM provider_admission_requests
+                    WHERE provider_id=? AND state='reconciliation_required'""",
+                    (permit.provider_id,),
+                ).fetchone()[0]
+                if unresolved:
+                    self._cancel_granted_row(
+                        connection,
+                        row,
+                        state,
+                        now=now,
+                        reason="grant_blocked_by_unresolved_capacity",
+                    )
+                    connection.commit()
+                    raise ProviderAdmissionReconciliationError(
+                        "provider admission has unresolved capacity"
+                    )
             if (
                 state["circuit_state"] == "half_open"
                 and request.binding_digest
@@ -2204,6 +2609,13 @@ class ProviderAdmissionKernel:
             or network_attempted is None
             or (network_attempted is True and response_received is not True)
         )
+        provider_pressure = (
+            provider_http_status == 429
+            or (
+                provider_http_status is not None
+                and 500 <= provider_http_status <= 599
+            )
+        )
         connection = self.database.connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -2215,24 +2627,47 @@ class ProviderAdmissionKernel:
                 )
             if ambiguous:
                 request_state = "reconciliation_required"
-                circuit_state = "open"
-                signal = "unknown_after_dispatch"
+                isolated_uncertainty = (
+                    self.policy.uncertain_dispatch_scope
+                    == "capacity_reservation"
+                    and not provider_pressure
+                    and terminal_persisted
+                    and network_attempted is True
+                    and response_received is False
+                    and state["circuit_state"] == "closed"
+                )
+                if provider_pressure:
+                    circuit_state = "open"
+                    signal = f"http_{provider_http_status}"
+                elif not terminal_persisted or network_attempted is None:
+                    circuit_state = "open"
+                    signal = "local_integrity_stop"
+                else:
+                    circuit_state = (
+                        "closed" if isolated_uncertainty else "open"
+                    )
+                    signal = (
+                        "unknown_after_dispatch_isolated"
+                        if isolated_uncertainty
+                        else "unknown_after_dispatch"
+                    )
             else:
                 request_state = "completed"
-                provider_pressure = (
-                    provider_http_status == 429
-                    or (
-                        provider_http_status is not None
-                        and 500 <= provider_http_status <= 599
-                    )
-                )
-                circuit_state = "open" if provider_pressure else "closed"
-                if (
-                    state["circuit_state"] == "half_open"
-                    and network_attempted is False
-                ):
-                    # A local failure does not prove provider recovery.
+                if state["circuit_state"] == "open":
+                    # A sibling terminal cannot close an existing stop.
                     circuit_state = "open"
+                elif state["circuit_state"] == "half_open":
+                    # Only the exact half-open probe can close the circuit,
+                    # and a known local failure proves no provider recovery.
+                    circuit_state = (
+                        "closed"
+                        if not provider_pressure
+                        and network_attempted is True
+                        and response_received is True
+                        else "open"
+                    )
+                else:
+                    circuit_state = "open" if provider_pressure else "closed"
                 signal = (
                     f"http_{provider_http_status}"
                     if provider_http_status is not None
@@ -2249,24 +2684,31 @@ class ProviderAdmissionKernel:
                 WHERE request_id=?""",
                 (request_state, now, evidence, permit.request_id),
             )
-            transition_kind = (
-                "unknown_after_dispatch"
-                if ambiguous
-                else (
+            if ambiguous:
+                if state["circuit_state"] == "half_open":
+                    transition_kind = "half_open_failed"
+                elif signal == "unknown_after_dispatch_isolated":
+                    transition_kind = "unknown_after_dispatch_isolated"
+                elif signal == "local_integrity_stop":
+                    transition_kind = "local_integrity_stop"
+                elif provider_pressure and state["circuit_state"] != "open":
+                    transition_kind = "circuit_opened"
+                elif provider_pressure:
+                    transition_kind = "terminal_observed_while_open"
+                else:
+                    transition_kind = "unknown_after_dispatch"
+            elif state["circuit_state"] == "half_open":
+                transition_kind = (
                     "half_open_succeeded"
-                    if state["circuit_state"] == "half_open"
-                    and circuit_state == "closed"
-                    else (
-                        "half_open_failed"
-                        if state["circuit_state"] == "half_open"
-                        else (
-                            "circuit_opened"
-                            if circuit_state == "open"
-                            else "terminal_observed"
-                        )
-                    )
+                    if circuit_state == "closed"
+                    else "half_open_failed"
                 )
-            )
+            elif state["circuit_state"] == "open":
+                transition_kind = "terminal_observed_while_open"
+            elif circuit_state == "open":
+                transition_kind = "circuit_opened"
+            else:
+                transition_kind = "terminal_observed"
             self._append_control_transition(
                 connection,
                 state,
@@ -2380,17 +2822,15 @@ class ProviderAdmissionKernel:
                     resolved_at=? WHERE request_id=?""",
                 (evidence, now, request),
             )
-            remaining = connection.execute(
-                """SELECT COUNT(*) FROM provider_admission_requests
-                WHERE provider_id=? AND state='reconciliation_required'""",
-                (row["provider_id"],),
-            ).fetchone()[0]
+            # Reconciliation releases only the named capacity unit. It does
+            # not possess circuit-control authority and cannot close OPEN.
+            next_circuit_state = state["circuit_state"]
             self._append_control_transition(
                 connection,
                 state,
                 transition_kind="reconciliation_resolved",
                 effective_target=state["effective_target"],
-                circuit_state="open" if remaining else "closed",
+                circuit_state=next_circuit_state,
                 half_open_probe_request_digest=None,
                 last_signal="reconciled",
                 now=now,
@@ -2477,7 +2917,9 @@ class ProviderAdmissionKernel:
         return ProviderAdmissionStatus(
             initialized=True,
             provider_id=provider,
+            policy_revision=self.policy.revision,
             policy_digest=self.policy.policy_digest,
+            uncertain_dispatch_scope=self.policy.uncertain_dispatch_scope,
             deployment_mode=state["deployment_mode"],
             deployment_digest=state["deployment_digest"],
             effective_target=state["effective_target"],
@@ -2558,7 +3000,7 @@ class ProviderAdmissionDirectory:
                 ProviderAdmissionKernel.canonical_runtime(path, now=now),
                 ProviderAdmissionKernel.canonical_runtime(
                     path,
-                    policy=grok_provider_admission_policy(),
+                    provider_id="grok",
                     now=now,
                 ),
             )
@@ -2575,6 +3017,59 @@ class ProviderAdmissionDirectory:
             raise ProviderAdmissionConflict(
                 "provider admission directory has no such provider"
             ) from exc
+
+
+def read_provider_admission_isolation_snapshot_digest(
+    path: str | Path,
+    provider_id: str,
+) -> str:
+    candidate = Path(path)
+    provider = _identifier("provider_id", provider_id)
+    if not candidate.is_file():
+        raise ProviderAdmissionConflict(
+            "provider admission runtime is not initialized"
+        )
+    connection = sqlite3.connect(
+        candidate.absolute().as_uri() + "?mode=ro",
+        uri=True,
+    )
+    connection.row_factory = sqlite3.Row
+    try:
+        meta = connection.execute(
+            "SELECT version FROM schema_meta WHERE component='runtime'"
+        ).fetchone()
+        if meta is None or meta["version"] != RuntimeDatabase.SCHEMA_VERSION:
+            raise ProviderAdmissionConflict(
+                "provider admission runtime schema is unsupported"
+            )
+        state_head = connection.execute(
+            """SELECT policy_digest FROM provider_admission_state
+            WHERE provider_id=?""",
+            (provider,),
+        ).fetchone()
+        matching = tuple(
+            item
+            for item in builtin_provider_admission_policy_history(provider)
+            if state_head is not None
+            and item.policy_digest == state_head["policy_digest"]
+        )
+        if len(matching) != 1:
+            raise ProviderAdmissionConflict(
+                "provider admission state uses an unknown policy"
+            )
+        policy = matching[0]
+        state = _validated_control_state(connection, policy)
+        return _reconciliation_isolation_snapshot_digest(
+            connection,
+            policy,
+            state,
+        )
+    except sqlite3.Error as exc:
+        raise ProviderAdmissionConflict(
+            "provider admission runtime database is invalid"
+        ) from exc
+    finally:
+        connection.close()
 
 
 def read_provider_admission_status(
@@ -2600,7 +3095,9 @@ def read_provider_admission_status(
         return ProviderAdmissionStatus(
             initialized=False,
             provider_id=provider,
+            policy_revision=policy.revision,
             policy_digest=policy.policy_digest,
+            uncertain_dispatch_scope=policy.uncertain_dispatch_scope,
             deployment_mode=None,
             deployment_digest=None,
             effective_target=policy.effective_target,
@@ -2624,7 +3121,9 @@ def read_provider_admission_status(
             return ProviderAdmissionStatus(
                 initialized=False,
                 provider_id=provider,
+                policy_revision=policy.revision,
                 policy_digest=policy.policy_digest,
+                uncertain_dispatch_scope=policy.uncertain_dispatch_scope,
                 deployment_mode=None,
                 deployment_digest=None,
                 effective_target=policy.effective_target,
@@ -2667,7 +3166,9 @@ def read_provider_admission_status(
             return ProviderAdmissionStatus(
                 initialized=False,
                 provider_id=provider,
+                policy_revision=policy.revision,
                 policy_digest=policy.policy_digest,
+                uncertain_dispatch_scope=policy.uncertain_dispatch_scope,
                 deployment_mode=None,
                 deployment_digest=None,
                 effective_target=policy.effective_target,
@@ -2681,13 +3182,16 @@ def read_provider_admission_status(
                 project_active_counts=(),
                 legacy_pre_provider_admission_count=0,
             )
-        legacy_policy = glm_provider_admission_policy_v1()
-        if (
-            provider == legacy_policy.provider_id
-            and state_head is not None
-            and state_head["policy_digest"] == legacy_policy.policy_digest
-        ):
-            policy = legacy_policy
+        matching = tuple(
+            item
+            for item in builtin_provider_admission_policy_history(provider)
+            if item.policy_digest == state_head["policy_digest"]
+        )
+        if len(matching) != 1:
+            raise ProviderAdmissionConflict(
+                "provider admission state uses an unknown policy"
+            )
+        policy = matching[0]
         policy_row = connection.execute(
             """SELECT body_json, body_sha256, policy_digest
             FROM provider_admission_policies
@@ -2768,7 +3272,9 @@ def read_provider_admission_status(
         return ProviderAdmissionStatus(
             initialized=True,
             provider_id=provider,
+            policy_revision=policy.revision,
             policy_digest=policy.policy_digest,
+            uncertain_dispatch_scope=policy.uncertain_dispatch_scope,
             deployment_mode=state["deployment_mode"],
             deployment_digest=state["deployment_digest"],
             effective_target=state["effective_target"],
@@ -2813,8 +3319,12 @@ __all__ = [
     "ProviderAdmissionStatus",
     "ProviderAdmissionTargetBinding",
     "builtin_provider_admission_policy",
+    "builtin_provider_admission_policy_history",
     "grok_provider_admission_policy",
+    "grok_provider_admission_policy_v1",
+    "read_provider_admission_isolation_snapshot_digest",
     "read_provider_admission_status",
     "glm_provider_admission_policy",
     "glm_provider_admission_policy_v1",
+    "glm_provider_admission_policy_v2",
 ]
