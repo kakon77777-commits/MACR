@@ -1252,6 +1252,7 @@ def _invoke(
         token_policy_store=services.token_policies,
         capability_policy_store=services.capability_policies,
         provider_admission_kernel=services.provider_admission,
+        provider_admission_directory=services.provider_admissions,
     )
     provider = registry.get(provider_id)
     if not _legacy_migration_complete(layout, services):
@@ -1304,10 +1305,11 @@ def _invoke(
         if requires_provider_admission
         else None
     )
+    provider_admission = services.provider_admission_for(provider_id)
     provider_admission_policy_digest = (
-        services.provider_admission.policy.policy_digest
+        provider_admission.policy.policy_digest
         if requires_provider_admission
-        and services.provider_admission is not None
+        and provider_admission is not None
         else None
     )
     reference = services.authorities.issue(

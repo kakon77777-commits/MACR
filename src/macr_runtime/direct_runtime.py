@@ -13,6 +13,7 @@ from .authority import AuthorityScope
 from .candidate_vault import CandidateCapture
 from .canonical import sha256_id
 from .direct_contracts import (
+    canonical_policy_snapshot,
     DirectConversationSpec,
     DirectMessage,
     DirectRunSettings,
@@ -21,21 +22,40 @@ from .direct_contracts import (
 from .direct_providers import DirectProviderReply
 from .direct_settings import DirectSettingsStore
 from .direct_store import DirectConversationStore
-from .errors import MacrError, LegacyDirectTokenPolicyIncompatibleError
+from .errors import (
+    MacrError,
+    LegacyDirectTokenPolicyIncompatibleError,
+    ProviderAdmissionError,
+    ProviderAdmissionConflict,
+    ProviderAdmissionRequiredError,
+)
 from .execution import (
     AuthorizationReference,
     DispatchContext,
     DispatchOrigin,
     InteractionPlane,
+    ProviderState,
+    ProviderUsage,
     RawProviderObservation,
 )
 from .runtime import RuntimeServices
 from .model_token_store import ModelTokenPolicyStore
+from .provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+    ProviderAdmissionPermit,
+    ProviderAdmissionRequest,
+)
 from .token_policy import ModelTokenPolicy, ModelTokenPolicyResolver
 
 
 _DIRECT_TASK_TYPE = "direct_chat"
 _DIRECT_RESOURCE_PREFIX = "provider"
+_DIRECT_GROK_PROJECT = ProjectAdmissionBinding(
+    "direct-chat",
+    1,
+    "operator_asserted",
+)
 
 
 def _canonical_json(value: Any) -> str:
@@ -58,6 +78,49 @@ def _billing_state(observation: RawProviderObservation) -> str:
     return "estimated"
 
 
+def _failed_direct_observation(
+    provider_id: str,
+    exc: BaseException,
+    *,
+    known_pre_network: bool = False,
+) -> RawProviderObservation:
+    diagnostic_method = getattr(exc, "safe_diagnostic", None)
+    raw = diagnostic_method() if callable(diagnostic_method) else {}
+    diagnostic = raw if isinstance(raw, dict) else {}
+    pre_network = (
+        known_pre_network
+        or diagnostic.get("network_attempted") is False
+    )
+    return RawProviderObservation(
+        provider_id=provider_id,
+        model=None,
+        response_id=None,
+        finish_reason=None,
+        usage=ProviderUsage(None, None, None, None),
+        currency_cost_usd=0.0 if pre_network else None,
+        cost_kind="zero_local" if pre_network else None,
+        pricing_basis_version=(
+            "macr-pre-network-v1" if pre_network else None
+        ),
+        duration_ms=None,
+        answer_bytes=None,
+        provider_state=ProviderState.MALFORMED,
+        network_attempted=(
+            False if pre_network else diagnostic.get("network_attempted")
+        ),
+        response_received=(
+            False if pre_network else diagnostic.get("response_received")
+        ),
+        provider_http_status=diagnostic.get("provider_http_status"),
+        provider_error_code=diagnostic.get("provider_error_code"),
+        transport_stage=(
+            "pre_network"
+            if pre_network
+            else diagnostic.get("transport_stage")
+        ),
+    )
+
+
 def issue_operator_direct_authority(
     services: RuntimeServices,
     *,
@@ -75,9 +138,49 @@ def issue_operator_direct_authority(
         source_kind="local_operator_profile",
         source_id="direct-chat-operator-managed-v1",
         scope=AuthorityScope(
-            providers=("grok", "ollama_qwythos"),
+            providers=("ollama_qwythos",),
             planes=(InteractionPlane.DIRECT.value,),
             task_types=(_DIRECT_TASK_TYPE,),
+        ),
+        expires_at=(
+            datetime.now(timezone.utc) + timedelta(days=lifetime_days)
+        ).isoformat(),
+    )
+
+
+def issue_operator_grok_direct_authority(
+    services: RuntimeServices,
+    *,
+    lifetime_days: int = 365,
+) -> AuthorizationReference:
+    if not isinstance(services, RuntimeServices):
+        raise ValueError("services must be RuntimeServices")
+    if (
+        isinstance(lifetime_days, bool)
+        or not isinstance(lifetime_days, int)
+        or not 1 <= lifetime_days <= 3650
+    ):
+        raise ValueError("lifetime_days must be between 1 and 3650")
+    kernel = services.provider_admission_for("grok")
+    if kernel is None:
+        raise ProviderAdmissionRequiredError(
+            "Grok Direct admission kernel is unavailable"
+        )
+    return services.authorities.issue(
+        source_kind="local_operator_profile",
+        source_id="direct-chat-grok-admission-v1",
+        scope=AuthorityScope(
+            providers=("grok",),
+            planes=(InteractionPlane.DIRECT.value,),
+            task_types=(_DIRECT_TASK_TYPE,),
+            project_binding_digests=(
+                _DIRECT_GROK_PROJECT.binding_digest,
+            ),
+            admission_lanes=(AdmissionLane.INTERACTIVE.value,),
+            provider_admission_policy_digests=(
+                kernel.policy.policy_digest,
+            ),
+            scope_contract_version=3,
         ),
         expires_at=(
             datetime.now(timezone.utc) + timedelta(days=lifetime_days)
@@ -93,6 +196,7 @@ class DirectRuntime:
         conversations: DirectConversationStore,
         settings: DirectSettingsStore,
         authority: AuthorizationReference,
+        grok_admission_authority: AuthorizationReference,
         *,
         token_policies: ModelTokenPolicyStore | None = None,
     ) -> None:
@@ -104,6 +208,13 @@ class DirectRuntime:
             raise ValueError("settings must be DirectSettingsStore")
         if not isinstance(authority, AuthorizationReference):
             raise ValueError("authority must be AuthorizationReference")
+        if not isinstance(
+            grok_admission_authority,
+            AuthorizationReference,
+        ):
+            raise ValueError(
+                "grok_admission_authority must be AuthorizationReference"
+            )
         if not callable(getattr(registry, "get", None)):
             raise ValueError("registry must expose get(provider_id)")
         self.registry = registry
@@ -111,6 +222,7 @@ class DirectRuntime:
         self.conversations = conversations
         self.settings = settings
         self.authority = authority
+        self.grok_admission_authority = grok_admission_authority
         self.token_policies = token_policies
         self._builtin_token_policies = ModelTokenPolicyResolver.builtins_only()
         self._conversation_locks_guard = threading.Lock()
@@ -195,10 +307,12 @@ class DirectRuntime:
     def _context(
         self,
         *,
+        provider_id: str,
         run_id: str,
         policy_snapshot_sha256: str,
         origin_native_id: str,
     ) -> DispatchContext:
+        is_grok = provider_id == "grok"
         return DispatchContext(
             run_id=run_id,
             plane=InteractionPlane.DIRECT,
@@ -207,8 +321,24 @@ class DirectRuntime:
                 "browser_session",
                 origin_native_id,
             ),
-            authorization=self.authority,
+            authorization=(
+                self.grok_admission_authority
+                if is_grok
+                else self.authority
+            ),
             policy_snapshot_sha256=policy_snapshot_sha256,
+            project_binding_digest=(
+                _DIRECT_GROK_PROJECT.binding_digest if is_grok else None
+            ),
+            admission_lane=(
+                AdmissionLane.INTERACTIVE.value if is_grok else None
+            ),
+            provider_admission_policy_digest=(
+                self.services.provider_admission_for("grok").policy.policy_digest
+                if is_grok
+                and self.services.provider_admission_for("grok") is not None
+                else None
+            ),
         )
 
     def _conversation_lock(self, conversation_id: str) -> threading.RLock:
@@ -252,6 +382,7 @@ class DirectRuntime:
         )
         token_json = conversation.get("model_token_policy_json")
         token_digest = conversation.get("model_token_policy_sha256")
+        legacy_token_policy_snapshot = False
         if provider_id == "grok" and token_json is None and token_digest is None:
             raise LegacyDirectTokenPolicyIncompatibleError(
                 "legacy_direct_token_policy_incompatible: create a new Grok "
@@ -275,6 +406,7 @@ class DirectRuntime:
                         "model_token_policy_v1",
                         token_document,
                     )
+                    legacy_token_policy_snapshot = True
                     token_document = {
                         **token_document,
                         "minimum_task_output_tokens": 1,
@@ -294,6 +426,18 @@ class DirectRuntime:
                 or token_policy.model_id != conversation["model"]
             ):
                 raise MacrError("Direct model token policy snapshot is invalid")
+            if not legacy_token_policy_snapshot:
+                _, expected_policy_snapshot = canonical_policy_snapshot(
+                    settings,
+                    token_policy,
+                )
+                if (
+                    expected_policy_snapshot
+                    != conversation["policy_snapshot_sha256"]
+                ):
+                    raise MacrError(
+                        "Direct combined policy snapshot is invalid"
+                    )
             settings = replace(
                 settings,
                 max_output_tokens=token_policy.default_output_tokens,
@@ -338,11 +482,25 @@ class DirectRuntime:
             model=conversation["model"],
         )
         context = self._context(
+            provider_id=provider_id,
             run_id=run,
             policy_snapshot_sha256=conversation["policy_snapshot_sha256"],
             origin_native_id=origin_native_id,
         )
-        resource_key = f"{_DIRECT_RESOURCE_PREFIX}:{provider_id}:direct"
+        if provider_id == "grok":
+            resource_digest = sha256_id(
+                "direct_conversation_resource_v1",
+                {
+                    "provider_id": provider_id,
+                    "conversation_id": conversation_id,
+                },
+            )
+            resource_key = (
+                f"{_DIRECT_RESOURCE_PREFIX}:{provider_id}:direct:"
+                f"{resource_digest}"
+            )
+        else:
+            resource_key = f"{_DIRECT_RESOURCE_PREFIX}:{provider_id}:direct"
         ttl_seconds = max(1, min(86400, math.ceil(settings.timeout_s) + 60))
         try:
             permit = self.services.admission.admit(
@@ -369,8 +527,71 @@ class DirectRuntime:
                 failure_type=failure_type,
             )
 
-        dispatch_event_id = str(uuid.uuid4())
+        provider_kernel = self.services.provider_admission_for(provider_id)
+        provider_request: ProviderAdmissionRequest | None = None
+        provider_permit: ProviderAdmissionPermit | None = None
+        provider_admission_finished = False
+        admission_observation: RawProviderObservation | None = None
         try:
+            if provider_id == "grok":
+                if provider_kernel is None:
+                    raise ProviderAdmissionRequiredError(
+                        "Grok Direct admission kernel is unavailable"
+                    )
+                provider_request = ProviderAdmissionRequest(
+                    request_id=str(uuid.uuid4()),
+                    provider_id=provider_id,
+                    project_binding_digest=(
+                        _DIRECT_GROK_PROJECT.binding_digest
+                    ),
+                    lane=AdmissionLane.INTERACTIVE,
+                    run_id=run,
+                    authorization=context.authorization,
+                    plane=InteractionPlane.DIRECT.value,
+                    task_type=_DIRECT_TASK_TYPE,
+                    task_digest=self._turn_digest(
+                        conversation_id,
+                        run,
+                        conversation["policy_snapshot_sha256"],
+                    ),
+                    member_digest=None,
+                    batch_id=None,
+                    provider_tier_binding_digest=None,
+                )
+                try:
+                    provider_permit = provider_kernel.try_admit(
+                        provider_request,
+                        ttl_seconds=ttl_seconds,
+                    )
+                except MacrError as exc:
+                    if isinstance(exc, ProviderAdmissionError):
+                        try:
+                            record = provider_kernel.read_request(
+                                provider_request.request_id
+                            )
+                            if record.state == "waiting":
+                                provider_kernel.cancel_waiting(
+                                    provider_request.request_id,
+                                    provider_request.run_id,
+                                )
+                        except ProviderAdmissionConflict:
+                            pass
+                    failure_type = type(exc).__name__
+                    self.conversations.fail_run(
+                        run,
+                        state="refused_before_network",
+                        failure_type=failure_type,
+                    )
+                    return DirectTurnResult(
+                        run_id=run,
+                        conversation_id=conversation_id,
+                        status="refused_before_network",
+                        assistant_message=None,
+                        observation={},
+                        context_warning=warning,
+                        failure_type=failure_type,
+                    )
+            dispatch_event_id = str(uuid.uuid4())
             self.services.events.start_run(
                 run_id=run,
                 dispatch_event_id=dispatch_event_id,
@@ -390,30 +611,135 @@ class DirectRuntime:
                 soft_warning=False,
             )
             try:
-                reply = adapter.invoke(messages, settings)
+                reply = (
+                    adapter.invoke(
+                        messages,
+                        settings,
+                        admission_permit=provider_permit,
+                        admission_request=provider_request,
+                    )
+                    if provider_id == "grok"
+                    else adapter.invoke(messages, settings)
+                )
                 if not isinstance(reply, DirectProviderReply):
                     raise TypeError("Direct adapter returned an invalid reply")
             except Exception as exc:
-                return self._finish_failed_exception(
+                known_pre_network = False
+                if provider_permit is not None:
+                    assert provider_kernel is not None
+                    record = provider_kernel.read_request(
+                        provider_permit.request_id
+                    )
+                    known_pre_network = record.state in {
+                        "granted",
+                        "cancelled",
+                    }
+                admission_observation = _failed_direct_observation(
+                    provider_id,
+                    exc,
+                    known_pre_network=known_pre_network,
+                )
+                result = self._finish_failed_exception(
                     conversation_id=conversation_id,
                     run_id=run,
                     context=context,
                     dispatch_event_id=dispatch_event_id,
                     provider_id=provider_id,
                     failure_type=type(exc).__name__,
+                    observation=admission_observation,
                     warning=warning,
                 )
-            return self._finish_reply(
-                conversation=conversation,
-                settings=settings,
-                run_id=run,
-                context=context,
-                dispatch_event_id=dispatch_event_id,
-                reply=reply,
-                estimate=estimate,
-                warning=warning,
-            )
+            else:
+                admission_observation = reply.observation
+                result = self._finish_reply(
+                    conversation=conversation,
+                    settings=settings,
+                    run_id=run,
+                    context=context,
+                    dispatch_event_id=dispatch_event_id,
+                    reply=reply,
+                    estimate=estimate,
+                    warning=warning,
+                )
+            if provider_permit is not None:
+                assert provider_kernel is not None
+                assert admission_observation is not None
+                record = provider_kernel.read_request(
+                    provider_permit.request_id
+                )
+                if record.state == "dispatched":
+                    provider_kernel.finish(
+                        provider_permit,
+                        network_attempted=(
+                            admission_observation.network_attempted
+                        ),
+                        response_received=(
+                            admission_observation.response_received
+                        ),
+                        provider_http_status=(
+                            admission_observation.provider_http_status
+                        ),
+                        terminal_persisted=True,
+                        terminal_evidence_digest=sha256_id(
+                            "direct_provider_admission_terminal_v1",
+                            {
+                                "run_id": run,
+                                "status": result.status,
+                                "failure_type": result.failure_type,
+                            },
+                        ),
+                    )
+                elif (
+                    record.state == "granted"
+                    and admission_observation.network_attempted is False
+                ):
+                    provider_kernel.cancel_before_transport(provider_permit)
+                elif (
+                    record.state in {"cancelled", "reconciliation_required"}
+                    and admission_observation.network_attempted is False
+                ):
+                    pass
+                else:
+                    raise ProviderAdmissionConflict(
+                        "Grok Direct admission terminal state is inconsistent"
+                    )
+                provider_admission_finished = True
+            return result
         finally:
+            if (
+                provider_permit is not None
+                and provider_kernel is not None
+                and not provider_admission_finished
+            ):
+                try:
+                    record = provider_kernel.read_request(
+                        provider_permit.request_id
+                    )
+                    if record.state == "granted":
+                        provider_kernel.cancel_before_transport(
+                            provider_permit
+                        )
+                    elif record.state == "dispatched":
+                        observation = (
+                            admission_observation
+                            if admission_observation is not None
+                            else RawProviderObservation.empty(provider_id)
+                        )
+                        provider_kernel.finish(
+                            provider_permit,
+                            network_attempted=observation.network_attempted,
+                            response_received=observation.response_received,
+                            provider_http_status=(
+                                observation.provider_http_status
+                            ),
+                            terminal_persisted=False,
+                            terminal_evidence_digest=sha256_id(
+                                "direct_provider_admission_incomplete_v1",
+                                {"run_id": run},
+                            ),
+                        )
+                except Exception:
+                    pass
             self.services.leases.release(
                 permit.resource_key,
                 permit.run_id,
@@ -590,14 +916,15 @@ class DirectRuntime:
         dispatch_event_id: str,
         provider_id: str,
         failure_type: str,
+        observation: RawProviderObservation,
         warning: bool,
     ) -> DirectTurnResult:
-        observation = RawProviderObservation.empty(provider_id)
+        billing_state = _billing_state(observation)
         self.services.accounting.record_observation(run_id, observation)
         self.services.accounting.record_terminal(
             run_id,
             candidate_status="candidate_failure",
-            billing_state="unknown_after_dispatch",
+            billing_state=billing_state,
         )
         self.services.events.finish_run(
             run_id=run_id,
@@ -610,7 +937,7 @@ class DirectRuntime:
                 dispatch_event_id=dispatch_event_id,
                 observation=observation,
                 capture=None,
-                billing_state="unknown_after_dispatch",
+                billing_state=billing_state,
                 status="candidate_failure",
                 failure_type=failure_type,
             ),
@@ -654,6 +981,11 @@ class DirectRuntime:
                 context.authorization.scope.encode("utf-8")
             ).hexdigest(),
             "policy_snapshot_sha256": context.policy_snapshot_sha256,
+            "project_binding_digest": context.project_binding_digest,
+            "admission_lane": context.admission_lane,
+            "provider_admission_policy_digest": (
+                context.provider_admission_policy_digest
+            ),
             "batch_id": None,
             "member_digest": None,
             "relay_is_authorship": False,
@@ -705,4 +1037,9 @@ class DirectRuntime:
             "authority_digest": context.authorization.digest,
             "authority_revision": context.authorization.revision,
             "authority_epoch": context.authorization.epoch,
+            "project_binding_digest": context.project_binding_digest,
+            "admission_lane": context.admission_lane,
+            "provider_admission_policy_digest": (
+                context.provider_admission_policy_digest
+            ),
         }

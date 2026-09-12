@@ -1682,11 +1682,18 @@ class GlmFlashWorkerProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(ProviderPolicyError, "approval digest"):
             provider.invoke(task)
 
-    def test_task_contract_refuses_output_above_t1_max(self):
-        with self.assertRaisesRegex(ValueError, "between 1 and 65536"):
-            replace(
-                delegated_task().constraints,
-                max_output_tokens=65_537,
+    def test_t1_policy_refuses_output_above_its_provider_bound(self):
+        expanded_contract = replace(
+            delegated_task().constraints,
+            max_output_tokens=131_072,
+        )
+        self.assertEqual(expanded_contract.max_output_tokens, 131_072)
+        with self.assertRaisesRegex(
+            ProviderPolicyError,
+            "exceeds exact model token policy",
+        ):
+            t1_glm_live_policy().validate_task_output_tokens(
+                expanded_contract.max_output_tokens
             )
 
     def test_ordinary_glm_policy_accepts_expanded_external_envelope_offline(self):

@@ -240,9 +240,9 @@ class TaskConstraints:
             self.max_output_tokens, int
         ):
             raise ValueError("constraints.max_output_tokens must be an integer")
-        if not 1 <= self.max_output_tokens <= 65536:
+        if not 1 <= self.max_output_tokens <= 131072:
             raise ValueError(
-                "constraints.max_output_tokens must be between 1 and 65536"
+                "constraints.max_output_tokens must be between 1 and 131072"
             )
         if self.max_context_tokens is not None:
             if (

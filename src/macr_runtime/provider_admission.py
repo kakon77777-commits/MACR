@@ -404,6 +404,38 @@ def glm_provider_admission_policy_v1() -> ProviderAdmissionPolicy:
     )
 
 
+def grok_provider_admission_policy() -> ProviderAdmissionPolicy:
+    return ProviderAdmissionPolicy(
+        provider_id="grok",
+        revision=1,
+        capacity_unit=1,
+        effective_target=8,
+        candidate_target=16,
+        hard_max=32,
+        per_project_cap=8,
+        policy_source="built_in",
+    )
+
+
+def builtin_provider_admission_policy(
+    provider_id: str,
+) -> ProviderAdmissionPolicy:
+    provider = _identifier("provider_id", provider_id)
+    policies = {
+        item.provider_id: item
+        for item in (
+            glm_provider_admission_policy(),
+            grok_provider_admission_policy(),
+        )
+    }
+    try:
+        return policies[provider]
+    except KeyError as exc:
+        raise ProviderAdmissionConflict(
+            "provider admission policy is not built in"
+        ) from exc
+
+
 @dataclass(frozen=True)
 class ProviderAdmissionTargetBinding:
     provider_id: str
@@ -2469,17 +2501,89 @@ class ProviderAdmissionKernel:
         )
 
 
+class ProviderAdmissionDirectory:
+    def __init__(
+        self,
+        kernels: tuple[ProviderAdmissionKernel, ...],
+    ) -> None:
+        if not isinstance(kernels, tuple) or any(
+            not isinstance(item, ProviderAdmissionKernel)
+            for item in kernels
+        ):
+            raise ValueError(
+                "provider admission directory requires exact kernels"
+            )
+        by_provider = {item.policy.provider_id: item for item in kernels}
+        if set(by_provider) != {"glm_flash_worker", "grok"}:
+            raise ValueError(
+                "provider admission directory requires GLM and Grok"
+            )
+        if len({item.path for item in kernels}) != 1:
+            raise ValueError(
+                "provider admission kernels must share one runtime database"
+            )
+        self._kernels = by_provider
+
+    @classmethod
+    def offline_test(
+        cls,
+        path: str | Path,
+        *,
+        now: Callable[[], datetime] = _utc_now,
+    ) -> "ProviderAdmissionDirectory":
+        return cls(
+            tuple(
+                ProviderAdmissionKernel(
+                    path,
+                    policy=policy,
+                    now=now,
+                    deployment_mode=AdmissionDeploymentMode.OFFLINE_TEST,
+                )
+                for policy in (
+                    glm_provider_admission_policy(),
+                    grok_provider_admission_policy(),
+                )
+            )
+        )
+
+    @classmethod
+    def canonical_runtime(
+        cls,
+        path: str | Path,
+        *,
+        now: Callable[[], datetime] = _utc_now,
+    ) -> "ProviderAdmissionDirectory":
+        return cls(
+            (
+                ProviderAdmissionKernel.canonical_runtime(path, now=now),
+                ProviderAdmissionKernel.canonical_runtime(
+                    path,
+                    policy=grok_provider_admission_policy(),
+                    now=now,
+                ),
+            )
+        )
+
+    def provider_ids(self) -> tuple[str, ...]:
+        return tuple(sorted(self._kernels))
+
+    def get(self, provider_id: str) -> ProviderAdmissionKernel:
+        provider = _identifier("provider_id", provider_id)
+        try:
+            return self._kernels[provider]
+        except KeyError as exc:
+            raise ProviderAdmissionConflict(
+                "provider admission directory has no such provider"
+            ) from exc
+
+
 def read_provider_admission_status(
     path: str | Path,
     provider_id: str,
 ) -> ProviderAdmissionStatus:
     candidate = Path(path)
     provider = _identifier("provider_id", provider_id)
-    policy = glm_provider_admission_policy()
-    if provider != policy.provider_id:
-        raise ProviderAdmissionConflict(
-            "provider admission status uses another provider"
-        )
+    policy = builtin_provider_admission_policy(provider)
     empty_counts = {
         name: 0
         for name in (
@@ -2545,7 +2649,8 @@ def read_provider_admission_status(
         ).fetchone()
         legacy_policy = glm_provider_admission_policy_v1()
         if (
-            state_head is not None
+            provider == legacy_policy.provider_id
+            and state_head is not None
             and state_head["policy_digest"] == legacy_policy.policy_digest
         ):
             policy = legacy_policy
@@ -2663,6 +2768,7 @@ __all__ = [
     "AdmissionDeploymentMode",
     "AdmissionLane",
     "ProjectAdmissionBinding",
+    "ProviderAdmissionDirectory",
     "ProviderAdmissionCircuitBinding",
     "ProviderAdmissionKernel",
     "ProviderAdmissionPermit",
@@ -2672,6 +2778,8 @@ __all__ = [
     "ProviderAdmissionRequest",
     "ProviderAdmissionStatus",
     "ProviderAdmissionTargetBinding",
+    "builtin_provider_admission_policy",
+    "grok_provider_admission_policy",
     "read_provider_admission_status",
     "glm_provider_admission_policy",
     "glm_provider_admission_policy_v1",

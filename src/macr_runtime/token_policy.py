@@ -281,7 +281,7 @@ class ModelTokenOverride:
 
 def builtin_model_token_policies() -> tuple[ModelTokenPolicy, ...]:
     rows = (
-        ("grok", "grok-4.6", "external_https", 32_768, 180_000, 400_000, 32_768, 65_536, 500_000, 131_072),
+        ("grok", "grok-4.6", "external_https", 32_768, 400_000, 500_000, 65_536, 131_072, 500_000, 131_072),
         ("grok_standard", "grok-4.3", "external_https", 32_768, 180_000, 400_000, 32_768, 65_536, 1_000_000, 131_072),
         ("glm_flash_worker", "glm-5.3-flash", "external_https", 32_768, 400_000, 512_000, 65_536, 65_536, 1_000_000, 131_072),
         ("google_gemini", "gemini-3.7-flash", "external_https", 16_384, 400_000, 512_000, 16_384, 65_536, 1_048_576, 65_536),

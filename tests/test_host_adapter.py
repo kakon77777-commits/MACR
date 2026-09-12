@@ -28,6 +28,7 @@ from macr_runtime.host_adapter import (
 from macr_runtime.provider_admission import (
     AdmissionLane,
     ProjectAdmissionBinding,
+    ProviderAdmissionDirectory,
     ProviderAdmissionKernel,
     glm_provider_admission_policy,
 )
@@ -45,6 +46,13 @@ from tests.test_glm_provider import (
     success_document,
 )
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
+from macr_runtime.providers.grok import GrokResponsesProvider
+from tests.test_grok_provider import (
+    FakeTransport as GrokFakeTransport,
+    cloud_task as grok_task,
+    grok_config,
+    success_document as grok_success_document,
+)
 
 
 class StaticHostVerifier:
@@ -140,6 +148,110 @@ class HostTestProvider(BaseProvider):
 
 
 class HostAdapterTests(unittest.TestCase):
+    def test_grok_host_adapter_uses_exact_grok_admission_domain(self) -> None:
+        task = grok_task(max_output_tokens=65_536)
+        project = ProjectAdmissionBinding(
+            "grok-host-project",
+            1,
+            "operator_enrolled",
+        )
+        with d_drive_tempdir() as state_root:
+            services = build_test_services(state_root)
+            directory = ProviderAdmissionDirectory.offline_test(
+                services.events.path
+            )
+            services = replace(
+                services,
+                provider_admission=directory.get("glm_flash_worker"),
+                provider_admissions=directory,
+            )
+            kernel = directory.get("grok")
+            transport = GrokFakeTransport(
+                grok_success_document("grok-4.6")
+            )
+            provider = GrokResponsesProvider(
+                grok_config("grok", "grok-4.6", "high"),
+                transport=transport,
+                environ={"XAI_API_KEY": "test-key"},
+                admission_guard=kernel,
+                offline_test_transport=True,
+            )
+            reference = services.authorities.issue(
+                source_kind="operator_host_grant",
+                source_id="grok-host-admission",
+                scope=AuthorityScope(
+                    providers=("grok",),
+                    planes=(InteractionPlane.DELEGATION.value,),
+                    task_types=(task.task_type,),
+                    project_binding_digests=(project.binding_digest,),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(
+                        kernel.policy.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at=(
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            )
+            grant = HostInvocationGrant(
+                authorization=reference,
+                provider_id="grok",
+                connection_scope="external_https",
+                provider_tier_binding_digest=None,
+                grant_digest="d" * 64,
+                project_binding_digest=project.binding_digest,
+                admission_lane=AdmissionLane.ROUTINE.value,
+                provider_admission_policy_digest=kernel.policy.policy_digest,
+            )
+            adapter = MacrHostAdapter(
+                ProviderRegistry((provider,)),
+                services,
+                host_verifier=StaticHostVerifier(
+                    HostKind.CLAUDE_CODE,
+                    "33333333-3333-4333-8333-333333333333",
+                ),
+                grant_verifier=ExactGrantVerifier("d" * 64),
+                admission_project=project,
+                admission_lane=AdmissionLane.ROUTINE,
+            )
+
+            preparation = adapter.preflight("grok", task)
+            result = adapter.invoke("grok", task, grant)
+            events = services.events.read_events()
+            status = kernel.status("grok")
+            missing_project = MacrHostAdapter(
+                ProviderRegistry((provider,)),
+                services,
+                host_verifier=StaticHostVerifier(
+                    HostKind.CLAUDE_CODE,
+                    "44444444-4444-4444-8444-444444444444",
+                ),
+                grant_verifier=ExactGrantVerifier("d" * 64),
+            )
+            with self.assertRaisesRegex(
+                ProviderPolicyError,
+                "operator-bound provider admission identity",
+            ):
+                missing_project.preflight("grok", task)
+
+        self.assertEqual(result.status, ResultStatus.CANDIDATE_SUCCESS)
+        self.assertEqual(len(transport.posts), 1)
+        self.assertEqual(
+            preparation.provider_admission_policy_digest,
+            kernel.policy.policy_digest,
+        )
+        self.assertEqual(
+            preparation.project_binding_digest,
+            project.binding_digest,
+        )
+        self.assertEqual(preparation.admission_lane, "routine")
+        self.assertEqual(status.counts["completed"], 1)
+        self.assertEqual(
+            events[0]["payload"]["provider_admission_policy_digest"],
+            kernel.policy.policy_digest,
+        )
+
     def test_glm_host_adapter_binds_project_lane_and_admission_policy(self) -> None:
         task = glm_task()
         project = ProjectAdmissionBinding(

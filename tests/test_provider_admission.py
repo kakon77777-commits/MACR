@@ -21,6 +21,7 @@ from macr_runtime.provider_admission import (
     AdmissionLane,
     ProjectAdmissionBinding,
     ProviderAdmissionKernel,
+    ProviderAdmissionDirectory,
     ProviderAdmissionPolicy,
     ProviderAdmissionPolicyTransitionBinding,
     ProviderAdmissionRequest,
@@ -28,6 +29,7 @@ from macr_runtime.provider_admission import (
     ProviderAdmissionCircuitBinding,
     glm_provider_admission_policy,
     glm_provider_admission_policy_v1,
+    grok_provider_admission_policy,
     read_provider_admission_status,
 )
 from macr_runtime.runtime_db import RuntimeDatabase
@@ -43,6 +45,125 @@ class Clock:
 
 
 class ProviderAdmissionContractTests(unittest.TestCase):
+    def test_grok_policy_is_separate_bounded_eight_slot_domain(self) -> None:
+        policy = grok_provider_admission_policy()
+
+        self.assertEqual(policy.provider_id, "grok")
+        self.assertEqual(policy.revision, 1)
+        self.assertEqual(policy.capacity_unit, 1)
+        self.assertEqual(policy.effective_target, 8)
+        self.assertEqual(policy.candidate_target, 16)
+        self.assertEqual(policy.hard_max, 32)
+        self.assertEqual(policy.per_project_cap, 8)
+        self.assertNotEqual(
+            policy.policy_digest,
+            glm_provider_admission_policy().policy_digest,
+        )
+
+    def test_provider_directory_installs_independent_glm_and_grok_domains(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            directory = ProviderAdmissionDirectory.offline_test(path)
+            glm = directory.get("glm_flash_worker")
+            grok = directory.get("grok")
+            grok_status = read_provider_admission_status(path, "grok")
+
+        self.assertEqual(
+            directory.provider_ids(),
+            ("glm_flash_worker", "grok"),
+        )
+        self.assertEqual(glm.path, grok.path)
+        self.assertNotEqual(glm.policy.policy_digest, grok.policy.policy_digest)
+        self.assertEqual(grok_status.provider_id, "grok")
+        self.assertEqual(grok_status.effective_target, 8)
+        self.assertEqual(grok_status.hard_max, 32)
+        with self.assertRaises(ProviderAdmissionConflict):
+            directory.get("unknown-provider")
+
+    def test_glm_reconciliation_does_not_poison_grok_capacity(self) -> None:
+        with d_drive_tempdir() as temp:
+            path = temp / "runtime" / "dispatch.sqlite3"
+            directory = ProviderAdmissionDirectory.offline_test(path)
+            authorities = DispatchAuthorityStore(path)
+            project = ProjectAdmissionBinding(
+                "cross-domain-control",
+                1,
+                "operator_asserted",
+            )
+
+            def request_for(provider_id: str) -> ProviderAdmissionRequest:
+                policy = directory.get(provider_id).policy
+                run_id = str(uuid.uuid4())
+                reference = authorities.issue(
+                    source_kind="operator_test",
+                    source_id=f"cross-domain-{provider_id}-{run_id}",
+                    scope=AuthorityScope(
+                        providers=(provider_id,),
+                        planes=("delegation",),
+                        task_types=("delegated_routine",),
+                        project_binding_digests=(project.binding_digest,),
+                        admission_lanes=(AdmissionLane.ROUTINE.value,),
+                        provider_admission_policy_digests=(
+                            policy.policy_digest,
+                        ),
+                        scope_contract_version=3,
+                    ),
+                    expires_at=(
+                        datetime.now(timezone.utc) + timedelta(minutes=5)
+                    ).isoformat(),
+                )
+                return ProviderAdmissionRequest(
+                    request_id=str(uuid.uuid4()),
+                    provider_id=provider_id,
+                    project_binding_digest=project.binding_digest,
+                    lane=AdmissionLane.ROUTINE,
+                    run_id=run_id,
+                    authorization=reference,
+                    plane="delegation",
+                    task_type="delegated_routine",
+                    task_digest=(
+                        "a" * 64
+                        if provider_id == "glm_flash_worker"
+                        else "b" * 64
+                    ),
+                    member_digest=None,
+                    batch_id=None,
+                    provider_tier_binding_digest=None,
+                )
+
+            glm = directory.get("glm_flash_worker")
+            glm_request = request_for("glm_flash_worker")
+            glm_permit = glm.try_admit(glm_request, ttl_seconds=60)
+            glm.begin_transport(glm_permit, glm_request)
+            glm.finish(
+                glm_permit,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=True,
+                terminal_evidence_digest="c" * 64,
+            )
+
+            grok = directory.get("grok")
+            grok_request = request_for("grok")
+            grok_permit = grok.try_admit(grok_request, ttl_seconds=60)
+            grok.begin_transport(grok_permit, grok_request)
+            grok.finish(
+                grok_permit,
+                network_attempted=True,
+                response_received=True,
+                provider_http_status=200,
+                terminal_persisted=True,
+                terminal_evidence_digest="d" * 64,
+            )
+            glm_status = glm.status("glm_flash_worker")
+            grok_status = grok.status("grok")
+
+        self.assertEqual(glm_status.circuit_state, "open")
+        self.assertEqual(glm_status.counts["reconciliation_required"], 1)
+        self.assertEqual(grok_status.circuit_state, "closed")
+        self.assertEqual(grok_status.counts["completed"], 1)
+
     def test_deployment_capability_distinguishes_canonical_and_offline(self) -> None:
         with d_drive_tempdir() as temp:
             offline_path = temp / "offline" / "dispatch.sqlite3"

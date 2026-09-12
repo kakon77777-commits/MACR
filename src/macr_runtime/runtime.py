@@ -36,6 +36,7 @@ from .provider_capability_store import ProviderCapabilityPolicyStore
 from .provider_capability import ProviderTierBinding
 from .provider_admission import (
     AdmissionLane,
+    ProviderAdmissionDirectory,
     ProviderAdmissionKernel,
     ProviderAdmissionPermit,
     ProviderAdmissionRequest,
@@ -57,6 +58,7 @@ class RuntimeServices:
     token_policies: ModelTokenPolicyStore
     capability_policies: ProviderCapabilityPolicyStore | None = None
     provider_admission: ProviderAdmissionKernel | None = None
+    provider_admissions: ProviderAdmissionDirectory | None = None
 
     @classmethod
     def from_layout(cls, layout: StorageLayout) -> "RuntimeServices":
@@ -65,6 +67,9 @@ class RuntimeServices:
         events = SqliteEventStore(layout.runtime_db_path)
         authorities = DispatchAuthorityStore(layout.runtime_db_path)
         leases = DispatcherLeaseStore(layout.runtime_db_path)
+        provider_admissions = ProviderAdmissionDirectory.canonical_runtime(
+            layout.runtime_db_path
+        )
         return cls(
             events=events,
             authorities=authorities,
@@ -76,10 +81,25 @@ class RuntimeServices:
             capability_policies=ProviderCapabilityPolicyStore(
                 layout.provider_capability_policy_db_path
             ),
-            provider_admission=ProviderAdmissionKernel.canonical_runtime(
-                layout.runtime_db_path
-            ),
+            provider_admission=provider_admissions.get("glm_flash_worker"),
+            provider_admissions=provider_admissions,
         )
+
+    def provider_admission_for(
+        self,
+        provider_id: str,
+    ) -> ProviderAdmissionKernel | None:
+        if self.provider_admissions is not None:
+            try:
+                return self.provider_admissions.get(provider_id)
+            except MacrError:
+                return None
+        if (
+            self.provider_admission is not None
+            and self.provider_admission.policy.provider_id == provider_id
+        ):
+            return self.provider_admission
+        return None
 
 
 def _canonical_json(value: Any) -> str:
@@ -381,7 +401,7 @@ class MacrRuntime:
         # validation returns and exceptions cannot strand capacity.
         if permit is None:
             return
-        admission = self.services.provider_admission
+        admission = self.services.provider_admission_for(permit.provider_id)
         if admission is None:
             raise ProviderAdmissionRequiredError(
                 "pre-granted provider admission has no shared kernel"
@@ -489,7 +509,7 @@ class MacrRuntime:
         requires_provider_admission = bool(
             getattr(provider, "requires_provider_admission", False)
         )
-        provider_admission = self.services.provider_admission
+        provider_admission = self.services.provider_admission_for(provider_id)
         if requires_provider_admission and (
             not isinstance(provider_admission, ProviderAdmissionKernel)
             or getattr(provider, "admission_guard", None)
@@ -699,6 +719,13 @@ class MacrRuntime:
                         terminal_evidence_digest=hashlib.sha256(
                             _canonical_json(terminal_payload).encode("utf-8")
                         ).hexdigest(),
+                    )
+                elif (
+                    admission_record.state == "granted"
+                    and execution.observation.network_attempted is False
+                ):
+                    provider_admission.cancel_before_transport(
+                        provider_permit
                     )
                 elif not (
                     admission_record.state

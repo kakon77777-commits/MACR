@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from macr_runtime.authority import AuthorityScope
 from macr_runtime.accounting import CostClass
+from macr_runtime.canonical import sha256_id
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import ProviderResult, ResultStatus, TaskContract
 from macr_runtime.coordination import PlanExecutionMode
@@ -25,10 +26,22 @@ from macr_runtime.plan_runtime import (
     VerificationReport,
 )
 from macr_runtime.registry import ProviderRegistry
+from macr_runtime.provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+    ProviderAdmissionDirectory,
+)
+from macr_runtime.providers.grok import GrokResponsesProvider
 from macr_runtime.route_resolution import ExecutionRouteProposal
 
 from tests.support import build_test_services, d_drive_tempdir
 from tests.test_coordination import make_plan
+from tests.test_grok_provider import (
+    FakeTransport as GrokFakeTransport,
+    cloud_task as grok_task,
+    grok_config,
+    success_document as grok_success_document,
+)
 
 
 def task_digest(task: TaskContract) -> str:
@@ -78,8 +91,34 @@ def proposal(plan) -> ExecutionRouteProposal:
         "authority_issued": False,
         "network_activity": False,
     }
-    from macr_runtime.canonical import sha256_id
+    return ExecutionRouteProposal(
+        proposal_digest=sha256_id(
+            "execution_route_proposal_v1",
+            canonical,
+        ),
+        **canonical,
+    )
 
+
+def grok_proposal(plan) -> ExecutionRouteProposal:
+    canonical = {
+        "route_id": plan.bindings[0].route_id,
+        "route_snapshot_id": plan.route_snapshot_id,
+        "policy_snapshot_id": plan.policy_snapshot_ids[0],
+        "provider_id": "grok",
+        "provider_kind": "grok_responses",
+        "provider_model_id": "grok-4.6",
+        "connection_scope": "external_https",
+        "endpoint_identity": "https://api.x.ai/v1",
+        "parameter_profile_digest": (
+            plan.bindings[0].parameter_profile_digest
+        ),
+        "prompt_compiler_version": "worker-v1",
+        "data_policy_snapshot_id": plan.policy_snapshot_ids[0],
+        "resolution_state": "proposal_only",
+        "authority_issued": False,
+        "network_activity": False,
+    }
     return ExecutionRouteProposal(
         proposal_digest=sha256_id(
             "execution_route_proposal_v1",
@@ -181,6 +220,97 @@ ORIGIN = DispatchOrigin("test-host", "test_case", "plan-runtime")
 
 
 class PlanRuntimeTests(unittest.TestCase):
+    def test_grok_plan_execution_binds_shared_provider_admission(self) -> None:
+        contract = grok_task(max_output_tokens=65_536)
+        plan = dataclasses.replace(
+            make_plan(),
+            task_digest=task_digest(contract),
+            execution_mode=PlanExecutionMode.EXECUTION_ELIGIBLE,
+        )
+        project = ProjectAdmissionBinding(
+            "grok-plan-project",
+            1,
+            "operator_enrolled",
+        )
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            directory = ProviderAdmissionDirectory.offline_test(
+                services.events.path
+            )
+            services = dataclasses.replace(
+                services,
+                provider_admission=directory.get("glm_flash_worker"),
+                provider_admissions=directory,
+            )
+            kernel = directory.get("grok")
+            transport = GrokFakeTransport(
+                grok_success_document("grok-4.6")
+            )
+            provider = GrokResponsesProvider(
+                grok_config("grok", "grok-4.6", "high"),
+                transport=transport,
+                environ={"XAI_API_KEY": "test-key"},
+                admission_guard=kernel,
+                offline_test_transport=True,
+            )
+            authority = services.authorities.issue(
+                source_kind="test_host",
+                source_id="grok-plan-execution",
+                scope=AuthorityScope(
+                    providers=("grok",),
+                    planes=(InteractionPlane.DELEGATION.value,),
+                    task_types=(contract.task_type,),
+                    member_digests=(plan.plan_digest,),
+                    project_binding_digests=(project.binding_digest,),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(
+                        kernel.policy.policy_digest,
+                    ),
+                    scope_contract_version=3,
+                ),
+                expires_at="2099-01-01T00:00:00+00:00",
+            )
+            runtime = PlanRuntime(
+                ProviderRegistry((provider,)),
+                services,
+                StaticVerifier(VerificationState.PASSED),
+            )
+
+            result = runtime.execute(
+                plan,
+                contract,
+                grok_proposal(plan),
+                authority,
+                ORIGIN,
+                admission_project=project,
+                admission_lane=AdmissionLane.ROUTINE,
+            )
+            events = services.events.read_events(run_id=result.run_id)
+            status = kernel.status("grok")
+            with self.assertRaisesRegex(
+                PlanExecutionError,
+                "operator-bound admission",
+            ):
+                runtime.execute(
+                    plan,
+                    contract,
+                    grok_proposal(plan),
+                    authority,
+                    ORIGIN,
+                )
+
+        self.assertEqual(result.provider_status, "candidate_success")
+        self.assertEqual(len(transport.posts), 1)
+        self.assertEqual(status.counts["completed"], 1)
+        self.assertEqual(
+            events[0]["payload"]["project_binding_digest"],
+            project.binding_digest,
+        )
+        self.assertEqual(
+            events[0]["payload"]["provider_admission_policy_digest"],
+            kernel.policy.policy_digest,
+        )
+
     def test_t0_requires_exact_plan_digest_authority_before_provider(self) -> None:
         plan = executable_plan()
         provider = FakeProvider()

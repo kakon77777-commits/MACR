@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
+import tempfile
 import unittest
+import uuid
+import weakref
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Mapping
 
+from macr_runtime.authority import AuthorityScope
 from macr_runtime.config import AuthMode, ConnectionScope, ProviderConfig
 from macr_runtime.contracts import (
     PrivacyLevel,
@@ -13,12 +22,24 @@ from macr_runtime.contracts import (
     TaskContract,
 )
 from macr_runtime.errors import (
+    ProviderAdmissionRequiredError,
     ProviderOutputBudgetTooSmallError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderUnavailableError,
 )
-from macr_runtime.providers.grok import GrokResponsesProvider
+from macr_runtime.execution import InteractionPlane
+from macr_runtime.provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+    ProviderAdmissionDirectory,
+    ProviderAdmissionRequest,
+)
+from macr_runtime.providers.grok import (
+    GrokResponsesProvider as _RawGrokResponsesProvider,
+)
+from macr_runtime.runtime import task_contract_digest
+from tests.support import DEFAULT_TEST_ROOT
 
 
 class FakeTransport:
@@ -39,6 +60,134 @@ class FakeTransport:
             }
         )
         return self.response
+
+
+class _UnitAdmittedGrokProvider:
+    def __init__(self, provider, kernel, test_root: Path) -> None:
+        self._provider = provider
+        self._kernel = kernel
+        self._cleanup = weakref.finalize(
+            self,
+            shutil.rmtree,
+            test_root,
+            ignore_errors=True,
+        )
+
+    def __getattr__(self, name):
+        return getattr(self._provider, name)
+
+    def invoke(self, task: TaskContract):
+        now = datetime.now(timezone.utc)
+        project = ProjectAdmissionBinding(
+            "grok-provider-unit",
+            1,
+            "test_harness",
+        )
+        reference = self._kernel.authorities.issue(
+            source_kind="test_harness",
+            source_id=str(uuid.uuid4()),
+            scope=AuthorityScope(
+                providers=("grok",),
+                planes=(InteractionPlane.DELEGATION.value,),
+                task_types=(task.task_type,),
+                project_binding_digests=(project.binding_digest,),
+                admission_lanes=(AdmissionLane.ROUTINE.value,),
+                provider_admission_policy_digests=(
+                    self._kernel.policy.policy_digest,
+                ),
+                scope_contract_version=3,
+            ),
+            expires_at=(now + timedelta(minutes=10)).isoformat(),
+        )
+        request = ProviderAdmissionRequest(
+            request_id=str(uuid.uuid4()),
+            provider_id="grok",
+            project_binding_digest=project.binding_digest,
+            lane=AdmissionLane.ROUTINE,
+            run_id=str(uuid.uuid4()),
+            authorization=reference,
+            plane=InteractionPlane.DELEGATION.value,
+            task_type=task.task_type,
+            task_digest=task_contract_digest(task),
+            member_digest=None,
+            batch_id=None,
+            provider_tier_binding_digest=None,
+        )
+        permit = self._kernel.try_admit(
+            request,
+            ttl_seconds=max(1, int(task.constraints.max_latency_s) + 60),
+        )
+        posts_before = len(getattr(self._provider.transport, "posts", ()))
+        try:
+            result = self._provider.invoke(
+                task,
+                admission_permit=permit,
+                admission_request=request,
+            )
+        except Exception as exc:
+            record = self._kernel.read_request(request.request_id)
+            if record.state == "granted":
+                self._kernel.cancel_before_transport(permit)
+            elif record.state == "dispatched":
+                diagnostic_method = getattr(exc, "safe_diagnostic", None)
+                diagnostic = (
+                    diagnostic_method()
+                    if callable(diagnostic_method)
+                    else {}
+                )
+                posts_after = len(
+                    getattr(self._provider.transport, "posts", ())
+                )
+                response_observed = posts_after > posts_before
+                self._kernel.finish(
+                    permit,
+                    network_attempted=diagnostic.get(
+                        "network_attempted",
+                        response_observed,
+                    ),
+                    response_received=diagnostic.get(
+                        "response_received",
+                        response_observed,
+                    ),
+                    provider_http_status=diagnostic.get(
+                        "provider_http_status"
+                    ),
+                    terminal_persisted=True,
+                    terminal_evidence_digest=hashlib.sha256(
+                        f"grok-unit-error:{request.request_id}".encode("ascii")
+                    ).hexdigest(),
+                )
+            raise
+        self._kernel.finish(
+            permit,
+            network_attempted=True,
+            response_received=True,
+            provider_http_status=None,
+            terminal_persisted=True,
+            terminal_evidence_digest=hashlib.sha256(
+                f"grok-unit:{request.request_id}".encode("ascii")
+            ).hexdigest(),
+        )
+        return result
+
+
+def GrokResponsesProvider(config, *args, **kwargs):
+    if config.id != "grok":
+        return _RawGrokResponsesProvider(config, *args, **kwargs)
+    root = Path(os.environ.get("MACR_TEST_TMP", str(DEFAULT_TEST_ROOT)))
+    root.mkdir(parents=True, exist_ok=True)
+    test_root = Path(tempfile.mkdtemp(prefix="grok-unit-", dir=root))
+    directory = ProviderAdmissionDirectory.offline_test(
+        test_root / "runtime" / "dispatch.sqlite3"
+    )
+    kernel = directory.get("grok")
+    kwargs["admission_guard"] = kernel
+    kwargs["offline_test_transport"] = True
+    return _UnitAdmittedGrokProvider(
+        _RawGrokResponsesProvider(config, *args, **kwargs),
+        kernel,
+        test_root,
+    )
 
 
 def grok_config(
@@ -106,6 +255,19 @@ def success_document(model: str) -> dict[str, Any]:
 
 
 class GrokProviderTests(unittest.TestCase):
+    def test_frontier_raw_transport_requires_one_use_admission(self):
+        transport = FakeTransport(success_document("grok-4.6"))
+        provider = _RawGrokResponsesProvider(
+            grok_config("grok", "grok-4.6", "high"),
+            transport=transport,
+            environ={"XAI_API_KEY": "test-key"},
+        )
+
+        with self.assertRaises(ProviderAdmissionRequiredError):
+            provider.invoke(cloud_task())
+
+        self.assertEqual(transport.posts, [])
+
     def test_frontier_request_is_stateless_high_reasoning_and_normalized(self):
         transport = FakeTransport(success_document("grok-4.6"))
         result = GrokResponsesProvider(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import uuid
 from dataclasses import replace
 from typing import Any, Mapping
 
@@ -15,16 +16,30 @@ from macr_runtime.direct_providers import (
 from macr_runtime.direct_settings import operator_managed_settings
 from macr_runtime.errors import (
     ConfigurationError,
+    ProviderAdmissionRequiredError,
     ProviderOutputBudgetTooSmallError,
     ProviderProtocolError,
     ProviderUnavailableError,
 )
 from macr_runtime.execution import ProviderState
+from macr_runtime.direct_runtime import issue_operator_grok_direct_authority
+from macr_runtime.provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
+    ProviderAdmissionDirectory,
+    ProviderAdmissionRequest,
+)
+from tests.support import build_test_services, d_drive_tempdir
 
 
 MODEL = "hf.co/empero-ai/Qwythos-9B-v2-GGUF:Q4_K_M"
 DIGEST = "c" * 64
 VALID_XAI_KEY = "xai-" + ("A" * 24)
+DIRECT_PROJECT = ProjectAdmissionBinding(
+    "direct-chat",
+    1,
+    "operator_asserted",
+)
 
 
 def grok_settings():
@@ -34,6 +49,60 @@ def grok_settings():
         context_warning_tokens=180_000,
         hard_context_tokens=400_000,
     )
+
+
+def invoke_admitted_grok(adapter, messages, settings):
+    with d_drive_tempdir() as root:
+        services = build_test_services(root)
+        directory = ProviderAdmissionDirectory.offline_test(
+            services.events.path
+        )
+        services = replace(
+            services,
+            provider_admission=directory.get("glm_flash_worker"),
+            provider_admissions=directory,
+        )
+        kernel = services.provider_admission_for("grok")
+        authority = issue_operator_grok_direct_authority(services)
+        adapter.admission_guard = kernel
+        adapter.offline_test_transport = True
+        run_id = str(uuid.uuid4())
+        request = ProviderAdmissionRequest(
+            request_id=str(uuid.uuid4()),
+            provider_id="grok",
+            project_binding_digest=DIRECT_PROJECT.binding_digest,
+            lane=AdmissionLane.INTERACTIVE,
+            run_id=run_id,
+            authorization=authority,
+            plane="direct",
+            task_type="direct_chat",
+            task_digest="a" * 64,
+            member_digest=None,
+            batch_id=None,
+            provider_tier_binding_digest=None,
+        )
+        permit = kernel.try_admit(request, ttl_seconds=300)
+        try:
+            reply = adapter.invoke(
+                messages,
+                settings,
+                admission_permit=permit,
+                admission_request=request,
+            )
+        except Exception:
+            record = kernel.read_request(permit.request_id)
+            if record.state == "granted":
+                kernel.cancel_before_transport(permit)
+            raise
+        kernel.finish(
+            permit,
+            network_attempted=reply.observation.network_attempted,
+            response_received=reply.observation.response_received,
+            provider_http_status=reply.observation.provider_http_status,
+            terminal_persisted=True,
+            terminal_evidence_digest="b" * 64,
+        )
+        return reply
 
 
 class FakeTransport:
@@ -167,6 +236,22 @@ def qwythos_response() -> dict[str, Any]:
 
 
 class DirectProviderTests(unittest.TestCase):
+    def test_grok_raw_transport_requires_one_use_admission(self) -> None:
+        transport = FakeTransport(post_response=grok_response())
+        adapter = GrokDirectAdapter(
+            grok_config(),
+            transport=transport,
+            environ={"XAI_API_KEY": VALID_XAI_KEY},
+        )
+
+        with self.assertRaises(ProviderAdmissionRequiredError):
+            adapter.invoke(
+                (DirectMessage("user", "question"),),
+                grok_settings(),
+            )
+
+        self.assertEqual(transport.posts, [])
+
     def test_grok_request_is_native_exact_and_has_no_hidden_worker_prompt(self) -> None:
         transport = FakeTransport(post_response=grok_response())
         adapter = GrokDirectAdapter(
@@ -182,7 +267,7 @@ class DirectProviderTests(unittest.TestCase):
             DirectMessage("user", "second question"),
         )
 
-        reply = adapter.invoke(messages, grok_settings())
+        reply = invoke_admitted_grok(adapter, messages, grok_settings())
 
         call = transport.posts[0]
         self.assertEqual(call["url"], "https://api.x.ai/v1/responses")
@@ -215,11 +300,13 @@ class DirectProviderTests(unittest.TestCase):
 
     def test_blank_system_prompt_means_no_system_message(self) -> None:
         transport = FakeTransport(post_response=grok_response())
-        GrokDirectAdapter(
+        adapter = GrokDirectAdapter(
             grok_config(),
             transport=transport,
             environ={"XAI_API_KEY": VALID_XAI_KEY},
-        ).invoke(
+        )
+        invoke_admitted_grok(
+            adapter,
             (DirectMessage("user", "question"),),
             grok_settings(),
         )
@@ -234,11 +321,13 @@ class DirectProviderTests(unittest.TestCase):
             (grok_response(tools=1), "unexpected_tools"),
         ):
             with self.subTest(reason=reason):
-                reply = GrokDirectAdapter(
+                adapter = GrokDirectAdapter(
                     grok_config(),
                     transport=FakeTransport(post_response=response),
                     environ={"XAI_API_KEY": VALID_XAI_KEY},
-                ).invoke(
+                )
+                reply = invoke_admitted_grok(
+                    adapter,
                     (DirectMessage("user", "question"),),
                     grok_settings(),
                 )
@@ -254,7 +343,8 @@ class DirectProviderTests(unittest.TestCase):
             environ={},
         )
         with self.assertRaisesRegex(ProviderUnavailableError, "XAI_API_KEY"):
-            adapter.invoke(
+            invoke_admitted_grok(
+                adapter,
                 (DirectMessage("user", "question"),),
                 grok_settings(),
             )
@@ -269,7 +359,8 @@ class DirectProviderTests(unittest.TestCase):
         )
 
         with self.assertRaises(ProviderOutputBudgetTooSmallError):
-            adapter.invoke(
+            invoke_admitted_grok(
+                adapter,
                 (DirectMessage("user", "question"),),
                 operator_managed_settings(),
             )
@@ -289,7 +380,8 @@ class DirectProviderTests(unittest.TestCase):
         self.assertFalse(health.ready)
         self.assertEqual(health.status, "configuration_incomplete")
         with self.assertRaisesRegex(ProviderUnavailableError, "format"):
-            adapter.invoke(
+            invoke_admitted_grok(
+                adapter,
                 (DirectMessage("user", "question"),),
                 grok_settings(),
             )
@@ -409,7 +501,11 @@ class DirectProviderTests(unittest.TestCase):
             with self.subTest(messages=messages), self.assertRaises(
                 ProviderProtocolError
             ):
-                adapter.invoke(messages, operator_managed_settings())
+                invoke_admitted_grok(
+                    adapter,
+                    messages,
+                    operator_managed_settings(),
+                )
 
 
 if __name__ == "__main__":

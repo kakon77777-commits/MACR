@@ -2,15 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Mapping
 
 from ..config import AuthMode, ProviderConfig
 from ..contracts import ProviderResult, ResultStatus, TaskContract
 from ..errors import (
     ConfigurationError,
+    ProviderAdmissionRequiredError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderUnavailableError,
+)
+from ..execution import ProviderExecution
+from ..provider_admission import (
+    ProviderAdmissionKernel,
+    ProviderAdmissionPermit,
+    ProviderAdmissionRequest,
 )
 from ..token_policy import ModelTokenPolicyResolver
 from .base import BaseProvider, ProviderHealth
@@ -96,7 +104,11 @@ class GrokResponsesProvider(BaseProvider):
         *,
         transport: JsonTransport | None = None,
         environ: Mapping[str, str] | None = None,
+        admission_guard: ProviderAdmissionKernel | None = None,
+        offline_test_transport: bool = False,
     ) -> None:
+        if not isinstance(offline_test_transport, bool):
+            raise ValueError("offline_test_transport must be boolean")
         if config.kind != "grok_responses":
             raise ConfigurationError(
                 "GrokResponsesProvider requires kind=grok_responses"
@@ -104,8 +116,12 @@ class GrokResponsesProvider(BaseProvider):
         self.config = config
         self.provider_id = config.id
         self.connection_scope = config.connection_scope
+        self._transport_injected = transport is not None
         self.transport = transport or UrllibJsonTransport()
         self.environ = os.environ if environ is None else environ
+        self.admission_guard = admission_guard
+        self.offline_test_transport = offline_test_transport
+        self.requires_provider_admission = self.provider_id == "grok"
         model = config.resolve_model(self.environ)
         self.token_policy = ModelTokenPolicyResolver.builtins_only().resolve(
             self.provider_id,
@@ -121,7 +137,10 @@ class GrokResponsesProvider(BaseProvider):
         value = self.environ.get(name, "").strip() if name else ""
         if not value:
             raise ProviderUnavailableError(
-                f"provider {self.provider_id} is missing environment variable {name}"
+                f"provider {self.provider_id} is missing environment variable {name}",
+                network_attempted=False,
+                response_received=False,
+                transport_stage="pre_network",
             )
         return value
 
@@ -193,8 +212,56 @@ class GrokResponsesProvider(BaseProvider):
                 f"{', '.join(missing)}"
             )
 
-    def invoke(self, task: TaskContract) -> ProviderResult:
+    def validate_admission_transport_binding(self) -> None:
+        if not self.requires_provider_admission:
+            return
+        if not isinstance(self.admission_guard, ProviderAdmissionKernel):
+            raise ProviderAdmissionRequiredError(
+                "Grok transport requires the shared provider admission kernel"
+            )
+        if self.offline_test_transport:
+            if not self._transport_injected or isinstance(
+                self.transport,
+                UrllibJsonTransport,
+            ):
+                raise ProviderAdmissionRequiredError(
+                    "offline-test admission cannot use production transport"
+                )
+            expected_runtime_path = self.admission_guard.path
+        else:
+            state_root = Path(
+                self.environ.get(
+                    "MACR_STATE_ROOT",
+                    r"D:\AI_RESIDENCE\AI_Runtime\macr-state",
+                )
+            )
+            expected_runtime_path = (
+                state_root / "runtime" / "dispatch.sqlite3"
+            )
+        ProviderAdmissionKernel.require_transport_binding(
+            self.admission_guard,
+            expected_runtime_path,
+            offline_test=self.offline_test_transport,
+        )
+
+    def invoke(
+        self,
+        task: TaskContract,
+        *,
+        admission_permit: ProviderAdmissionPermit | None = None,
+        admission_request: ProviderAdmissionRequest | None = None,
+    ) -> ProviderResult:
         self._check_task_policy(task)
+        if self.requires_provider_admission:
+            if (
+                not isinstance(self.admission_guard, ProviderAdmissionKernel)
+                or not isinstance(admission_permit, ProviderAdmissionPermit)
+                or not isinstance(admission_request, ProviderAdmissionRequest)
+            ):
+                raise ProviderAdmissionRequiredError(
+                    "Grok transport requires a one-use provider admission permit"
+                )
+            self.validate_admission_transport_binding()
         api_key = self._api_key()
         base_url = self.config.resolve_base_url(self.environ)
         model = self.config.resolve_model(self.environ)
@@ -220,6 +287,12 @@ class GrokResponsesProvider(BaseProvider):
         if self.config.reasoning_effort:
             payload["reasoning"] = {"effort": self.config.reasoning_effort}
         timeout_s = max(0.001, min(task.constraints.max_latency_s, 3600.0))
+        if self.requires_provider_admission:
+            ProviderAdmissionKernel.begin_transport(
+                self.admission_guard,
+                admission_permit,
+                admission_request,
+            )
         document = self.transport.post_json(
             f"{base_url.rstrip('/')}{self.config.endpoint_path}",
             headers={"Authorization": f"Bearer {api_key}"},
@@ -227,24 +300,37 @@ class GrokResponsesProvider(BaseProvider):
             timeout_s=timeout_s,
         )
 
-        if document.get("status") not in {None, "completed"}:
-            raise ProviderProtocolError("Grok response did not complete")
-        returned_model = document.get("model")
-        if returned_model != model:
+        try:
+            if document.get("status") not in {None, "completed"}:
+                raise ProviderProtocolError("Grok response did not complete")
+            returned_model = document.get("model")
+            if returned_model != model:
+                raise ProviderProtocolError(
+                    f"Grok response model mismatch: requested {model}, got {returned_model}"
+                )
+            answer = _extract_output_text(document)
+            usage = _normalized_usage(document)
+            if usage["num_server_side_tools_used"] != 0:
+                raise ProviderProtocolError(
+                    "Grok response unexpectedly used server-side tools"
+                )
+            cost_ticks = usage["cost_in_usd_ticks"]
+            if cost_ticks is None:
+                raise ProviderProtocolError(
+                    "Grok response lacks cost_in_usd_ticks"
+                )
+            response_id = document.get("id")
+            if response_id is not None and not isinstance(response_id, str):
+                raise ProviderProtocolError(
+                    "Grok response id must be a string"
+                )
+        except ProviderProtocolError as exc:
             raise ProviderProtocolError(
-                f"Grok response model mismatch: requested {model}, got {returned_model}"
-            )
-        answer = _extract_output_text(document)
-        usage = _normalized_usage(document)
-        if usage["num_server_side_tools_used"] != 0:
-            raise ProviderProtocolError(
-                "Grok response unexpectedly used server-side tools"
-            )
-        cost_ticks = usage["cost_in_usd_ticks"]
-        if cost_ticks is None:
-            raise ProviderProtocolError(
-                "Grok response lacks cost_in_usd_ticks"
-            )
+                str(exc),
+                network_attempted=True,
+                response_received=True,
+                transport_stage="response_validation",
+            ) from exc
         cost_usd = _cost_usd(cost_ticks)
         over_budget = cost_usd > task.constraints.max_cost_usd
         metrics = {
@@ -260,9 +346,6 @@ class GrokResponsesProvider(BaseProvider):
         ]
         if over_budget:
             warnings.append("Actual provider cost exceeded max_cost_usd.")
-        response_id = document.get("id")
-        if response_id is not None and not isinstance(response_id, str):
-            raise ProviderProtocolError("Grok response id must be a string")
         return ProviderResult(
             task_id=task.task_id,
             status=(
@@ -282,6 +365,27 @@ class GrokResponsesProvider(BaseProvider):
                 "model": returned_model,
                 "response_id": response_id,
                 "wire_format": "xai_responses",
+                "network_attempted": True,
+                "response_received": True,
+                "provider_http_status": None,
+                "provider_error_code": None,
+                "transport_stage": "response_received",
                 "metrics": metrics,
             },
+        )
+
+    def invoke_observed(
+        self,
+        task: TaskContract,
+        *,
+        admission_permit: ProviderAdmissionPermit | None = None,
+        admission_request: ProviderAdmissionRequest | None = None,
+    ) -> ProviderExecution:
+        return ProviderExecution.from_result(
+            self.provider_id,
+            self.invoke(
+                task,
+                admission_permit=admission_permit,
+                admission_request=admission_request,
+            ),
         )

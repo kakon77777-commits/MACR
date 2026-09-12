@@ -19,10 +19,12 @@ from macr_runtime.execution import (
 from macr_runtime.provider_admission import (
     AdmissionLane,
     ProjectAdmissionBinding,
+    ProviderAdmissionDirectory,
     ProviderAdmissionKernel,
     ProviderAdmissionRequest,
     glm_provider_admission_policy,
 )
+from macr_runtime.providers.grok import GrokResponsesProvider
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.registry import ProviderRegistry
 from macr_runtime.runtime import MacrRuntime, task_contract_digest
@@ -35,6 +37,12 @@ from tests.test_glm_provider import (
     delegated_task,
     glm_config,
     success_document,
+)
+from tests.test_grok_provider import (
+    FakeTransport as GrokFakeTransport,
+    cloud_task as grok_task,
+    grok_config,
+    success_document as grok_success_document,
 )
 
 
@@ -49,12 +57,243 @@ class NoResponseTransport(FakeTransport):
         )
 
 
+class GrokNoResponseTransport(GrokFakeTransport):
+    def post_json(self, url, *, headers, payload, timeout_s):
+        del url, headers, payload, timeout_s
+        raise ProviderUnavailableError(
+            "synthetic Grok no response",
+            network_attempted=True,
+            response_received=False,
+            transport_stage="connection",
+        )
+
+
 class NoOpAdmissionGuard:
     def begin_transport(self, permit, request):
         del permit, request
 
 
 class ProviderAdmissionRuntimeTests(unittest.TestCase):
+    def _grok_context_and_reference(
+        self,
+        services,
+        task,
+        project: ProjectAdmissionBinding,
+        *,
+        run_id: str | None = None,
+    ):
+        kernel = services.provider_admission_for("grok")
+        assert kernel is not None
+        run = run_id or str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        reference = services.authorities.issue(
+            source_kind="operator_test",
+            source_id=f"grok-admission-{run}",
+            scope=AuthorityScope(
+                providers=("grok",),
+                planes=(InteractionPlane.DELEGATION.value,),
+                task_types=(task.task_type,),
+                project_binding_digests=(project.binding_digest,),
+                admission_lanes=(AdmissionLane.ROUTINE.value,),
+                provider_admission_policy_digests=(
+                    kernel.policy.policy_digest,
+                ),
+                scope_contract_version=3,
+            ),
+            expires_at=(now + timedelta(minutes=10)).isoformat(),
+        )
+        return DispatchContext(
+            run_id=run,
+            plane=InteractionPlane.DELEGATION,
+            origin=DispatchOrigin("test", "process_id", "1234"),
+            authorization=reference,
+            policy_snapshot_sha256="f" * 64,
+            project_binding_digest=project.binding_digest,
+            admission_lane=AdmissionLane.ROUTINE.value,
+            provider_admission_policy_digest=kernel.policy.policy_digest,
+        )
+
+    def test_delegated_grok_success_uses_separate_shared_capacity(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            directory = ProviderAdmissionDirectory.offline_test(
+                services.events.path
+            )
+            services = replace(
+                services,
+                provider_admission=directory.get("glm_flash_worker"),
+                provider_admissions=directory,
+            )
+            transport = GrokFakeTransport(grok_success_document("grok-4.6"))
+            grok_kernel = directory.get("grok")
+            provider = GrokResponsesProvider(
+                grok_config("grok", "grok-4.6", "high"),
+                transport=transport,
+                environ={"XAI_API_KEY": "test-key"},
+                admission_guard=grok_kernel,
+                offline_test_transport=True,
+            )
+            task = grok_task(max_output_tokens=32_768)
+            project = ProjectAdmissionBinding(
+                "frontier-project",
+                1,
+                "operator_asserted",
+            )
+            context = self._grok_context_and_reference(
+                services,
+                task,
+                project,
+            )
+
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+            grok_status = grok_kernel.status("grok")
+            glm_status = directory.get("glm_flash_worker").status(
+                "glm_flash_worker"
+            )
+            accounting = services.accounting.read_invocation(context.run_id)
+
+        self.assertEqual(result.status.value, "candidate_success")
+        self.assertEqual(len(transport.posts), 1)
+        self.assertEqual(grok_status.counts["completed"], 1)
+        self.assertEqual(grok_status.circuit_state, "closed")
+        self.assertEqual(glm_status.counts["completed"], 0)
+        self.assertEqual(accounting["network_attempted"], 1)
+        self.assertEqual(accounting["response_received"], 1)
+
+    def test_delegated_grok_missing_key_cancels_unused_grant(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            directory = ProviderAdmissionDirectory.offline_test(
+                services.events.path
+            )
+            services = replace(
+                services,
+                provider_admission=directory.get("glm_flash_worker"),
+                provider_admissions=directory,
+            )
+            transport = GrokFakeTransport(grok_success_document("grok-4.6"))
+            kernel = directory.get("grok")
+            provider = GrokResponsesProvider(
+                grok_config("grok", "grok-4.6", "high"),
+                transport=transport,
+                environ={},
+                admission_guard=kernel,
+                offline_test_transport=True,
+            )
+            task = grok_task()
+            project = ProjectAdmissionBinding(
+                "frontier-project",
+                1,
+                "operator_asserted",
+            )
+            context = self._grok_context_and_reference(
+                services,
+                task,
+                project,
+            )
+
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+            status = kernel.status("grok")
+            accounting = services.accounting.read_invocation(context.run_id)
+
+        self.assertEqual(result.failure_code, "ProviderUnavailableError")
+        self.assertEqual(status.counts["cancelled"], 1)
+        self.assertEqual(status.counts["reconciliation_required"], 0)
+        self.assertEqual(accounting["billing_state"], "zero_local")
+        self.assertEqual(transport.posts, [])
+
+    def test_delegated_grok_received_malformed_response_releases_capacity(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            directory = ProviderAdmissionDirectory.offline_test(
+                services.events.path
+            )
+            services = replace(
+                services,
+                provider_admission=directory.get("glm_flash_worker"),
+                provider_admissions=directory,
+            )
+            transport = GrokFakeTransport({"model": "grok-4.6", "usage": {}})
+            kernel = directory.get("grok")
+            provider = GrokResponsesProvider(
+                grok_config("grok", "grok-4.6", "high"),
+                transport=transport,
+                environ={"XAI_API_KEY": "test-key"},
+                admission_guard=kernel,
+                offline_test_transport=True,
+            )
+            task = grok_task()
+            project = ProjectAdmissionBinding(
+                "frontier-project",
+                1,
+                "operator_asserted",
+            )
+            context = self._grok_context_and_reference(
+                services,
+                task,
+                project,
+            )
+
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+            status = kernel.status("grok")
+
+        self.assertEqual(result.failure_code, "ProviderProtocolError")
+        self.assertEqual(status.counts["completed"], 1)
+        self.assertEqual(status.counts["reconciliation_required"], 0)
+        self.assertEqual(status.circuit_state, "closed")
+
+    def test_delegated_grok_no_response_opens_reconciliation(self) -> None:
+        with d_drive_tempdir() as temp:
+            services = build_test_services(temp)
+            directory = ProviderAdmissionDirectory.offline_test(
+                services.events.path
+            )
+            services = replace(
+                services,
+                provider_admission=directory.get("glm_flash_worker"),
+                provider_admissions=directory,
+            )
+            kernel = directory.get("grok")
+            provider = GrokResponsesProvider(
+                grok_config("grok", "grok-4.6", "high"),
+                transport=GrokNoResponseTransport(
+                    grok_success_document("grok-4.6")
+                ),
+                environ={"XAI_API_KEY": "test-key"},
+                admission_guard=kernel,
+                offline_test_transport=True,
+            )
+            task = grok_task()
+            project = ProjectAdmissionBinding(
+                "frontier-project",
+                1,
+                "operator_asserted",
+            )
+            context = self._grok_context_and_reference(
+                services,
+                task,
+                project,
+            )
+
+            result = MacrRuntime(
+                ProviderRegistry((provider,)),
+                services,
+            ).invoke(provider.provider_id, task, context)
+            status = kernel.status("grok")
+
+        self.assertEqual(result.failure_code, "ProviderUnavailableError")
+        self.assertEqual(status.counts["reconciliation_required"], 1)
+        self.assertEqual(status.circuit_state, "open")
+
     def test_known_local_approval_failure_releases_capacity_without_transport(self) -> None:
         with d_drive_tempdir() as temp:
             services = build_test_services(temp)

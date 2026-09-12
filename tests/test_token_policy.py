@@ -28,11 +28,11 @@ class ModelTokenPolicyTests(unittest.TestCase):
 
         self.assertEqual(
             (grok.context_warning_tokens, grok.hard_context_tokens),
-            (180_000, 400_000),
+            (400_000, 500_000),
         )
         self.assertEqual(
             (grok.default_output_tokens, grok.max_output_tokens),
-            (32_768, 65_536),
+            (65_536, 131_072),
         )
         self.assertEqual(
             (
@@ -75,6 +75,29 @@ class ModelTokenPolicyTests(unittest.TestCase):
         policy = builtin_model_token_policies()[0]
         with self.assertRaisesRegex(ValueError, "duplicate"):
             ModelTokenPolicyResolver((policy, policy))
+
+    def test_large_contract_is_allowed_only_by_exact_provider_policy(self) -> None:
+        resolver = ModelTokenPolicyResolver.builtins_only()
+        grok = resolver.resolve("grok", "grok-4.6")
+
+        grok.validate_task_output_tokens(131_072)
+        refused = (
+            ("grok_standard", "grok-4.3"),
+            ("glm_flash_worker", "glm-5.3-flash"),
+            ("google_gemini", "gemini-3.7-flash"),
+            ("minimax", "MiniMax-M2.7"),
+            ("minimax", "MiniMax-M2.7-highspeed"),
+            ("ollama_qwythos", QWYTHOS_MODEL),
+        )
+        for provider_id, model_id in refused:
+            with self.subTest(provider_id=provider_id), self.assertRaisesRegex(
+                ProviderPolicyError,
+                "exceeds exact model token policy",
+            ):
+                resolver.resolve(
+                    provider_id,
+                    model_id,
+                ).validate_task_output_tokens(131_072)
 
     def test_policy_invariants_and_operator_override_ceiling(self) -> None:
         grok = ModelTokenPolicyResolver.builtins_only().resolve(

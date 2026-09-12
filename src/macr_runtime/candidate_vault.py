@@ -57,13 +57,23 @@ def _ensure_directory(path: Path) -> None:
             raise StoragePolicyError(
                 "candidate path ancestry may not contain a reparse point"
             )
-        if candidate.exists():
-            if not candidate.is_dir():
-                raise StoragePolicyError(
-                    "candidate path ancestry must contain only directories"
-                )
-        else:
-            candidate.mkdir()
+        if not candidate.exists():
+            try:
+                candidate.mkdir()
+            except FileExistsError:
+                # Another process may have created the same provider/root
+                # directory after the existence check. Validate the winner
+                # below instead of treating a safe concurrent mkdir as a
+                # capture failure.
+                pass
+        if _is_reparse(candidate):
+            raise StoragePolicyError(
+                "candidate path ancestry may not contain a reparse point"
+            )
+        if not candidate.is_dir():
+            raise StoragePolicyError(
+                "candidate path ancestry must contain only directories"
+            )
         current = candidate
         _check_existing_ancestry(current)
 

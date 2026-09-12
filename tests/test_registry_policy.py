@@ -9,6 +9,7 @@ from macr_runtime.errors import ProviderPolicyError
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.providers.glm import GlmFlashWorkerProvider
 from macr_runtime.provider_capability import glm_extended_text_policy
+from macr_runtime.provider_admission import ProviderAdmissionDirectory
 from macr_runtime.provider_capability_store import (
     ProviderCapabilityGovernance,
     ProviderCapabilityPolicyStore,
@@ -54,11 +55,35 @@ class RegistryPolicyTests(unittest.TestCase):
         self.assertEqual(ollama_health.status, "configured_offline")
         self.assertEqual(
             self.registry.token_policy("grok").hard_context_tokens,
-            400_000,
+            500_000,
         )
         self.assertEqual(
             self.registry.token_policy("ollama_qwythos").max_output_tokens,
             4_096,
+        )
+
+    def test_registry_factory_binds_frontier_grok_to_its_shared_kernel(self) -> None:
+        configs = load_provider_configs(ROOT / "config" / "providers.json")
+        with d_drive_tempdir() as root:
+            directory = ProviderAdmissionDirectory.offline_test(
+                root / "runtime" / "dispatch.sqlite3"
+            )
+            registry = ProviderRegistry.from_configs(
+                configs,
+                environ={"XAI_API_KEY": "test-key"},
+                provider_admission_directory=directory,
+            )
+
+        self.assertIs(
+            registry.get("grok").admission_guard,
+            directory.get("grok"),
+        )
+        self.assertIs(
+            registry.get("glm_flash_worker").admission_guard,
+            directory.get("glm_flash_worker"),
+        )
+        self.assertFalse(
+            registry.get("grok_standard").requires_provider_admission
         )
 
     def test_claude_api_route_is_not_available(self) -> None:

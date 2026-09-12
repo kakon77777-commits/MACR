@@ -15,7 +15,11 @@ from typing import Any, Mapping
 
 from .config import load_provider_configs
 from .direct_providers import DirectProviderRegistry
-from .direct_runtime import DirectRuntime, issue_operator_direct_authority
+from .direct_runtime import (
+    DirectRuntime,
+    issue_operator_direct_authority,
+    issue_operator_grok_direct_authority,
+)
 from .direct_server import DirectChatServer, create_direct_server
 from .direct_settings import DirectSettingsStore
 from .direct_store import DirectConversationStore
@@ -142,17 +146,20 @@ def build_direct_application(
     registry = DirectProviderRegistry.from_configs(
         configs,
         environ=os.environ if environ is None else environ,
+        provider_admissions=services.provider_admissions,
     )
     settings = DirectSettingsStore(layout.settings_db_path)
     settings.ensure_operator_managed()
     conversations = DirectConversationStore(layout.direct_db_path)
     authority = issue_operator_direct_authority(services)
+    grok_admission_authority = issue_operator_grok_direct_authority(services)
     runtime = DirectRuntime(
         registry,
         services,
         conversations,
         settings,
         authority,
+        grok_admission_authority,
         token_policies=services.token_policies,
     )
     server = create_direct_server(runtime)

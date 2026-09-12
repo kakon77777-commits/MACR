@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import threading
 import unittest
+import uuid
 from unittest import mock
 
-from macr_runtime.candidate_vault import CandidateVault
+from macr_runtime.candidate_vault import CandidateVault, _ensure_directory
 from macr_runtime.errors import CandidateConflict, StoragePolicyError
 from macr_runtime.execution import DispatchOrigin
 
@@ -17,6 +19,68 @@ ORIGIN = DispatchOrigin("test", "process_id", "1234")
 
 
 class CandidateVaultTests(unittest.TestCase):
+    def test_directory_creation_accepts_a_valid_concurrent_winner(self) -> None:
+        with d_drive_tempdir() as temp:
+            parent = temp / "candidates"
+            parent.mkdir()
+            target = parent / "grok"
+            path_type = type(target)
+            original_mkdir = path_type.mkdir
+
+            def concurrent_winner(path, *args, **kwargs):
+                if path == target and not target.exists():
+                    original_mkdir(path, *args, **kwargs)
+                    raise FileExistsError(17, "concurrent mkdir", str(path))
+                return original_mkdir(path, *args, **kwargs)
+
+            with mock.patch.object(
+                path_type,
+                "mkdir",
+                new=concurrent_winner,
+            ):
+                _ensure_directory(target)
+
+            self.assertTrue(target.is_dir())
+
+    def test_concurrent_first_captures_share_provider_directory(self) -> None:
+        with d_drive_tempdir() as temp:
+            vault = CandidateVault(
+                temp / "candidates",
+                temp / "dispatch.sqlite3",
+            )
+            barrier = threading.Barrier(8)
+            captures = []
+            failures = []
+
+            def capture(index: int) -> None:
+                try:
+                    barrier.wait(timeout=5)
+                    captures.append(
+                        vault.capture(
+                            "grok",
+                            str(uuid.uuid4()),
+                            f"answer-{index}".encode("ascii"),
+                            task_digest=f"{index + 1:064x}",
+                            approval_digest=None,
+                        )
+                    )
+                except Exception as exc:  # pragma: no cover - assertion aid
+                    failures.append(exc)
+
+            threads = [
+                threading.Thread(target=capture, args=(index,))
+                for index in range(8)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(failures, [])
+        self.assertEqual(len(captures), 8)
+        self.assertEqual(len({item.run_id for item in captures}), 8)
+
     def test_capture_is_create_once_and_idempotent_for_identical_bytes(self) -> None:
         with d_drive_tempdir() as temp:
             vault = CandidateVault(

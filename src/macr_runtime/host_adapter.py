@@ -293,9 +293,10 @@ class MacrHostAdapter:
         requires_provider_admission = bool(
             getattr(provider, "requires_provider_admission", False)
         )
+        provider_admission = self.services.provider_admission_for(provider_id)
         if requires_provider_admission and (
             self.admission_project is None
-            or self.services.provider_admission is None
+            or provider_admission is None
         ):
             raise ProviderPolicyError(
                 "host adapter requires operator-bound provider admission identity"
@@ -354,9 +355,9 @@ class MacrHostAdapter:
                 else None
             ),
             "provider_admission_policy_digest": (
-                self.services.provider_admission.policy.policy_digest
+                provider_admission.policy.policy_digest
                 if requires_provider_admission
-                and self.services.provider_admission is not None
+                and provider_admission is not None
                 else None
             ),
         }

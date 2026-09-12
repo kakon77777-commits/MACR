@@ -5,12 +5,14 @@ import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from .config import AuthMode, ConnectionScope, ProviderConfig
 from .direct_contracts import DirectMessage, DirectRunSettings
 from .errors import (
     ConfigurationError,
+    ProviderAdmissionRequiredError,
     ProviderPolicyError,
     ProviderProtocolError,
     ProviderUnavailableError,
@@ -19,6 +21,12 @@ from .execution import ProviderState, ProviderUsage, RawProviderObservation
 from .providers.base import ProviderHealth
 from .providers.http_json import JsonTransport, UrllibJsonTransport
 from .providers.ollama import OLLAMA_LOOPBACK_BASE_URL, _resolve_keep_alive
+from .provider_admission import (
+    ProviderAdmissionDirectory,
+    ProviderAdmissionKernel,
+    ProviderAdmissionPermit,
+    ProviderAdmissionRequest,
+)
 from .token_policy import ModelTokenPolicyResolver
 
 
@@ -62,6 +70,9 @@ class DirectProviderAdapter(Protocol):
         self,
         messages: Sequence[DirectMessage],
         settings: DirectRunSettings,
+        *,
+        admission_permit: ProviderAdmissionPermit | None = None,
+        admission_request: ProviderAdmissionRequest | None = None,
     ) -> DirectProviderReply:
         raise NotImplementedError
 
@@ -138,7 +149,11 @@ class GrokDirectAdapter:
         transport: JsonTransport | None = None,
         environ: Mapping[str, str] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        admission_guard: ProviderAdmissionKernel | None = None,
+        offline_test_transport: bool = False,
     ) -> None:
+        if not isinstance(offline_test_transport, bool):
+            raise ValueError("offline_test_transport must be boolean")
         if (
             config.id != "grok"
             or config.kind != "grok_responses"
@@ -150,9 +165,13 @@ class GrokDirectAdapter:
             )
         self.config = config
         self.provider_id = config.id
+        self._transport_injected = transport is not None
         self.transport = transport or UrllibJsonTransport()
         self.environ = os.environ if environ is None else environ
         self._monotonic = monotonic
+        self.admission_guard = admission_guard
+        self.offline_test_transport = offline_test_transport
+        self.requires_provider_admission = True
         if config.resolve_model(self.environ) != "grok-4.6":
             raise ConfigurationError("Grok Direct model must be grok-4.6")
         self.token_policy = ModelTokenPolicyResolver.builtins_only().resolve(
@@ -167,11 +186,17 @@ class GrokDirectAdapter:
         value = self.environ.get(name, "").strip() if name else ""
         if not value:
             raise ProviderUnavailableError(
-                f"provider grok is missing environment variable {name}"
+                f"provider grok is missing environment variable {name}",
+                network_attempted=False,
+                response_received=False,
+                transport_stage="pre_network",
             )
         if not _XAI_SECRET.fullmatch(value):
             raise ProviderUnavailableError(
-                "provider grok credential has an invalid format"
+                "provider grok credential has an invalid format",
+                network_attempted=False,
+                response_received=False,
+                transport_stage="pre_network",
             )
         return value
 
@@ -200,16 +225,57 @@ class GrokDirectAdapter:
     def model_identity(self) -> dict[str, str | None]:
         return {"model": "grok-4.6", "model_digest": None}
 
+    def validate_admission_transport_binding(self) -> None:
+        if not isinstance(self.admission_guard, ProviderAdmissionKernel):
+            raise ProviderAdmissionRequiredError(
+                "Grok Direct requires the shared provider admission kernel"
+            )
+        if self.offline_test_transport:
+            if not self._transport_injected or isinstance(
+                self.transport,
+                UrllibJsonTransport,
+            ):
+                raise ProviderAdmissionRequiredError(
+                    "offline-test admission cannot use production transport"
+                )
+            expected_runtime_path = self.admission_guard.path
+        else:
+            state_root = Path(
+                self.environ.get(
+                    "MACR_STATE_ROOT",
+                    r"D:\AI_RESIDENCE\AI_Runtime\macr-state",
+                )
+            )
+            expected_runtime_path = (
+                state_root / "runtime" / "dispatch.sqlite3"
+            )
+        ProviderAdmissionKernel.require_transport_binding(
+            self.admission_guard,
+            expected_runtime_path,
+            offline_test=self.offline_test_transport,
+        )
+
     def invoke(
         self,
         messages: Sequence[DirectMessage],
         settings: DirectRunSettings,
+        *,
+        admission_permit: ProviderAdmissionPermit | None = None,
+        admission_request: ProviderAdmissionRequest | None = None,
     ) -> DirectProviderReply:
         self._check_policy()
         normalized = _validate_messages(messages)
         if not isinstance(settings, DirectRunSettings):
             raise ValueError("settings must be DirectRunSettings")
         self.token_policy.validate_task_output_tokens(settings.max_output_tokens)
+        if (
+            not isinstance(admission_permit, ProviderAdmissionPermit)
+            or not isinstance(admission_request, ProviderAdmissionRequest)
+        ):
+            raise ProviderAdmissionRequiredError(
+                "Grok Direct requires a one-use provider admission permit"
+            )
+        self.validate_admission_transport_binding()
         api_key = self._api_key()
         payload: dict[str, Any] = {
             "model": "grok-4.6",
@@ -219,6 +285,11 @@ class GrokDirectAdapter:
         }
         if self.config.reasoning_effort:
             payload["reasoning"] = {"effort": self.config.reasoning_effort}
+        ProviderAdmissionKernel.begin_transport(
+            self.admission_guard,
+            admission_permit,
+            admission_request,
+        )
         started = self._monotonic()
         document = self.transport.post_json(
             "https://api.x.ai/v1/responses",
@@ -290,6 +361,9 @@ class GrokDirectAdapter:
             duration_ms=duration_ms,
             answer_bytes=answer_bytes,
             provider_state=provider_state,
+            network_attempted=True,
+            response_received=True,
+            transport_stage="response_received",
         )
         return DirectProviderReply(observation, validation_error)
 
@@ -471,6 +545,8 @@ class DirectProviderRegistry:
         *,
         transports: Mapping[str, JsonTransport] | None = None,
         environ: Mapping[str, str] | None = None,
+        provider_admissions: ProviderAdmissionDirectory | None = None,
+        offline_test_transport: bool = False,
     ) -> "DirectProviderRegistry":
         selected: dict[str, ProviderConfig] = {}
         for config in configs:
@@ -491,6 +567,12 @@ class DirectProviderRegistry:
                     selected["grok"],
                     transport=transport_map.get("grok"),
                     environ=environ,
+                    admission_guard=(
+                        provider_admissions.get("grok")
+                        if provider_admissions is not None
+                        else None
+                    ),
+                    offline_test_transport=offline_test_transport,
                 ),
                 "ollama_qwythos": QwythosDirectAdapter(
                     selected["ollama_qwythos"],

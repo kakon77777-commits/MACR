@@ -8,7 +8,10 @@ from .errors import ConfigurationError, ProviderPolicyError, ProviderUnavailable
 from .model_token_store import ModelTokenPolicyStore
 from .provider_capability import ProviderTierBinding
 from .provider_capability_store import ProviderCapabilityPolicyStore
-from .provider_admission import ProviderAdmissionKernel
+from .provider_admission import (
+    ProviderAdmissionDirectory,
+    ProviderAdmissionKernel,
+)
 from .providers.base import BaseProvider
 from .providers.disabled import DisabledProvider
 from .providers.grok import GrokResponsesProvider
@@ -50,6 +53,7 @@ class ProviderRegistry:
         token_policy_store: ModelTokenPolicyStore | None = None,
         capability_policy_store: ProviderCapabilityPolicyStore | None = None,
         provider_admission_kernel: ProviderAdmissionKernel | None = None,
+        provider_admission_directory: ProviderAdmissionDirectory | None = None,
     ) -> "ProviderRegistry":
         transport_map = {} if transports is None else dict(transports)
         key_source_map = {} if key_sources is None else dict(key_sources)
@@ -64,11 +68,18 @@ class ProviderRegistry:
                     )
                 )
             elif config.kind == "grok_responses":
+                admission_guard = (
+                    provider_admission_directory.get(config.id)
+                    if provider_admission_directory is not None
+                    and config.id == "grok"
+                    else None
+                )
                 providers.append(
                     GrokResponsesProvider(
                         config,
                         environ=environ,
                         transport=transport_map.get(config.id),
+                        admission_guard=admission_guard,
                     )
                 )
             elif config.kind == "zai_glm_worker":
@@ -97,7 +108,11 @@ class ProviderRegistry:
                         key_source=key_source_map.get(config.id),
                         token_policy=token_policy,
                         capability_policy=capability_policy,
-                        admission_guard=provider_admission_kernel,
+                        admission_guard=(
+                            provider_admission_directory.get(config.id)
+                            if provider_admission_directory is not None
+                            else provider_admission_kernel
+                        ),
                     )
                 )
             elif config.kind == "ollama_local_chat":

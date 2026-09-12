@@ -185,17 +185,19 @@ class PlanRuntime:
         self._validate_plan_task_proposal(plan, task, proposal)
         if not isinstance(origin, DispatchOrigin):
             raise ValueError("origin must be a DispatchOrigin")
-        provider = self.registry.get(proposal.provider_id)
+        provider_id = proposal.provider_id
+        provider = self.registry.get(provider_id)
         requires_provider_admission = bool(
             getattr(provider, "requires_provider_admission", False)
         )
+        provider_admission = self.services.provider_admission_for(provider_id)
         if requires_provider_admission and (
             not isinstance(admission_project, ProjectAdmissionBinding)
             or not isinstance(admission_lane, AdmissionLane)
-            or self.services.provider_admission is None
+            or provider_admission is None
         ):
             raise PlanExecutionError(
-                "T0 GLM execution requires operator-bound provider admission"
+                "T0 provider execution requires operator-bound admission"
             )
         capability_binding = getattr(provider, "capability_binding", None)
         provider_tier_binding_digest = (
@@ -204,9 +206,9 @@ class PlanRuntime:
             else None
         )
         admission_policy_digest = (
-            self.services.provider_admission.policy.policy_digest
+            provider_admission.policy.policy_digest
             if requires_provider_admission
-            and self.services.provider_admission is not None
+            and provider_admission is not None
             else None
         )
         self.services.authorities.verify(
