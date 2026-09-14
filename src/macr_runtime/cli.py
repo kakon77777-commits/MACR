@@ -33,6 +33,7 @@ from .errors import (
     ProviderOutputBudgetTooSmallError,
     ProviderTaskTypeError,
 )
+from .dispatch import DispatcherLeaseStore
 from .evidence_import import EvidenceImporter
 from .execution import DispatchContext, DispatchOrigin, InteractionPlane
 from .legacy_ledger import LegacyLedgerImporter
@@ -419,6 +420,184 @@ def _admission_policy_upgrade(
                 "active_reconciliation_required": activated.counts[
                     "reconciliation_required"
                 ],
+                "network_activity": False,
+                "provider_generation": False,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _admission_reconcile(
+    provider_id: str,
+    request_id: str,
+    *,
+    resolution_evidence_digest: str,
+    release_expired_dispatch_lease: bool,
+    apply: bool,
+    expected_binding_digest: str | None,
+) -> int:
+    layout = StorageLayout.from_environment()
+    try:
+        evidence = resolution_evidence_digest.strip().lower()
+        if len(evidence) != 64 or any(
+            character not in "0123456789abcdef" for character in evidence
+        ):
+            raise ValueError("resolution evidence digest must be SHA-256 hex")
+        kernel = ProviderAdmissionKernel.canonical_runtime(
+            layout.runtime_db_path,
+            provider_id=provider_id,
+        )
+        record = kernel.read_request(request_id)
+        if record.provider_id != provider_id:
+            raise ValueError("provider admission request belongs to another provider")
+        if record.state != "reconciliation_required":
+            raise ValueError("provider admission request does not require reconciliation")
+        if record.member_digest is None:
+            raise ValueError(
+                "provider admission reconciliation requires an exact member digest"
+            )
+        leases = DispatcherLeaseStore(layout.runtime_db_path)
+        run_leases = leases.list_for_run(record.run_id)
+        now = datetime.now(timezone.utc)
+        unexpired = tuple(
+            item
+            for item in run_leases
+            if datetime.fromisoformat(item.expires_at).astimezone(timezone.utc) > now
+        )
+        if unexpired:
+            raise ValueError(
+                "provider admission request still has an unexpired dispatch lease"
+            )
+        lease_document = [
+            {
+                "resource_key": item.resource_key,
+                "run_id": item.run_id,
+                "fencing_token": item.fencing_token,
+                "acquired_at": item.acquired_at,
+                "expires_at": item.expires_at,
+            }
+            for item in run_leases
+        ]
+        binding_document = {
+            "schema": "provider_admission_reconciliation_binding_v1",
+            "request_id": record.request_id,
+            "run_id": record.run_id,
+            "provider_id": record.provider_id,
+            "project_binding_digest": record.project_binding_digest,
+            "admission_lane": record.admission_lane,
+            "authority_digest": record.authority_digest,
+            "authority_epoch": record.authority_epoch,
+            "task_digest": record.task_digest,
+            "member_digest": record.member_digest,
+            "provider_tier_binding_digest": (
+                record.provider_tier_binding_digest
+            ),
+            "provider_admission_policy_digest": record.policy_digest,
+            "terminal_evidence_digest": record.terminal_evidence_digest,
+            "resolution_evidence_digest": evidence,
+            "release_expired_dispatch_lease": (
+                release_expired_dispatch_lease
+            ),
+            "expired_dispatch_leases": lease_document,
+        }
+        binding_bytes = json.dumps(
+            binding_document,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        binding_digest = hashlib.sha256(binding_bytes).hexdigest()
+        preview = {
+            "provider_id": provider_id,
+            "request_id": record.request_id,
+            "run_id": record.run_id,
+            "project_binding_digest": record.project_binding_digest,
+            "admission_lane": record.admission_lane,
+            "required_binding_digest": binding_digest,
+            "resolution_evidence_digest": evidence,
+            "expired_dispatch_lease_count": len(run_leases),
+            "release_expired_dispatch_lease": (
+                release_expired_dispatch_lease
+            ),
+            "billing_reconciliation": "unchanged",
+        }
+        if not apply:
+            print(
+                json.dumps(
+                    {
+                        "status": "provider_admission_reconcile_preflight",
+                        **preview,
+                        "network_activity": False,
+                        "provider_generation": False,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+        if expected_binding_digest != binding_digest:
+            raise ValueError("expected binding digest does not match preflight")
+        if run_leases and not release_expired_dispatch_lease:
+            raise ValueError(
+                "expired dispatch lease release requires explicit operator opt-in"
+            )
+        reference = kernel.authorities.issue(
+            source_kind="cli_operator_reconciliation",
+            source_id=f"{record.request_id}:{binding_digest}:{uuid.uuid4()}",
+            scope=AuthorityScope(
+                providers=(record.provider_id,),
+                planes=("provider_admission_reconciliation",),
+                task_types=("provider_admission_resolution",),
+                member_digests=(record.member_digest,),
+                provider_tier_binding_digests=(
+                    (record.provider_tier_binding_digest,)
+                    if record.provider_tier_binding_digest is not None
+                    else ()
+                ),
+                project_binding_digests=(record.project_binding_digest,),
+                admission_lanes=(record.admission_lane,),
+                provider_admission_policy_digests=(record.policy_digest,),
+                scope_contract_version=3,
+            ),
+            expires_at=(now + timedelta(minutes=10)).isoformat(),
+        )
+        try:
+            released = (
+                leases.reap_expired_for_run(record.run_id)
+                if release_expired_dispatch_lease
+                else ()
+            )
+            resolved = kernel.resolve_reconciliation(
+                record.request_id,
+                reference,
+                resolution_evidence_digest=evidence,
+            )
+        finally:
+            kernel.authorities.revoke(reference)
+    except (OSError, ValueError, MacrError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "provider_admission_reconcile_failed",
+                    "failure_type": type(exc).__name__,
+                    "network_activity": False,
+                    "provider_generation": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 4
+    print(
+        json.dumps(
+            {
+                "status": "provider_admission_reconciled",
+                **preview,
+                "resolved_state": resolved.state,
+                "released_expired_dispatch_lease_count": len(released),
                 "network_activity": False,
                 "provider_generation": False,
             },
@@ -1647,6 +1826,30 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("glm_flash_worker", "grok"),
         required=True,
     )
+    admission_reconcile = sub.add_parser(
+        "admission-reconcile",
+        help=(
+            "preflight or resolve one exact provider admission reconciliation "
+            "without provider use"
+        ),
+    )
+    admission_reconcile.add_argument("--provider", required=True)
+    admission_reconcile.add_argument("--request-id", required=True)
+    admission_reconcile.add_argument("--evidence-digest", required=True)
+    admission_reconcile.add_argument(
+        "--release-expired-dispatch-lease",
+        action="store_true",
+        help="also release exact expired local dispatch leases for this run",
+    )
+    admission_reconcile.add_argument(
+        "--apply",
+        action="store_true",
+        help="consume one exact operator reconciliation authority",
+    )
+    admission_reconcile.add_argument(
+        "--expected-binding-digest",
+        help="exact digest printed by the immediately reviewed preflight",
+    )
     admission_upgrade.add_argument("--target", type=int, default=8)
     admission_upgrade.add_argument(
         "--apply",
@@ -1903,6 +2106,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             reconciliation_isolation_evidence_digest=(
                 args.reconciliation_isolation_evidence_digest
             ),
+        )
+    if args.command == "admission-reconcile":
+        return _admission_reconcile(
+            args.provider,
+            args.request_id,
+            resolution_evidence_digest=args.evidence_digest,
+            release_expired_dispatch_lease=(
+                args.release_expired_dispatch_lease
+            ),
+            apply=args.apply,
+            expected_binding_digest=args.expected_binding_digest,
         )
     if args.command == "migrate-ledger":
         return _migrate_ledger(

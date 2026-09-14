@@ -357,6 +357,41 @@ Production transport is bound to the canonical operator state root. Alternate
 D-drive kernels are explicitly `offline_test` and cannot be paired with the
 production transport path or relabelled as canonical.
 
+Operator postmortem reconciliation is an explicit two-step command. The first
+command is read-only and prints a binding digest over the exact request, run,
+authority, project, lane, provider tier, policy, resolution evidence, and any
+expired local dispatch lease. The second command must repeat that reviewed
+digest:
+
+```powershell
+.\scripts\macr.ps1 admission-reconcile `
+  --provider glm_flash_worker `
+  --request-id <exact-request-uuid> `
+  --evidence-digest <sha256-of-reviewed-operator-evidence> `
+  --release-expired-dispatch-lease
+
+.\scripts\macr.ps1 admission-reconcile `
+  --provider glm_flash_worker `
+  --request-id <exact-request-uuid> `
+  --evidence-digest <same-evidence-sha256> `
+  --release-expired-dispatch-lease `
+  --apply `
+  --expected-binding-digest <digest-from-preflight>
+```
+
+This releases only the named admission capacity unit and exact expired local
+lease. It performs no provider call and deliberately leaves invocation billing
+unchanged; an unresolved provider charge therefore remains unsettled until
+separate billing evidence exists. An unexpired local lease is a hard stop.
+
+There is no truthful client-side `cancel` after transport has started: the
+remote outcome may already exist. For graceful shutdown, stop scheduling new
+work, send Ctrl+C (or a Windows `CTRL_BREAK_EVENT` to a child created in a new
+process group), and wait for the MACR wrapper to leave its `finally` block. Do
+not use forceful process termination as cleanup. If the process is forcibly
+killed, use the operator postmortem path above after the lease expires; never
+relabel the unknown provider outcome as cancelled or zero-cost.
+
 These commands are implemented, but the T1 route itself is not live-accepted and no exact live T1 manifest is implied by repository state. The separate sequential GLM CLI route has live observations; those do not activate T1 authority.
 
 ## Hosted Agent Cell precursor

@@ -1038,6 +1038,12 @@ class ProviderAdmissionRecord:
     project_binding_digest: str
     admission_lane: str
     run_id: str
+    authority_digest: str
+    authority_epoch: int
+    task_digest: str
+    member_digest: str | None
+    provider_tier_binding_digest: str | None
+    policy_digest: str
     state: str
     fencing_token: int | None
     requested_at: str
@@ -2749,6 +2755,14 @@ class ProviderAdmissionKernel:
             project_binding_digest=row["project_binding_digest"],
             admission_lane=row["admission_lane"],
             run_id=row["run_id"],
+            authority_digest=row["authority_digest"],
+            authority_epoch=row["authority_epoch"],
+            task_digest=row["task_digest"],
+            member_digest=row["member_digest"],
+            provider_tier_binding_digest=row[
+                "provider_tier_binding_digest"
+            ],
+            policy_digest=row["policy_digest"],
             state=row["state"],
             fencing_token=row["fencing_token"],
             requested_at=row["requested_at"],

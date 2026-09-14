@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from macr_runtime.authority import AuthorityScope, DispatchAuthorityStore
 from macr_runtime.cli import (
+    _admission_reconcile,
     _admission_policy_upgrade,
     _admission_status,
     _accounting_status,
@@ -54,10 +55,14 @@ from macr_runtime.provider_capability_store import (
     ProviderCapabilityPolicyStore,
 )
 from macr_runtime.provider_admission import (
+    AdmissionLane,
+    ProjectAdmissionBinding,
     ProviderAdmissionKernel,
+    ProviderAdmissionRequest,
     glm_provider_admission_policy,
     glm_provider_admission_policy_v2,
 )
+from macr_runtime.dispatch import DispatcherLeaseStore
 from macr_runtime.glm_approval import GlmApprovalStore
 from macr_runtime.model_token_store import ModelTokenPolicyStore
 from macr_runtime.registry import ProviderRegistry
@@ -116,6 +121,150 @@ class ExplodingKeySource:
 
 
 class DoctorTests(unittest.TestCase):
+    def test_admission_reconcile_is_exact_confirmed_and_reaps_only_expired_lease(
+        self,
+    ) -> None:
+        with d_drive_tempdir() as state_root:
+            runtime_path = state_root / "runtime" / "dispatch.sqlite3"
+            kernel = ProviderAdmissionKernel.canonical_runtime(runtime_path)
+            policy = kernel.policy
+            project = ProjectAdmissionBinding(
+                project_id="cli-reconciliation-test",
+                revision=1,
+                binding_source="cli_test",
+            )
+            member_digest = "a" * 64
+            tier_digest = "b" * 64
+            now = datetime.now(timezone.utc)
+            reference = kernel.authorities.issue(
+                source_kind="test_dispatch",
+                source_id="cli-reconciliation-test",
+                scope=AuthorityScope(
+                    providers=(policy.provider_id,),
+                    planes=("delegation",),
+                    task_types=("delegated_routine",),
+                    member_digests=(member_digest,),
+                    provider_tier_binding_digests=(tier_digest,),
+                    project_binding_digests=(project.binding_digest,),
+                    admission_lanes=(AdmissionLane.ROUTINE.value,),
+                    provider_admission_policy_digests=(policy.policy_digest,),
+                    scope_contract_version=3,
+                ),
+                expires_at=(now + timedelta(hours=1)).isoformat(),
+            )
+            request = ProviderAdmissionRequest(
+                request_id=str(uuid.uuid4()),
+                provider_id=policy.provider_id,
+                project_binding_digest=project.binding_digest,
+                lane=AdmissionLane.ROUTINE,
+                run_id=str(uuid.uuid4()),
+                authorization=reference,
+                plane="delegation",
+                task_type="delegated_routine",
+                task_digest="c" * 64,
+                member_digest=member_digest,
+                batch_id=None,
+                provider_tier_binding_digest=tier_digest,
+            )
+            provider_permit = kernel.try_admit(request, ttl_seconds=60)
+            kernel.begin_transport(provider_permit, request)
+            kernel.finish(
+                provider_permit,
+                network_attempted=True,
+                response_received=False,
+                provider_http_status=None,
+                terminal_persisted=False,
+                terminal_evidence_digest="d" * 64,
+            )
+            lease_clock = Clock(now - timedelta(minutes=2))
+            leases = DispatcherLeaseStore(runtime_path, now=lease_clock)
+            dispatch_permit = leases.acquire(
+                "provider:glm_flash_worker:task:cli-reconciliation-test",
+                request.run_id,
+                ttl_seconds=30,
+            )
+            environment = {
+                **os.environ,
+                "MACR_STATE_ROOT": str(state_root),
+                "MACR_ROOT": str(ROOT),
+            }
+
+            preflight_output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(preflight_output):
+                    preflight_exit = _admission_reconcile(
+                        policy.provider_id,
+                        request.request_id,
+                        resolution_evidence_digest="e" * 64,
+                        release_expired_dispatch_lease=True,
+                        apply=False,
+                        expected_binding_digest=None,
+                    )
+            preflight = json.loads(preflight_output.getvalue())
+            self.assertEqual(
+                kernel.read_request(request.request_id).state,
+                "reconciliation_required",
+            )
+            self.assertEqual(leases.list_for_run(request.run_id), (dispatch_permit,))
+
+            rejected_output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(rejected_output):
+                    rejected_exit = _admission_reconcile(
+                        policy.provider_id,
+                        request.request_id,
+                        resolution_evidence_digest="e" * 64,
+                        release_expired_dispatch_lease=True,
+                        apply=True,
+                        expected_binding_digest="f" * 64,
+                    )
+            self.assertEqual(
+                kernel.read_request(request.request_id).state,
+                "reconciliation_required",
+            )
+            self.assertEqual(leases.list_for_run(request.run_id), (dispatch_permit,))
+
+            applied_output = io.StringIO()
+            with patch.dict(os.environ, environment, clear=True):
+                with contextlib.redirect_stdout(applied_output):
+                    applied_exit = _admission_reconcile(
+                        policy.provider_id,
+                        request.request_id,
+                        resolution_evidence_digest="e" * 64,
+                        release_expired_dispatch_lease=True,
+                        apply=True,
+                        expected_binding_digest=preflight[
+                            "required_binding_digest"
+                        ],
+                    )
+            applied = json.loads(applied_output.getvalue())
+            final_state = kernel.read_request(request.request_id).state
+            final_leases = leases.list_for_run(request.run_id)
+            connection = sqlite3.connect(runtime_path)
+            try:
+                reconciliation_authorities = connection.execute(
+                    """SELECT COUNT(*), COUNT(revoked_at)
+                    FROM dispatch_authorities
+                    WHERE source_kind='cli_operator_reconciliation'"""
+                ).fetchone()
+            finally:
+                connection.close()
+
+        self.assertEqual(preflight_exit, 0)
+        self.assertEqual(preflight["status"], "provider_admission_reconcile_preflight")
+        self.assertEqual(preflight["request_id"], request.request_id)
+        self.assertEqual(preflight["run_id"], request.run_id)
+        self.assertEqual(preflight["expired_dispatch_lease_count"], 1)
+        self.assertEqual(rejected_exit, 4)
+        self.assertEqual(applied_exit, 0)
+        self.assertEqual(applied["status"], "provider_admission_reconciled")
+        self.assertEqual(applied["released_expired_dispatch_lease_count"], 1)
+        self.assertFalse(applied["network_activity"])
+        self.assertFalse(applied["provider_generation"])
+        self.assertEqual(final_state, "reconciled")
+        self.assertEqual(final_leases, ())
+        self.assertEqual(reconciliation_authorities, (1, 1))
+
     def test_admission_policy_upgrade_is_digest_confirmed_and_network_free(self) -> None:
         with d_drive_tempdir() as state_root:
             runtime_path = state_root / "runtime" / "dispatch.sqlite3"

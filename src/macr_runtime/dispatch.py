@@ -219,6 +219,65 @@ class DispatcherLeaseStore:
         finally:
             connection.close()
 
+    def list_for_run(self, run_id: str) -> tuple[DispatchPermit, ...]:
+        run = _uuid4("run_id", run_id)
+        connection = self.database.connect()
+        try:
+            rows = connection.execute(
+                """SELECT * FROM dispatch_leases
+                WHERE run_id = ? ORDER BY resource_key""",
+                (run,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return tuple(
+            DispatchPermit(
+                row["resource_key"],
+                row["run_id"],
+                row["fencing_token"],
+                row["acquired_at"],
+                row["expires_at"],
+            )
+            for row in rows
+        )
+
+    def reap_expired_for_run(self, run_id: str) -> tuple[DispatchPermit, ...]:
+        run = _uuid4("run_id", run_id)
+        now = self._current_time()
+        connection = self.database.connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """SELECT * FROM dispatch_leases
+                WHERE run_id = ? ORDER BY resource_key""",
+                (run,),
+            ).fetchall()
+            if any(_aware(row["expires_at"]) > now for row in rows):
+                raise DispatchLeaseError(
+                    "dispatch lease is not expired and cannot be reaped"
+                )
+            permits = tuple(
+                DispatchPermit(
+                    row["resource_key"],
+                    row["run_id"],
+                    row["fencing_token"],
+                    row["acquired_at"],
+                    row["expires_at"],
+                )
+                for row in rows
+            )
+            connection.execute(
+                "DELETE FROM dispatch_leases WHERE run_id = ?",
+                (run,),
+            )
+            connection.commit()
+            return permits
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def read(self, resource_key: str) -> DispatchPermit | None:
         resource = _non_empty("resource_key", resource_key)
         connection = self.database.connect()

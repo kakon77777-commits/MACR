@@ -103,6 +103,26 @@ class DispatcherLeaseStoreTests(unittest.TestCase):
 
         self.assertGreater(second.fencing_token, first.fencing_token)
 
+    def test_reap_expired_for_run_refuses_live_lease_and_removes_only_exact_run(
+        self,
+    ) -> None:
+        start = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        clock = Clock(start)
+        with d_drive_tempdir() as temp:
+            store = DispatcherLeaseStore(temp / "dispatch.sqlite3", now=clock)
+            first = store.acquire("provider:grok:first", RUN_ONE, ttl_seconds=10)
+            second = store.acquire("provider:grok:second", RUN_TWO, ttl_seconds=60)
+
+            with self.assertRaisesRegex(DispatchLeaseError, "not expired"):
+                store.reap_expired_for_run(RUN_ONE)
+
+            clock.value = start + timedelta(seconds=11)
+            reaped = store.reap_expired_for_run(RUN_ONE)
+
+            self.assertEqual(reaped, (first,))
+            self.assertEqual(store.list_for_run(RUN_ONE), ())
+            self.assertEqual(store.list_for_run(RUN_TWO), (second,))
+
     def test_wrong_holder_cannot_renew_or_release(self) -> None:
         now = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
         with d_drive_tempdir() as temp:
